@@ -339,9 +339,12 @@ async function handleConversation(
   username: string | undefined,
   text: string
 ): Promise<string[]> {
-  // Build system prompt with RAG from QMD
-  const systemPrompt = await buildSystemPrompt(String(chatId), text);
-  const chatDoc = await Chat.findOne({ telegramChatId: String(chatId) });
+  const cid = String(chatId);
+
+  const [systemPrompt, chatDoc] = await Promise.all([
+    buildSystemPrompt(cid, text),
+    Chat.findOne({ telegramChatId: cid }),
+  ]);
   const recentMessages = chatDoc?.messages?.slice(-20) || [];
 
   const messages = [
@@ -353,50 +356,9 @@ async function handleConversation(
     { role: "user" as const, content: `@${username || userId}: ${text}` },
   ];
 
-  const cid = String(chatId);
-  let result = await chatWithUsage(messages);
-  let response = result.content;
+  const result = await chatWithUsage(messages);
+  const response = result.content;
   trackSpend(cid, "openrouter", `chat: ${text.substring(0, 50)}`, result.totalTokens).catch(console.error);
-
-  // Handle tool use: [SEARCH: query] for web, [RECALL: query] for QMD
-  let iterations = 0;
-  while (iterations < 3 && (response.includes("[SEARCH:") || response.includes("[RECALL:"))) {
-    iterations++;
-
-    const searchMatch = response.match(/\[SEARCH:\s*(.+?)\]/i);
-    const recallMatch = response.match(/\[RECALL:\s*(.+?)\]/i);
-
-    if (searchMatch) {
-      try {
-        const searchResults = await webSearch(searchMatch[1]);
-        trackSpend(cid, "apinow_search", `search: ${searchMatch[1].substring(0, 50)}`).catch(console.error);
-        const searchContext = searchResults.answer
-          ? `Web search for "${searchMatch[1]}": ${searchResults.answer}`
-          : `Web results for "${searchMatch[1]}": ${searchResults.results.map((r) => `${r.title}: ${r.content}`).join("\n")}`;
-
-        messages.push({ role: "assistant" as const, content: response });
-        messages.push({ role: "user" as const, content: `[System: web search results]\n${searchContext}` });
-      } catch {
-        messages.push({ role: "assistant" as const, content: response });
-        messages.push({ role: "user" as const, content: `[System: web search failed]` });
-      }
-    }
-
-    if (recallMatch) {
-      const recallResults = await qmdSearch(recallMatch[1]);
-      trackSpend(cid, "qmd", `recall: ${recallMatch[1].substring(0, 50)}`).catch(console.error);
-      const recallContext = recallResults.length
-        ? `Knowledge recall for "${recallMatch[1]}":\n${formatQMDResults(recallResults)}`
-        : `No knowledge found for "${recallMatch[1]}"`;
-
-      messages.push({ role: "assistant" as const, content: response });
-      messages.push({ role: "user" as const, content: `[System: knowledge recall]\n${recallContext}` });
-    }
-
-    result = await chatWithUsage(messages);
-    response = result.content;
-    trackSpend(cid, "openrouter", `chat follow-up #${iterations}`, result.totalTokens).catch(console.error);
-  }
 
   // Execute action directives
   const actions: string[] = [];
@@ -765,23 +727,23 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // If mentioned or in DM — sync up, then respond based on user intent
+    // If mentioned or in DM — respond based on user intent
     if (isMentioned || isPrivate) {
+      const cid = String(chatId);
       const trigger = isPrivate ? "dm" : text.includes(BOT_USERNAME) ? "mention" : "emoji";
       Activity.create({
-        telegramChatId: String(chatId),
+        telegramChatId: cid,
         type: "ai_triggered",
         title: `AI triggered via ${trigger}`,
         detail: cleanText.substring(0, 120),
         actor: username || userId,
       }).catch(console.error);
-      await Promise.all([
-        autoExtract(String(chatId), true),
-        maybeUpdateContext(String(chatId)),
-      ]);
+      // Sync in background — don't block the response
+      autoExtract(cid, true).catch(console.error);
+      maybeUpdateContext(cid).catch(console.error);
       const actions = await handleConversation(chatId, userId, username, cleanText);
       Activity.create({
-        telegramChatId: String(chatId),
+        telegramChatId: cid,
         type: "ai_result",
         title: actions.length
           ? `AI took ${actions.length} action${actions.length > 1 ? "s" : ""}`

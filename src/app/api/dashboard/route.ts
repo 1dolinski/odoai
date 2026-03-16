@@ -95,12 +95,16 @@ export async function PATCH(req: NextRequest) {
   await connectDB();
 
   const body = await req.json();
-  const { token, aiStyle, watchSettings } = body;
+  const { token, aiStyle, watchSettings, chatTitle } = body;
 
   if (!token) return NextResponse.json({ error: "token required" }, { status: 400 });
 
   const chat = await Chat.findOne({ dashboardToken: token });
   if (!chat) return NextResponse.json({ error: "invalid token" }, { status: 404 });
+
+  if (chatTitle && typeof chatTitle === "string") {
+    chat.chatTitle = chatTitle.trim();
+  }
 
   if (aiStyle && VALID_STYLES.includes(aiStyle)) {
     chat.aiStyle = aiStyle;

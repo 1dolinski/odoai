@@ -138,6 +138,8 @@ export default function DashboardPage() {
   const [contactForm, setContactForm] = useState({ name: "", role: "", email: "", phone: "", notes: "" });
   const [contactSaving, setContactSaving] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState("");
   const [dumpText, setDumpText] = useState("");
   const [dumpSending, setDumpSending] = useState(false);
   const [dumpSent, setDumpSent] = useState(false);
@@ -272,9 +274,9 @@ export default function DashboardPage() {
     );
   }
 
-  const todoTasks = data.tasks.filter((t) => t.status === "todo");
-  const upcomingTasks = data.tasks.filter((t) => t.status === "upcoming");
-  const doneTasks = data.tasks.filter((t) => t.status === "done");
+  const [taskFilter, setTaskFilter] = useState<"all" | "todo" | "upcoming" | "done">("all");
+  const [showCalendar, setShowCalendar] = useState(false);
+  const filteredTasks = taskFilter === "all" ? data.tasks : data.tasks.filter((t) => t.status === taskFilter);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 via-white to-gray-100 text-gray-900">
@@ -283,7 +285,40 @@ export default function DashboardPage() {
         <div className="flex items-center justify-between mb-8">
           <div>
             <div className="text-xs font-mono text-gray-400 mb-1">odoai dashboard</div>
-            <h1 className="text-2xl font-bold text-gray-900">{data.chat.title}</h1>
+            {editingTitle ? (
+              <form
+                onSubmit={async (e) => {
+                  e.preventDefault();
+                  if (!titleDraft.trim()) return;
+                  await fetch("/api/dashboard", {
+                    method: "PATCH",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ token, chatTitle: titleDraft.trim() }),
+                  });
+                  setData((d) => d ? { ...d, chat: { ...d.chat, title: titleDraft.trim() } } : d);
+                  setEditingTitle(false);
+                }}
+                className="flex items-center gap-2"
+              >
+                <input
+                  autoFocus
+                  value={titleDraft}
+                  onChange={(e) => setTitleDraft(e.target.value)}
+                  className="text-2xl font-bold text-gray-900 bg-white border border-gray-300 rounded-lg px-2 py-0.5 focus:outline-none focus:ring-2 focus:ring-blue-200"
+                  onKeyDown={(e) => { if (e.key === "Escape") setEditingTitle(false); }}
+                />
+                <button type="submit" className="text-sm text-blue-600 hover:text-blue-700 font-medium">Save</button>
+                <button type="button" onClick={() => setEditingTitle(false)} className="text-sm text-gray-400 hover:text-gray-600">Cancel</button>
+              </form>
+            ) : (
+              <h1
+                className="text-2xl font-bold text-gray-900 cursor-pointer hover:text-gray-600 transition-colors"
+                onClick={() => { setTitleDraft(data.chat.title); setEditingTitle(true); }}
+                title="Click to edit"
+              >
+                {data.chat.title} <span className="text-gray-300 text-base">✎</span>
+              </h1>
+            )}
             <div className="flex gap-3 mt-2 text-sm">
               <span className={`px-2 py-0.5 rounded text-xs font-medium ${data.chat.mode === "active" ? "bg-green-100 text-green-700" : "bg-gray-200 text-gray-600"}`}>
                 {data.chat.mode === "active" ? "Active" : "Passive"}
@@ -348,16 +383,90 @@ export default function DashboardPage() {
 
         {/* Task Board */}
         <section className="mb-10">
-          <h2 className="text-lg font-semibold mb-4 text-gray-800">Tasks</h2>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <TaskColumn title="Todo" emoji="📝" tasks={todoTasks} color="blue" />
-            <TaskColumn title="Upcoming" emoji="📋" tasks={upcomingTasks} color="yellow" />
-            <TaskColumn title="Done" emoji="✅" tasks={doneTasks} color="green" />
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-lg font-semibold text-gray-800">Tasks</h2>
+            <div className="flex gap-1 bg-gray-100 rounded-lg p-1">
+              {([
+                { key: "all", label: "All", count: data.tasks.length },
+                { key: "todo", label: "Todo", count: data.tasks.filter((t) => t.status === "todo").length },
+                { key: "upcoming", label: "Upcoming", count: data.tasks.filter((t) => t.status === "upcoming").length },
+                { key: "done", label: "Done", count: data.tasks.filter((t) => t.status === "done").length },
+              ] as { key: "all" | "todo" | "upcoming" | "done"; label: string; count: number }[]).map((f) => (
+                <button
+                  key={f.key}
+                  onClick={() => setTaskFilter(f.key)}
+                  className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
+                    taskFilter === f.key
+                      ? "bg-white text-gray-900 shadow-sm"
+                      : "text-gray-500 hover:text-gray-700"
+                  }`}
+                >
+                  {f.label} ({f.count})
+                </button>
+              ))}
+            </div>
           </div>
+          <div className="space-y-2">
+            {filteredTasks.map((t) => {
+              const statusColors: Record<string, string> = {
+                todo: "border-l-blue-400 bg-blue-50/50",
+                upcoming: "border-l-yellow-400 bg-yellow-50/50",
+                done: "border-l-green-400 bg-green-50/50",
+              };
+              const statusBadge: Record<string, string> = {
+                todo: "bg-blue-100 text-blue-700",
+                upcoming: "bg-yellow-100 text-yellow-700",
+                done: "bg-green-100 text-green-700",
+              };
+              return (
+                <div
+                  key={t._id}
+                  className={`flex items-center gap-3 rounded-lg border border-gray-200 border-l-4 p-3 ${statusColors[t.status] || ""}`}
+                >
+                  <div className="flex-1 min-w-0">
+                    <div className={`font-medium text-sm ${t.status === "done" ? "line-through text-gray-400" : "text-gray-900"}`}>
+                      {t.title}
+                    </div>
+                    <div className="flex items-center gap-2 mt-0.5">
+                      {t.createdByUsername && (
+                        <span className="text-xs text-gray-400">@{t.createdByUsername}</span>
+                      )}
+                      <span className="text-xs text-gray-400">
+                        {t.completedAt
+                          ? `done ${formatRelativeTime(t.completedAt)}`
+                          : formatRelativeTime(t.createdAt)}
+                      </span>
+                      {t.dueDate && (
+                        <span className="text-xs text-orange-500">due {new Date(t.dueDate).toLocaleDateString()}</span>
+                      )}
+                    </div>
+                  </div>
+                  <span className={`text-xs px-2 py-0.5 rounded-full font-medium shrink-0 ${statusBadge[t.status] || ""}`}>
+                    {t.status}
+                  </span>
+                </div>
+              );
+            })}
+            {filteredTasks.length === 0 && (
+              <p className="text-sm text-gray-400 italic py-4 text-center">No items</p>
+            )}
+          </div>
+          {taskFilter === "upcoming" && (
+            <div className="mt-3">
+              <button
+                onClick={() => setShowCalendar(!showCalendar)}
+                className="text-sm text-blue-600 hover:text-blue-700 font-medium flex items-center gap-1"
+              >
+                📅 {showCalendar ? "Hide calendar" : "Show calendar"}
+              </button>
+              {showCalendar && (
+                <div className="mt-3">
+                  <CalendarView tasks={data.tasks} checks={data.checks} />
+                </div>
+              )}
+            </div>
+          )}
         </section>
-
-        {/* Calendar View */}
-        <CalendarView tasks={data.tasks} checks={data.checks} />
 
         {/* Upcoming Checks */}
         {data.checks.length > 0 && (
@@ -914,31 +1023,3 @@ function formatRelativeTime(dateStr: string) {
   return isPast ? `${days}d ago` : `in ${days}d`;
 }
 
-function TaskColumn({ title, emoji, tasks, color }: { title: string; emoji: string; tasks: Task[]; color: string }) {
-  const borderColors: Record<string, string> = { blue: "border-blue-200", yellow: "border-yellow-200", green: "border-green-200" };
-  const bgColors: Record<string, string> = { blue: "bg-blue-50", yellow: "bg-yellow-50", green: "bg-green-50" };
-
-  return (
-    <div className={`rounded-xl border ${borderColors[color]} ${bgColors[color]} p-4`}>
-      <h3 className="font-semibold mb-3 text-sm uppercase tracking-wider text-gray-500">
-        {emoji} {title} ({tasks.length})
-      </h3>
-      <div className="space-y-2">
-        {tasks.map((t) => (
-          <div key={t._id} className="bg-white rounded-lg p-3 text-sm shadow-sm border border-gray-100">
-            <div className="font-medium text-gray-900">{t.title}</div>
-            <div className="flex items-center gap-2 mt-1">
-              {t.createdByUsername && <span className="text-xs text-gray-400">@{t.createdByUsername}</span>}
-              <span className="text-xs text-gray-400">
-                {t.completedAt
-                  ? `done ${formatRelativeTime(t.completedAt)}`
-                  : formatRelativeTime(t.createdAt)}
-              </span>
-            </div>
-          </div>
-        ))}
-        {tasks.length === 0 && <p className="text-sm text-gray-400 italic">No items</p>}
-      </div>
-    </div>
-  );
-}
