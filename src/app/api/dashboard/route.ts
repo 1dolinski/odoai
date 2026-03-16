@@ -144,47 +144,36 @@ export async function PATCH(req: NextRequest) {
   const chat = await Chat.findOne({ dashboardToken: token });
   if (!chat) return NextResponse.json({ error: "invalid token" }, { status: 404 });
 
-  if (chatTitle && typeof chatTitle === "string") {
-    chat.chatTitle = chatTitle.trim();
-  }
+  const update: Record<string, unknown> = {};
+
+  if (chatTitle && typeof chatTitle === "string") update.chatTitle = chatTitle.trim();
 
   const VALID_MODES = ["passive", "active", "aggressive"];
-  if (mode && VALID_MODES.includes(mode)) {
-    chat.mode = mode;
-  }
+  if (mode && VALID_MODES.includes(mode)) update.mode = mode;
 
-  if (aiStyle && VALID_STYLES.includes(aiStyle)) {
-    chat.aiStyle = aiStyle;
-  }
+  if (aiStyle && VALID_STYLES.includes(aiStyle)) update.aiStyle = aiStyle;
 
-  if (typeof aiFeedEnabled === "boolean") {
-    chat.aiFeedEnabled = aiFeedEnabled;
-  }
+  if (typeof aiFeedEnabled === "boolean") update.aiFeedEnabled = aiFeedEnabled;
 
-  if (aiModel && typeof aiModel === "string") {
-    chat.aiModel = aiModel.trim();
-  }
+  if (aiModel && typeof aiModel === "string") update.aiModel = aiModel.trim();
 
-  if (typeof abilities === "string") {
-    chat.abilities = abilities;
-    chat.markModified("abilities");
-  }
+  if (typeof abilities === "string") update.abilities = abilities;
 
   if (watchSettings && typeof watchSettings === "object") {
-    if (!chat.watchSettings) {
-      chat.watchSettings = { ...WATCH_DEFAULTS };
-    }
+    const current = chat.watchSettings || { ...WATCH_DEFAULTS };
     for (const key of VALID_WATCH_KEYS) {
       if (key in watchSettings && typeof watchSettings[key] === "boolean") {
-        (chat.watchSettings as Record<string, boolean>)[key] = watchSettings[key];
+        (current as Record<string, boolean>)[key] = watchSettings[key];
       }
     }
-    chat.markModified("watchSettings");
+    update.watchSettings = current;
   }
 
-  await chat.save();
+  if (Object.keys(update).length) {
+    await Chat.updateOne({ dashboardToken: token }, { $set: update });
+  }
 
-  return NextResponse.json({ ok: true, aiStyle: chat.aiStyle, watchSettings: chat.watchSettings });
+  return NextResponse.json({ ok: true, aiStyle: update.aiStyle ?? chat.aiStyle, watchSettings: update.watchSettings ?? chat.watchSettings });
   } catch (err) {
     console.error("PATCH /api/dashboard error:", err);
     return NextResponse.json({ error: "internal error", detail: String(err) }, { status: 500 });
