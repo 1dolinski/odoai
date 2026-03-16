@@ -80,6 +80,7 @@ interface WatchSettings {
   followUps: boolean;
   newPeople: boolean;
   decisions: boolean;
+  opportunities: boolean;
 }
 
 interface DashboardData {
@@ -128,6 +129,7 @@ const WATCH_ITEMS: { key: keyof WatchSettings; label: string; desc: string }[] =
   { key: "followUps", label: "Follow-ups", desc: "Notice things needing revisit" },
   { key: "newPeople", label: "New People", desc: "Track new contacts mentioned" },
   { key: "decisions", label: "Decisions", desc: "Capture group decisions" },
+  { key: "opportunities", label: "Opportunities", desc: "Spot ways to be better, faster, cheaper" },
 ];
 
 export default function DashboardPage() {
@@ -149,6 +151,13 @@ export default function DashboardPage() {
   const [guidanceSaved, setGuidanceSaved] = useState(false);
   const [taskFilter, setTaskFilter] = useState<"all" | "todo" | "upcoming" | "done">("all");
   const [showCalendar, setShowCalendar] = useState(false);
+  const [personDumpId, setPersonDumpId] = useState<string | null>(null);
+  const [personDumpText, setPersonDumpText] = useState("");
+  const [personDumpSending, setPersonDumpSending] = useState(false);
+  const [showActions, setShowActions] = useState(false);
+  const [actionForm, setActionForm] = useState({ type: "todo" as string, title: "", dueDate: "", personName: "", personRole: "" });
+  const [actionSaving, setActionSaving] = useState(false);
+  const [actionDone, setActionDone] = useState("");
 
   const fetchData = useCallback(async () => {
     const res = await fetch(`/api/dashboard?token=${token}`);
@@ -280,6 +289,48 @@ export default function DashboardPage() {
     });
   }
 
+  async function runAction() {
+    if (!actionForm.title.trim() && actionForm.type !== "person") return;
+    setActionSaving(true);
+    setActionDone("");
+    if (actionForm.type === "person") {
+      if (!actionForm.personName.trim()) { setActionSaving(false); return; }
+      await fetch("/api/dashboard", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token, action: "addContact", contact: { name: actionForm.personName, role: actionForm.personRole } }),
+      });
+      setActionDone(`Added contact: ${actionForm.personName}`);
+    } else {
+      const taskData: Record<string, string> = { title: actionForm.title, status: actionForm.type };
+      if (actionForm.dueDate) taskData.dueDate = actionForm.dueDate;
+      await fetch("/api/dashboard", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token, action: "addTask", task: taskData }),
+      });
+      setActionDone(`Added ${actionForm.type}: ${actionForm.title}`);
+    }
+    setActionForm({ type: "todo", title: "", dueDate: "", personName: "", personRole: "" });
+    setActionSaving(false);
+    fetchData();
+    setTimeout(() => setActionDone(""), 3000);
+  }
+
+  async function submitPersonDump(personId: string) {
+    if (!personDumpText.trim()) return;
+    setPersonDumpSending(true);
+    await fetch("/api/dashboard", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token, action: "personDump", personId, text: personDumpText }),
+    });
+    setPersonDumpText("");
+    setPersonDumpId(null);
+    setPersonDumpSending(false);
+    fetchData();
+  }
+
   async function deleteContact(id: string) {
     await fetch("/api/dashboard", {
       method: "POST",
@@ -403,6 +454,104 @@ export default function DashboardPage() {
             </a>
           </div>
         </div>
+
+        {/* Quick Actions */}
+        <section className="mb-10">
+          <button
+            onClick={() => setShowActions(!showActions)}
+            className="flex items-center gap-2 text-lg font-semibold text-gray-800 hover:text-gray-600 transition-colors"
+          >
+            <svg className={`w-4 h-4 transition-transform ${showActions ? "rotate-90" : ""}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 18l6-6-6-6" /></svg>
+            Quick Actions
+          </button>
+          {showActions && (
+            <div className="mt-4 bg-white border border-gray-200 rounded-xl p-5 shadow-sm">
+              <div className="flex gap-1 bg-gray-100 rounded-lg p-1 mb-4 w-fit">
+                {([
+                  { key: "todo", label: "Add Todo" },
+                  { key: "upcoming", label: "Add Upcoming" },
+                  { key: "done", label: "Log Done" },
+                  { key: "person", label: "Add Person" },
+                ] as { key: string; label: string }[]).map((a) => (
+                  <button
+                    key={a.key}
+                    onClick={() => setActionForm((f) => ({ ...f, type: a.key }))}
+                    className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
+                      actionForm.type === a.key
+                        ? "bg-white text-gray-900 shadow-sm"
+                        : "text-gray-500 hover:text-gray-700"
+                    }`}
+                  >
+                    {a.label}
+                  </button>
+                ))}
+              </div>
+
+              {actionForm.type === "person" ? (
+                <div className="flex gap-3 items-end">
+                  <div className="flex-1">
+                    <label className="text-xs text-gray-500 mb-1 block">Name</label>
+                    <input
+                      value={actionForm.personName}
+                      onChange={(e) => setActionForm((f) => ({ ...f, personName: e.target.value }))}
+                      placeholder="Person name"
+                      className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
+                    />
+                  </div>
+                  <div className="flex-1">
+                    <label className="text-xs text-gray-500 mb-1 block">Role</label>
+                    <input
+                      value={actionForm.personRole}
+                      onChange={(e) => setActionForm((f) => ({ ...f, personRole: e.target.value }))}
+                      placeholder="Role (optional)"
+                      className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
+                    />
+                  </div>
+                  <button
+                    onClick={runAction}
+                    disabled={actionSaving || !actionForm.personName.trim()}
+                    className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50 shrink-0"
+                  >
+                    {actionSaving ? "Adding..." : "Add"}
+                  </button>
+                </div>
+              ) : (
+                <div className="flex gap-3 items-end">
+                  <div className="flex-1">
+                    <label className="text-xs text-gray-500 mb-1 block">Task</label>
+                    <input
+                      value={actionForm.title}
+                      onChange={(e) => setActionForm((f) => ({ ...f, title: e.target.value }))}
+                      placeholder="What needs to be done?"
+                      onKeyDown={(e) => { if (e.key === "Enter") runAction(); }}
+                      className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
+                    />
+                  </div>
+                  <div className="w-40">
+                    <label className="text-xs text-gray-500 mb-1 block">Due date</label>
+                    <input
+                      type="date"
+                      value={actionForm.dueDate}
+                      onChange={(e) => setActionForm((f) => ({ ...f, dueDate: e.target.value }))}
+                      className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
+                    />
+                  </div>
+                  <button
+                    onClick={runAction}
+                    disabled={actionSaving || !actionForm.title.trim()}
+                    className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50 shrink-0"
+                  >
+                    {actionSaving ? "Adding..." : "Add"}
+                  </button>
+                </div>
+              )}
+
+              {actionDone && (
+                <div className="mt-3 text-sm text-green-600 font-medium">{actionDone}</div>
+              )}
+            </div>
+          )}
+        </section>
 
         {/* Watch List */}
         <section className="mb-10">
@@ -694,6 +843,42 @@ export default function DashboardPage() {
                       </div>
                     </div>
                   )}
+                  <div className="mt-2 pt-2 border-t border-gray-100">
+                    {personDumpId === p._id ? (
+                      <div className="space-y-2">
+                        <textarea
+                          autoFocus
+                          value={personDumpText}
+                          onChange={(e) => setPersonDumpText(e.target.value)}
+                          placeholder={`Add info about ${p.username || p.firstName || "this person"}...`}
+                          rows={3}
+                          className="w-full px-2 py-1.5 border border-gray-200 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-blue-200 resize-y"
+                        />
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => submitPersonDump(p._id)}
+                            disabled={personDumpSending || !personDumpText.trim()}
+                            className="text-xs bg-blue-600 text-white px-3 py-1 rounded-md font-medium disabled:opacity-50"
+                          >
+                            {personDumpSending ? "Saving..." : "Save & Index"}
+                          </button>
+                          <button
+                            onClick={() => { setPersonDumpId(null); setPersonDumpText(""); }}
+                            className="text-xs text-gray-400 hover:text-gray-600"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => setPersonDumpId(p._id)}
+                        className="text-xs text-blue-600 hover:text-blue-700 font-medium"
+                      >
+                        + Add info about this person
+                      </button>
+                    )}
+                  </div>
                 </div>
               ))}
             </div>

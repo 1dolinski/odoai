@@ -83,6 +83,19 @@ export async function writePeopleSnapshot(
   return writeKnowledge(chatId, "people", "snapshot", content);
 }
 
+export async function writePersonKnowledge(
+  chatId: string,
+  personName: string,
+  content: string,
+  metadata?: Record<string, string>
+) {
+  const slug = `${sanitize(personName)}-${Date.now()}`;
+  return writeKnowledge(chatId, "people", slug, `# ${personName}\n\n${content}`, {
+    person: personName,
+    ...metadata,
+  });
+}
+
 export async function writeTasksSnapshot(
   chatId: string,
   tasks: Array<{ title: string; status: string; createdByUsername?: string }>

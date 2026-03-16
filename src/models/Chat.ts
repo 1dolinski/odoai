@@ -21,6 +21,7 @@ export interface IWatchSettings {
   followUps: boolean;
   newPeople: boolean;
   decisions: boolean;
+  opportunities: boolean;
 }
 
 export const WATCH_DEFAULTS: IWatchSettings = {
@@ -32,6 +33,7 @@ export const WATCH_DEFAULTS: IWatchSettings = {
   followUps: true,
   newPeople: true,
   decisions: false,
+  opportunities: true,
 };
 
 export interface IChat extends Document {
@@ -81,6 +83,7 @@ const ChatSchema = new Schema<IChat>(
       followUps: { type: Boolean, default: true },
       newPeople: { type: Boolean, default: true },
       decisions: { type: Boolean, default: false },
+      opportunities: { type: Boolean, default: true },
     },
     messages: [MessageSchema],
     guidance: { type: String, default: "" },

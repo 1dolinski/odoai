@@ -1,5 +1,5 @@
 import { chat as aiChat } from "@/lib/openrouter";
-import { qmdSearch, writeDump, writeContextSummary, writePeopleSnapshot, writeTasksSnapshot, formatQMDResults } from "@/lib/knowledge";
+import { qmdSearch, writeDump, writeContextSummary, writePeopleSnapshot, writePersonKnowledge, writeTasksSnapshot, formatQMDResults } from "@/lib/knowledge";
 import Chat, { WATCH_DEFAULTS } from "@/models/Chat";
 import Task from "@/models/Task";
 import Person from "@/models/Person";
@@ -64,6 +64,7 @@ export async function buildSystemPrompt(chatId: string, userQuery?: string): Pro
     watch.followUps && "things needing follow-up",
     watch.newPeople && "new people mentioned",
     watch.decisions && "decisions made",
+    watch.opportunities && "opportunities — ways to do things better, faster, cheaper, make more money, get more content, more distribution. If you spot an obvious high-impact improvement, suggest it immediately",
   ].filter(Boolean);
 
   return `You are odoai, an AI assistant embedded in a Telegram chat.
@@ -448,6 +449,14 @@ ${content}`,
           },
           { upsert: true, setDefaultsOnInsert: true }
         );
+        const personContent = [
+          p.role && `Role: ${p.role}`,
+          p.context && `Context: ${p.context}`,
+          p.intentions?.length && `Intentions: ${p.intentions.join(", ")}`,
+        ].filter(Boolean).join("\n");
+        if (personContent) {
+          writePersonKnowledge(chatId, id, personContent, { source: "dump" }).catch(console.error);
+        }
       }
     }
 

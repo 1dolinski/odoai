@@ -8,7 +8,7 @@ import Job from "@/models/Job";
 import Check from "@/models/Check";
 import Activity from "@/models/Activity";
 import { autoExtract, maybeUpdateContext, deepProcessDump } from "@/lib/brain";
-import { writeKnowledge } from "@/lib/knowledge";
+import { writeKnowledge, writePersonKnowledge } from "@/lib/knowledge";
 
 export async function GET(req: NextRequest) {
   await connectDB();
@@ -90,7 +90,7 @@ export async function GET(req: NextRequest) {
 }
 
 const VALID_STYLES: AiStyle[] = ["concise", "detailed", "casual", "professional", "technical"];
-const VALID_WATCH_KEYS = ["deadlines", "blockers", "actionItems", "sentiment", "questions", "followUps", "newPeople", "decisions"];
+const VALID_WATCH_KEYS = ["deadlines", "blockers", "actionItems", "sentiment", "questions", "followUps", "newPeople", "decisions", "opportunities"];
 
 export async function PATCH(req: NextRequest) {
   await connectDB();
@@ -203,6 +203,26 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true });
   }
 
+  if (action === "addTask" && body.task) {
+    const { title, status, dueDate } = body.task;
+    if (!title) return NextResponse.json({ error: "title required" }, { status: 400 });
+    const taskData: Record<string, unknown> = {
+      status: ["todo", "upcoming", "done"].includes(status) ? status : "todo",
+      createdBy: "dashboard",
+      createdByUsername: "dashboard",
+    };
+    if (dueDate && /\d{4}-\d{2}-\d{2}/.test(dueDate)) taskData.dueDate = new Date(dueDate);
+    if (status === "done") taskData.completedAt = new Date();
+    await Task.findOneAndUpdate(
+      { telegramChatId: chatId, title },
+      { $set: taskData },
+      { upsert: true }
+    );
+    const type = status === "upcoming" ? "task_upcoming" : status === "done" ? "task_done" : "task_added";
+    Activity.create({ telegramChatId: chatId, type, title, detail: "from dashboard", actor: "dashboard" }).catch(console.error);
+    return NextResponse.json({ ok: true });
+  }
+
   if (action === "updateTaskStatus" && body.taskId && body.status) {
     const validStatuses = ["todo", "upcoming", "done"];
     if (!validStatuses.includes(body.status)) return NextResponse.json({ error: "invalid status" }, { status: 400 });
@@ -211,6 +231,18 @@ export async function POST(req: NextRequest) {
     else update.completedAt = null;
     await Task.updateOne({ _id: body.taskId, telegramChatId: chatId }, { $set: update });
     Activity.create({ telegramChatId: chatId, type: body.status === "done" ? "task_converted" : "task_added", title: body.taskTitle || "task", detail: `→ ${body.status} (dashboard)`, actor: "dashboard" }).catch(console.error);
+    return NextResponse.json({ ok: true });
+  }
+
+  if (action === "personDump" && body.personId && body.text) {
+    const text = (body.text as string).trim();
+    if (!text) return NextResponse.json({ error: "text required" }, { status: 400 });
+    const person = await Person.findOne({ _id: body.personId, telegramChatId: chatId });
+    if (!person) return NextResponse.json({ error: "person not found" }, { status: 404 });
+    const personName = person.username || person.firstName || "unknown";
+    writePersonKnowledge(chatId, personName, text, { source: "dashboard" }).catch(console.error);
+    const notes = person.notes ? `${person.notes}\n\n${text}` : text;
+    await Person.updateOne({ _id: body.personId }, { $set: { notes } });
     return NextResponse.json({ ok: true });
   }
 
