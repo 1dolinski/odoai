@@ -216,7 +216,7 @@ export default function DashboardPage() {
   const [newInitDesc, setNewInitDesc] = useState("");
   const [editingDateId, setEditingDateId] = useState<string | null>(null);
   const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null);
-  const [actionForm, setActionForm] = useState({ type: "todo" as string, title: "", dueDate: "", personName: "", personRole: "", statusTaskSearch: "", statusNewStatus: "done" as string, dumpText: "", dumpCategory: "general", dumpSubject: "" });
+  const [actionForm, setActionForm] = useState({ type: "todo" as string, title: "", dueDate: "", personName: "", personRole: "", statusTaskSearch: "", statusNewStatus: "done" as string, dumpText: "", dumpCategory: "general", dumpSubject: "", taskPeople: [] as string[], taskInitiative: "" });
   const [actionSaving, setActionSaving] = useState(false);
   const [actionDone, setActionDone] = useState("");
 
@@ -422,8 +422,10 @@ export default function DashboardPage() {
       setActionDone(subj ? `${cat} dump (${subj}) indexed` : "Dump processed and indexed");
     } else {
       if (!actionForm.title.trim()) { setActionSaving(false); return; }
-      const taskData: Record<string, string> = { title: actionForm.title, status: actionForm.type };
+      const taskData: Record<string, unknown> = { title: actionForm.title, status: actionForm.type };
       if (actionForm.dueDate) taskData.dueDate = actionForm.dueDate;
+      if (actionForm.taskPeople.length) taskData.people = actionForm.taskPeople;
+      if (actionForm.taskInitiative) taskData.initiative = actionForm.taskInitiative;
       await fetch("/api/dashboard", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -431,7 +433,7 @@ export default function DashboardPage() {
       });
       setActionDone(`Added ${actionForm.type}: ${actionForm.title}`);
     }
-    setActionForm((f) => ({ ...f, title: "", dueDate: "", personName: "", personRole: "", statusTaskSearch: "", dumpText: "", dumpCategory: "general", dumpSubject: "" }));
+    setActionForm((f) => ({ ...f, title: "", dueDate: "", personName: "", personRole: "", statusTaskSearch: "", dumpText: "", dumpCategory: "general", dumpSubject: "", taskPeople: [], taskInitiative: "" }));
     setActionSaving(false);
     fetchData();
     setTimeout(() => setActionDone(""), 3000);
@@ -1311,33 +1313,72 @@ export default function DashboardPage() {
                   </button>
                 </div>
               ) : (
-                <div className="flex gap-3 items-end">
-                  <div className="flex-1">
-                    <label className="text-xs text-gray-500 mb-1 block">Task</label>
-                    <input
-                      value={actionForm.title}
-                      onChange={(e) => setActionForm((f) => ({ ...f, title: e.target.value }))}
-                      placeholder="What needs to be done?"
-                      onKeyDown={(e) => { if (e.key === "Enter") runAction(); }}
-                      className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
-                    />
+                <div className="space-y-2">
+                  <div className="flex gap-3 items-end">
+                    <div className="flex-1">
+                      <label className="text-xs text-gray-500 mb-1 block">Task</label>
+                      <input
+                        value={actionForm.title}
+                        onChange={(e) => setActionForm((f) => ({ ...f, title: e.target.value }))}
+                        placeholder="What needs to be done?"
+                        onKeyDown={(e) => { if (e.key === "Enter") runAction(); }}
+                        className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
+                      />
+                    </div>
+                    <div className="w-40">
+                      <label className="text-xs text-gray-500 mb-1 block">Due date</label>
+                      <input
+                        type="date"
+                        value={actionForm.dueDate}
+                        onChange={(e) => setActionForm((f) => ({ ...f, dueDate: e.target.value }))}
+                        className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
+                      />
+                    </div>
+                    <button
+                      onClick={runAction}
+                      disabled={actionSaving || !actionForm.title.trim()}
+                      className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50 shrink-0"
+                    >
+                      {actionSaving ? "Adding..." : "Add"}
+                    </button>
                   </div>
-                  <div className="w-40">
-                    <label className="text-xs text-gray-500 mb-1 block">Due date</label>
-                    <input
-                      type="date"
-                      value={actionForm.dueDate}
-                      onChange={(e) => setActionForm((f) => ({ ...f, dueDate: e.target.value }))}
-                      className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
-                    />
+                  <div className="flex items-center gap-3 flex-wrap">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="text-[10px] text-gray-400">People:</span>
+                      {data.people.map((p) => {
+                        const name = p.username || p.firstName || "";
+                        if (!name) return null;
+                        const isSelected = actionForm.taskPeople.includes(name);
+                        return (
+                          <button
+                            key={p._id}
+                            onClick={() => setActionForm((f) => ({
+                              ...f,
+                              taskPeople: isSelected ? f.taskPeople.filter((n) => n !== name) : [...f.taskPeople, name],
+                            }))}
+                            className={`text-[10px] rounded-full px-1.5 py-0.5 font-medium transition-all ${isSelected ? "bg-indigo-100 text-indigo-700 border border-indigo-200" : "bg-gray-100 text-gray-400 border border-gray-200 hover:bg-gray-200"}`}
+                          >
+                            {isSelected ? "✓ " : ""}{name}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    {(data.initiatives || []).length > 0 && (
+                      <div className="flex items-center gap-1">
+                        <span className="text-[10px] text-gray-400">Initiative:</span>
+                        <select
+                          value={actionForm.taskInitiative}
+                          onChange={(e) => setActionForm((f) => ({ ...f, taskInitiative: e.target.value }))}
+                          className="text-[10px] border border-gray-200 rounded px-1.5 py-0.5 bg-white"
+                        >
+                          <option value="">None</option>
+                          {(data.initiatives || []).map((ini) => (
+                            <option key={ini.id} value={ini.id}>{ini.name}</option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
                   </div>
-                  <button
-                    onClick={runAction}
-                    disabled={actionSaving || !actionForm.title.trim()}
-                    className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50 shrink-0"
-                  >
-                    {actionSaving ? "Adding..." : "Add"}
-                  </button>
                 </div>
               )}
 

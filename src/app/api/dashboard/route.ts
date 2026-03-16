@@ -322,7 +322,7 @@ export async function POST(req: NextRequest) {
   }
 
   if (action === "addTask" && body.task) {
-    const { title, status, dueDate } = body.task;
+    const { title, status, dueDate, people, initiative } = body.task;
     if (!title) return NextResponse.json({ error: "title required" }, { status: 400 });
     const taskData: Record<string, unknown> = {
       status: ["todo", "upcoming", "done"].includes(status) ? status : "todo",
@@ -331,6 +331,8 @@ export async function POST(req: NextRequest) {
     };
     if (dueDate && /\d{4}-\d{2}-\d{2}/.test(dueDate)) taskData.dueDate = new Date(dueDate);
     if (status === "done") taskData.completedAt = new Date();
+    if (Array.isArray(people) && people.length) taskData.people = people;
+    if (initiative) taskData.initiative = initiative;
     await Task.findOneAndUpdate(
       { telegramChatId: chatId, title },
       { $set: taskData },
