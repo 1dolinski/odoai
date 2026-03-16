@@ -131,6 +131,7 @@ const VALID_STYLES: AiStyle[] = ["concise", "detailed", "casual", "professional"
 const VALID_WATCH_KEYS = ["deadlines", "blockers", "actionItems", "sentiment", "questions", "followUps", "newPeople", "decisions", "opportunities"];
 
 export async function PATCH(req: NextRequest) {
+  try {
   await connectDB();
 
   const body = await req.json();
@@ -164,6 +165,7 @@ export async function PATCH(req: NextRequest) {
 
   if (typeof abilities === "string") {
     chat.abilities = abilities;
+    chat.markModified("abilities");
   }
 
   if (watchSettings && typeof watchSettings === "object") {
@@ -181,6 +183,10 @@ export async function PATCH(req: NextRequest) {
   await chat.save();
 
   return NextResponse.json({ ok: true, aiStyle: chat.aiStyle, watchSettings: chat.watchSettings });
+  } catch (err) {
+    console.error("PATCH /api/dashboard error:", err);
+    return NextResponse.json({ error: "internal error", detail: String(err) }, { status: 500 });
+  }
 }
 
 export async function POST(req: NextRequest) {
