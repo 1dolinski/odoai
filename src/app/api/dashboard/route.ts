@@ -331,6 +331,43 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true });
   }
 
+  if (action === "editPersonDump" && body.personId && body.dumpId) {
+    const text = (body.text as string || "").trim();
+    if (!text) return NextResponse.json({ error: "text required" }, { status: 400 });
+    await Person.updateOne(
+      { _id: body.personId, telegramChatId: chatId, "dumps._id": body.dumpId },
+      { $set: { "dumps.$.text": text } }
+    );
+    return NextResponse.json({ ok: true });
+  }
+
+  if (action === "deletePersonDump" && body.personId && body.dumpId) {
+    await Person.updateOne(
+      { _id: body.personId, telegramChatId: chatId },
+      { $pull: { dumps: { _id: body.dumpId } } }
+    );
+    return NextResponse.json({ ok: true });
+  }
+
+  if (action === "editChatDump" && body.dumpIndex !== undefined) {
+    const text = (body.text as string || "").trim();
+    if (!text) return NextResponse.json({ error: "text required" }, { status: 400 });
+    await Chat.updateOne(
+      { telegramChatId: chatId },
+      { $set: { [`dumps.${body.dumpIndex}.text`]: text } }
+    );
+    return NextResponse.json({ ok: true });
+  }
+
+  if (action === "deleteChatDump" && body.dumpIndex !== undefined) {
+    const chatDoc = await Chat.findOne({ telegramChatId: chatId });
+    if (chatDoc && chatDoc.dumps[body.dumpIndex]) {
+      chatDoc.dumps.splice(body.dumpIndex, 1);
+      await chatDoc.save();
+    }
+    return NextResponse.json({ ok: true });
+  }
+
   if (action === "dump" && body.text) {
     const text = (body.text as string).trim();
     if (!text) return NextResponse.json({ error: "text required" }, { status: 400 });

@@ -31,6 +31,7 @@ interface Relationship {
 }
 
 interface DumpEntry {
+  _id?: string;
   text: string;
   source: string;
   category?: string;
@@ -198,6 +199,7 @@ export default function DashboardPage() {
   const [personDumpId, setPersonDumpId] = useState<string | null>(null);
   const [personDumpText, setPersonDumpText] = useState("");
   const [personDumpSending, setPersonDumpSending] = useState(false);
+  const [editingDump, setEditingDump] = useState<{ type: "person" | "chat"; id: string; index: number; personId?: string; text: string } | null>(null);
   const [showActions, setShowActions] = useState(false);
   const [showWatch, setShowWatch] = useState(false);
   const [showContext, setShowContext] = useState(false);
@@ -444,6 +446,26 @@ export default function DashboardPage() {
     setPersonDumpText("");
     setPersonDumpId(null);
     setPersonDumpSending(false);
+    fetchData();
+  }
+
+  async function saveEditDump() {
+    if (!editingDump || !editingDump.text.trim()) return;
+    if (editingDump.type === "person" && editingDump.personId) {
+      await fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "editPersonDump", personId: editingDump.personId, dumpId: editingDump.id, text: editingDump.text }) });
+    } else {
+      await fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "editChatDump", dumpIndex: editingDump.index, text: editingDump.text }) });
+    }
+    setEditingDump(null);
+    fetchData();
+  }
+
+  async function deleteDump(type: "person" | "chat", id: string, index: number, personId?: string) {
+    if (type === "person" && personId) {
+      await fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "deletePersonDump", personId, dumpId: id }) });
+    } else {
+      await fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "deleteChatDump", dumpIndex: index }) });
+    }
     fetchData();
   }
 
@@ -934,9 +956,27 @@ export default function DashboardPage() {
                         <div className="mt-2 ml-9">
                           <div className="text-[10px] font-medium text-gray-400 uppercase tracking-wide mb-0.5">Notes ({p.dumps.length})</div>
                           {p.dumps.map((d, j) => (
-                            <div key={j} className="text-[10px] bg-white border border-gray-100 rounded px-2 py-1 mb-0.5">
-                              <div className="text-gray-600">{d.text}</div>
-                              <div className="text-gray-300 mt-0.5">{formatET(d.createdAt)}</div>
+                            <div key={d._id || j} className="text-[10px] bg-white border border-gray-100 rounded px-2 py-1 mb-0.5 group/note">
+                              {editingDump?.type === "person" && editingDump?.id === d._id ? (
+                                <div className="space-y-1">
+                                  <textarea autoFocus value={editingDump.text} onChange={(e) => setEditingDump((ed) => ed ? { ...ed, text: e.target.value } : ed)} rows={2} className="w-full px-1.5 py-1 border border-gray-200 rounded text-[10px] focus:outline-none focus:ring-2 focus:ring-blue-200 resize-y" />
+                                  <div className="flex gap-1">
+                                    <button onClick={saveEditDump} className="text-[10px] bg-blue-600 text-white px-2 py-0.5 rounded font-medium">Save</button>
+                                    <button onClick={() => setEditingDump(null)} className="text-[10px] text-gray-400">Cancel</button>
+                                  </div>
+                                </div>
+                              ) : (
+                                <>
+                                  <div className="text-gray-600">{d.text}</div>
+                                  <div className="flex items-center justify-between mt-0.5">
+                                    <span className="text-gray-300">{formatET(d.createdAt)}</span>
+                                    <span className="opacity-0 group-hover/note:opacity-100 flex gap-1.5 transition-opacity">
+                                      <button onClick={() => setEditingDump({ type: "person", id: d._id || "", index: j, personId: p._id, text: d.text })} className="text-gray-400 hover:text-blue-600">edit</button>
+                                      <button onClick={() => { if (confirm("Delete this note?")) deleteDump("person", d._id || "", j, p._id); }} className="text-gray-400 hover:text-red-500">delete</button>
+                                    </span>
+                                  </div>
+                                </>
+                              )}
                             </div>
                           ))}
                         </div>
@@ -1083,9 +1123,27 @@ export default function DashboardPage() {
                         <div className="mt-2 ml-9">
                           <div className="text-[10px] font-medium text-gray-400 uppercase tracking-wide mb-0.5">Notes ({p.dumps.length})</div>
                           {p.dumps.map((d, j) => (
-                            <div key={j} className="text-[10px] bg-white border border-gray-100 rounded px-2 py-1 mb-0.5">
-                              <div className="text-gray-600">{d.text}</div>
-                              <div className="text-gray-300 mt-0.5">{formatET(d.createdAt)}</div>
+                            <div key={d._id || j} className="text-[10px] bg-white border border-gray-100 rounded px-2 py-1 mb-0.5 group/note">
+                              {editingDump?.type === "person" && editingDump?.id === d._id ? (
+                                <div className="space-y-1">
+                                  <textarea autoFocus value={editingDump.text} onChange={(e) => setEditingDump((ed) => ed ? { ...ed, text: e.target.value } : ed)} rows={2} className="w-full px-1.5 py-1 border border-gray-200 rounded text-[10px] focus:outline-none focus:ring-2 focus:ring-blue-200 resize-y" />
+                                  <div className="flex gap-1">
+                                    <button onClick={saveEditDump} className="text-[10px] bg-blue-600 text-white px-2 py-0.5 rounded font-medium">Save</button>
+                                    <button onClick={() => setEditingDump(null)} className="text-[10px] text-gray-400">Cancel</button>
+                                  </div>
+                                </div>
+                              ) : (
+                                <>
+                                  <div className="text-gray-600">{d.text}</div>
+                                  <div className="flex items-center justify-between mt-0.5">
+                                    <span className="text-gray-300">{formatET(d.createdAt)}</span>
+                                    <span className="opacity-0 group-hover/note:opacity-100 flex gap-1.5 transition-opacity">
+                                      <button onClick={() => setEditingDump({ type: "person", id: d._id || "", index: j, personId: p._id, text: d.text })} className="text-gray-400 hover:text-blue-600">edit</button>
+                                      <button onClick={() => { if (confirm("Delete this note?")) deleteDump("person", d._id || "", j, p._id); }} className="text-gray-400 hover:text-red-500">delete</button>
+                                    </span>
+                                  </div>
+                                </>
+                              )}
                             </div>
                           ))}
                         </div>
@@ -1298,7 +1356,7 @@ export default function DashboardPage() {
                   <div className="text-xs font-medium text-gray-500 mb-2">Past Dumps ({data.chat.dumps.length})</div>
                   <div className="space-y-2 max-h-[250px] overflow-y-auto">
                     {data.chat.dumps.map((d, i) => (
-                      <div key={i} className="bg-gray-50 border border-gray-100 rounded-lg px-3 py-2">
+                      <div key={i} className="bg-gray-50 border border-gray-100 rounded-lg px-3 py-2 group/chatdump">
                         <div className="flex items-center gap-1.5 mb-1">
                           {d.category && d.category !== "general" && (
                             <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${d.category === "person" ? "bg-indigo-100 text-indigo-700" : d.category === "business" ? "bg-emerald-100 text-emerald-700" : d.category === "initiative" ? "bg-purple-100 text-purple-700" : "bg-amber-100 text-amber-700"}`}>
@@ -1307,8 +1365,26 @@ export default function DashboardPage() {
                           )}
                           {d.subject && <span className="text-xs font-medium text-gray-700">{d.subject}</span>}
                         </div>
-                        <div className="text-sm text-gray-700">{d.text}</div>
-                        <div className="text-xs text-gray-400 mt-1">{formatET(d.createdAt)} · {d.source}</div>
+                        {editingDump?.type === "chat" && editingDump?.index === i ? (
+                          <div className="space-y-1.5">
+                            <textarea autoFocus value={editingDump.text} onChange={(e) => setEditingDump((ed) => ed ? { ...ed, text: e.target.value } : ed)} rows={3} className="w-full px-2 py-1.5 border border-gray-200 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 resize-y" />
+                            <div className="flex gap-1.5">
+                              <button onClick={saveEditDump} className="text-xs bg-blue-600 text-white px-2 py-0.5 rounded font-medium">Save</button>
+                              <button onClick={() => setEditingDump(null)} className="text-xs text-gray-400">Cancel</button>
+                            </div>
+                          </div>
+                        ) : (
+                          <>
+                            <div className="text-sm text-gray-700">{d.text}</div>
+                            <div className="flex items-center justify-between mt-1">
+                              <span className="text-xs text-gray-400">{formatET(d.createdAt)} · {d.source}</span>
+                              <span className="opacity-0 group-hover/chatdump:opacity-100 flex gap-2 transition-opacity">
+                                <button onClick={() => setEditingDump({ type: "chat", id: "", index: i, text: d.text })} className="text-xs text-gray-400 hover:text-blue-600">edit</button>
+                                <button onClick={() => { if (confirm("Delete this dump?")) deleteDump("chat", "", i); }} className="text-xs text-gray-400 hover:text-red-500">delete</button>
+                              </span>
+                            </div>
+                          </>
+                        )}
                       </div>
                     ))}
                   </div>
