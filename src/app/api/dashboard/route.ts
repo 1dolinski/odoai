@@ -8,6 +8,7 @@ import Job from "@/models/Job";
 import Check from "@/models/Check";
 import Activity from "@/models/Activity";
 import { autoExtract, maybeUpdateContext, deepProcessDump, generateAiFeed } from "@/lib/brain";
+import { chat as aiChat } from "@/lib/openrouter";
 import { writeKnowledge, writePersonKnowledge, writePeopleSnapshot } from "@/lib/knowledge";
 import { getChatAdmins } from "@/lib/telegram";
 
@@ -501,6 +502,26 @@ export async function POST(req: NextRequest) {
       { $set: { initiative: body.initiative || "" } }
     );
     return NextResponse.json({ ok: true });
+  }
+
+  if (action === "suggestForTask" && body.taskId) {
+    const task = await Task.findOne({ _id: body.taskId, telegramChatId: chatId });
+    if (!task) return NextResponse.json({ error: "task not found" }, { status: 404 });
+    const chatDoc = await Chat.findOne({ telegramChatId: chatId });
+    const otherTasks = await Task.find({ telegramChatId: chatId, status: { $ne: "done" } }).lean();
+    const existing = otherTasks.map((t) => t.title).join(", ");
+    const model = chatDoc?.aiModel || undefined;
+    const response = await aiChat([
+      { role: "system", content: "You suggest practical next-step tasks. Return a JSON array of 2-5 short task title strings. Only return the JSON array, no markdown fences or explanation. Tasks should be specific, actionable, and not duplicate any existing tasks." },
+      { role: "user", content: `Task: "${task.title}"${task.description ? `\nContext: ${task.description}` : ""}${chatDoc?.contextSummary ? `\nChat context: ${chatDoc.contextSummary}` : ""}\n\nExisting tasks (DO NOT suggest duplicates): ${existing}\n\nSuggest 2-5 practical next steps or sub-tasks:` },
+    ], model);
+    try {
+      const cleaned = response.replace(/```json?\s*/g, "").replace(/```/g, "").trim();
+      const suggestions = JSON.parse(cleaned);
+      return NextResponse.json({ ok: true, suggestions: Array.isArray(suggestions) ? suggestions : [] });
+    } catch {
+      return NextResponse.json({ ok: true, suggestions: [] });
+    }
   }
 
   return NextResponse.json({ error: "unknown action" }, { status: 400 });

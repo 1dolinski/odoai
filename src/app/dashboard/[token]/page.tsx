@@ -200,6 +200,8 @@ export default function DashboardPage() {
   const [personDumpText, setPersonDumpText] = useState("");
   const [personDumpSending, setPersonDumpSending] = useState(false);
   const [editingDump, setEditingDump] = useState<{ type: "person" | "chat"; id: string; index: number; personId?: string; text: string } | null>(null);
+  const [taskSuggestions, setTaskSuggestions] = useState<Record<string, string[]>>({});
+  const [suggestingTaskId, setSuggestingTaskId] = useState<string | null>(null);
   const [showActions, setShowActions] = useState(false);
   const [showWatch, setShowWatch] = useState(false);
   const [showContext, setShowContext] = useState(false);
@@ -1706,6 +1708,42 @@ export default function DashboardPage() {
                             <option key={ini.id} value={ini.id}>{ini.name}</option>
                           ))}
                         </select>
+                      </div>
+                      <div className="pt-1.5 border-t border-gray-100 mt-1.5">
+                        <button
+                          onClick={async () => {
+                            setSuggestingTaskId(t._id);
+                            const res = await fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "suggestForTask", taskId: t._id }) });
+                            const json = await res.json();
+                            setTaskSuggestions((prev) => ({ ...prev, [t._id]: json.suggestions || [] }));
+                            setSuggestingTaskId(null);
+                          }}
+                          disabled={suggestingTaskId === t._id}
+                          className="text-[10px] text-amber-600 hover:text-amber-700 font-medium disabled:opacity-50"
+                        >
+                          {suggestingTaskId === t._id ? "Thinking..." : "💡 Suggest next steps"}
+                        </button>
+                        {taskSuggestions[t._id] && taskSuggestions[t._id].length > 0 && (
+                          <div className="mt-1.5 space-y-1">
+                            {taskSuggestions[t._id].map((s, si) => (
+                              <div key={si} className="flex items-center gap-1.5 bg-amber-50 border border-amber-100 rounded px-2 py-1">
+                                <span className="text-[10px] text-amber-800 flex-1">{s}</span>
+                                <button
+                                  onClick={async () => {
+                                    await fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "addTask", task: { title: s, status: "todo" } }) });
+                                    setTaskSuggestions((prev) => ({ ...prev, [t._id]: prev[t._id].filter((_, i) => i !== si) }));
+                                    fetchData();
+                                  }}
+                                  className="text-[10px] bg-amber-600 text-white px-1.5 py-0.5 rounded font-medium hover:bg-amber-700 shrink-0"
+                                >+ Add</button>
+                                <button
+                                  onClick={() => setTaskSuggestions((prev) => ({ ...prev, [t._id]: prev[t._id].filter((_, i) => i !== si) }))}
+                                  className="text-[10px] text-amber-400 hover:text-amber-600 shrink-0"
+                                >✕</button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     </div>
                   )}
