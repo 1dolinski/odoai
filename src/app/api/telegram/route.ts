@@ -780,15 +780,15 @@ export async function POST(req: NextRequest) {
         maybeUpdateContext(String(chatId)),
       ]);
       const actions = await handleConversation(chatId, userId, username, cleanText);
-      if (actions.length) {
-        Activity.create({
-          telegramChatId: String(chatId),
-          type: "ai_result",
-          title: `AI took ${actions.length} action${actions.length > 1 ? "s" : ""}`,
-          detail: actions.join(" · "),
-          actor: "odoai",
-        }).catch(console.error);
-      }
+      Activity.create({
+        telegramChatId: String(chatId),
+        type: "ai_result",
+        title: actions.length
+          ? `AI took ${actions.length} action${actions.length > 1 ? "s" : ""}`
+          : "AI responded (no actions)",
+        detail: actions.length ? actions.join(" · ") : "conversational reply",
+        actor: "odoai",
+      }).catch(console.error);
       return ok();
     }
 
