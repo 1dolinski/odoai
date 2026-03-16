@@ -579,7 +579,23 @@ export default function DashboardPage() {
     );
   }
 
-  const filteredTasks = taskFilter === "all" ? data.tasks : data.tasks.filter((t) => t.status === taskFilter);
+  const checkTasks: Task[] = data.checks.map((c) => ({
+    _id: `check-${c._id}`,
+    title: c.description,
+    description: c.context || undefined,
+    status: c.status === "pending" ? "upcoming" as const : "done" as const,
+    dueDate: c.scheduledFor,
+    people: ["odoai"],
+    createdByUsername: "odoai",
+    createdAt: c.createdAt,
+    completedAt: c.completedAt,
+    _isCheck: true,
+    _checkId: c._id,
+    _checkResult: c.result,
+  })) as (Task & { _isCheck?: boolean; _checkId?: string; _checkResult?: string })[];
+
+  const allTasks = [...data.tasks.map((t) => ({ ...t, _isCheck: false, _checkId: "", _checkResult: "" })), ...checkTasks];
+  const filteredTasks = taskFilter === "all" ? allTasks : allTasks.filter((t) => t.status === taskFilter);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 via-white to-gray-100 text-gray-900">
@@ -1728,10 +1744,10 @@ export default function DashboardPage() {
             <h2 className="text-lg font-semibold text-gray-800">Tasks</h2>
             <div className="flex gap-1 bg-gray-100 rounded-lg p-1">
               {([
-                { key: "all", label: "All", count: data.tasks.length },
-                { key: "todo", label: "Todo", count: data.tasks.filter((t) => t.status === "todo").length },
-                { key: "upcoming", label: "Upcoming", count: data.tasks.filter((t) => t.status === "upcoming").length },
-                { key: "done", label: "Done", count: data.tasks.filter((t) => t.status === "done").length },
+                { key: "all", label: "All", count: allTasks.length },
+                { key: "todo", label: "Todo", count: allTasks.filter((t) => t.status === "todo").length },
+                { key: "upcoming", label: "Upcoming", count: allTasks.filter((t) => t.status === "upcoming").length },
+                { key: "done", label: "Done", count: allTasks.filter((t) => t.status === "done").length },
               ] as { key: "all" | "todo" | "upcoming" | "done"; label: string; count: number }[]).map((f) => (
                 <button
                   key={f.key}
@@ -1813,6 +1829,9 @@ export default function DashboardPage() {
                             ))}
                           </span>
                         )}
+                        {(t as { _isCheck?: boolean })._isCheck && (
+                          <span className="inline-flex items-center text-[10px] font-medium bg-amber-50 text-amber-600 border border-amber-200 rounded-full px-1.5 py-0.5 ml-1">🔔 check</span>
+                        )}
                         {t.initiative && (() => { const ini = (data.initiatives || []).find((i) => i.id === t.initiative); return ini ? (<span className="inline-flex items-center text-[10px] font-medium bg-purple-50 text-purple-600 border border-purple-100 rounded-full px-1.5 py-0.5 ml-1">{ini.name}</span>) : null; })()}
                         {t.subtasks && t.subtasks.length > 0 && (
                           <span className={`inline-flex items-center text-[10px] font-medium rounded-full px-1.5 py-0.5 ml-1 border ${t.subtasks.every((s) => s.done) ? "bg-green-50 text-green-600 border-green-100" : "bg-gray-50 text-gray-500 border-gray-200"}`}>
@@ -1851,17 +1870,55 @@ export default function DashboardPage() {
                         )}
                       </div>
                     </div>
-                    <select
-                      value={t.status}
-                      onChange={(e) => changeTaskStatus(t._id, t.title, e.target.value)}
-                      className={`text-xs px-2 py-1 rounded-full font-medium shrink-0 border-0 cursor-pointer appearance-none pr-5 ${statusBadge[t.status] || ""}`}
-                      style={{ backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23666'/%3E%3C/svg%3E")`, backgroundRepeat: "no-repeat", backgroundPosition: "right 6px center" }}
-                    >
-                      <option value="todo">todo</option>
-                      <option value="upcoming">upcoming</option>
-                      <option value="done">done</option>
-                      <option value="delete" className="text-red-600">🗑 delete</option>
-                    </select>
+                    {(t as { _isCheck?: boolean })._isCheck ? (
+                      <div className="flex items-center gap-1 shrink-0">
+                        {t.status === "upcoming" ? (
+                          <>
+                            <button
+                              onClick={() => {
+                                const checkId = (t as { _checkId?: string })._checkId;
+                                setData((d) => d ? { ...d, checks: d.checks.map((c) => c._id === checkId ? { ...c, status: "done" as const } : c) } : d);
+                                fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "clearCheck", checkId, status: "done" }) });
+                              }}
+                              className="text-[10px] bg-green-100 text-green-700 px-2 py-1 rounded-full font-medium hover:bg-green-200"
+                            >✓ done</button>
+                            <button
+                              onClick={() => {
+                                const checkId = (t as { _checkId?: string })._checkId;
+                                const ctx = prompt("Add context (what happened, outcome):");
+                                if (ctx !== null && ctx.trim()) {
+                                  setData((d) => d ? { ...d, checks: d.checks.map((c) => c._id === checkId ? { ...c, status: "done" as const, result: ctx.trim() } : c) } : d);
+                                  fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "clearCheck", checkId, status: "done", context: ctx.trim(), result: ctx.trim() }) });
+                                }
+                              }}
+                              className="text-[10px] bg-indigo-100 text-indigo-700 px-2 py-1 rounded-full font-medium hover:bg-indigo-200"
+                            >+ ctx</button>
+                            <button
+                              onClick={() => {
+                                const checkId = (t as { _checkId?: string })._checkId;
+                                setData((d) => d ? { ...d, checks: d.checks.map((c) => c._id === checkId ? { ...c, status: "skipped" as const } : c) } : d);
+                                fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "clearCheck", checkId, status: "skipped" }) });
+                              }}
+                              className="text-[10px] bg-gray-100 text-gray-500 px-2 py-1 rounded-full font-medium hover:bg-gray-200"
+                            >✕</button>
+                          </>
+                        ) : (
+                          <span className="text-xs px-2 py-1 rounded-full font-medium bg-green-100 text-green-700">done</span>
+                        )}
+                      </div>
+                    ) : (
+                      <select
+                        value={t.status}
+                        onChange={(e) => changeTaskStatus(t._id, t.title, e.target.value)}
+                        className={`text-xs px-2 py-1 rounded-full font-medium shrink-0 border-0 cursor-pointer appearance-none pr-5 ${statusBadge[t.status] || ""}`}
+                        style={{ backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23666'/%3E%3C/svg%3E")`, backgroundRepeat: "no-repeat", backgroundPosition: "right 6px center" }}
+                      >
+                        <option value="todo">todo</option>
+                        <option value="upcoming">upcoming</option>
+                        <option value="done">done</option>
+                        <option value="delete" className="text-red-600">🗑 delete</option>
+                      </select>
+                    )}
                   </div>
                   {expandedTaskId === t._id && (
                     <div className="mt-2 ml-0.5 text-xs text-gray-500 bg-white/60 border border-gray-100 rounded-md px-3 py-2 space-y-1.5">
@@ -2056,114 +2113,7 @@ export default function DashboardPage() {
           )}
         </section>
 
-        {/* Upcoming Checks */}
-        {data.checks.length > 0 && (
-          <section className="mb-10">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lg font-semibold text-gray-800">Scheduled Checks</h2>
-              {data.checks.some((c) => c.status === "pending") && (
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={async () => {
-                      setData((d) => d ? { ...d, checks: d.checks.map((c) => c.status === "pending" ? { ...c, status: "skipped" as const } : c) } : d);
-                      await fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "clearAllChecks", status: "skipped" }) });
-                      fetchData();
-                    }}
-                    className="text-xs text-gray-400 hover:text-gray-600 transition-colors"
-                  >Clear all</button>
-                  <button
-                    onClick={async () => {
-                      setData((d) => d ? { ...d, checks: d.checks.map((c) => c.status === "pending" ? { ...c, status: "done" as const } : c) } : d);
-                      await fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "clearAllChecks", status: "done" }) });
-                      fetchData();
-                    }}
-                    className="text-xs text-green-500 hover:text-green-700 transition-colors"
-                  >✓ Done all</button>
-                </div>
-              )}
-            </div>
-            <div className="space-y-2">
-              {data.checks.map((c) => {
-                const isPending = c.status === "pending";
-                const isFuture = new Date(c.scheduledFor) > new Date();
-                return (
-                  <div
-                    key={c._id}
-                    className={`rounded-lg border p-4 ${
-                      isPending && isFuture
-                        ? "border-amber-300 bg-amber-50"
-                        : isPending
-                          ? "border-orange-300 bg-orange-50"
-                          : c.status === "done"
-                            ? "border-green-200 bg-green-50"
-                            : "border-gray-200 bg-gray-50 opacity-60"
-                    }`}
-                  >
-                    <div className="flex items-start gap-3">
-                      <span className="text-lg mt-0.5">
-                        {c.status === "done" ? "✅" : c.status === "skipped" ? "⏭" : isFuture ? "⏳" : "🔔"}
-                      </span>
-                      <div className="flex-1 min-w-0">
-                        <div className={`font-medium text-sm ${c.status !== "pending" ? "text-gray-400 line-through" : "text-gray-900"}`}>{c.description}</div>
-                        {c.context && (
-                          <div className="text-xs text-gray-500 mt-1 truncate">Context: {c.context}</div>
-                        )}
-                        {c.result && (
-                          <div className="text-xs text-green-700 mt-1">{c.result}</div>
-                        )}
-                        {isPending && (
-                          <div className="flex items-center gap-2 mt-2">
-                            <button
-                              onClick={async () => {
-                                setData((d) => d ? { ...d, checks: d.checks.map((ch) => ch._id === c._id ? { ...ch, status: "skipped" as const } : ch) } : d);
-                                fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "clearCheck", checkId: c._id, status: "skipped" }) });
-                              }}
-                              className="text-[10px] text-gray-400 hover:text-gray-600 font-medium"
-                            >✕ Clear</button>
-                            <button
-                              onClick={async () => {
-                                setData((d) => d ? { ...d, checks: d.checks.map((ch) => ch._id === c._id ? { ...ch, status: "done" as const } : ch) } : d);
-                                fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "clearCheck", checkId: c._id, status: "done" }) });
-                              }}
-                              className="text-[10px] text-green-500 hover:text-green-700 font-medium"
-                            >✓ Done</button>
-                            <button
-                              onClick={() => {
-                                const ctx = prompt("Add context (what happened, outcome, notes):");
-                                if (ctx !== null && ctx.trim()) {
-                                  setData((d) => d ? { ...d, checks: d.checks.map((ch) => ch._id === c._id ? { ...ch, status: "done" as const, result: ctx.trim() } : ch) } : d);
-                                  fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "clearCheck", checkId: c._id, status: "done", context: ctx.trim(), result: ctx.trim() }) });
-                                }
-                              }}
-                              className="text-[10px] text-indigo-500 hover:text-indigo-700 font-medium"
-                            >✓ Done + context</button>
-                          </div>
-                        )}
-                      </div>
-                      <div className="text-right shrink-0">
-                        <div className="text-xs text-gray-500">{formatET(c.scheduledFor)}</div>
-                        {c.triggeredByUsername && (
-                          <div className="text-xs text-gray-400">@{c.triggeredByUsername}</div>
-                        )}
-                        <span
-                          className={`text-xs px-1.5 py-0.5 rounded mt-1 inline-block ${
-                            c.status === "pending"
-                              ? "bg-amber-100 text-amber-700"
-                              : c.status === "done"
-                                ? "bg-green-100 text-green-700"
-                                : "bg-gray-100 text-gray-500"
-                          }`}
-                        >
-                          {c.status}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </section>
-        )}
+        {/* Checks are now merged into the task board above */}
 
         {/* (Chat Members + Contacts moved to toolbar People panel) */}
 
