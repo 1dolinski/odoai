@@ -716,7 +716,8 @@ export async function POST(req: NextRequest) {
     autoExtract(String(chatId)).catch(console.error);
     maybeUpdateContext(String(chatId)).catch(console.error);
 
-    const isMentioned = text.includes(BOT_USERNAME);
+    const TRIGGER_EMOJIS = /[\u{1F600}-\u{1F606}\u{1F609}-\u{1F60E}\u{1F617}-\u{1F61D}\u{1F920}\u{1F973}\u{1F60A}\u{1F607}\u{263A}\u{1F642}\u{1F643}]/u;
+    const isMentioned = text.includes(BOT_USERNAME) || TRIGGER_EMOJIS.test(text);
     const isPrivate = msg.chat.type === "private";
     const cleanText = text.replace(BOT_USERNAME, "").trim();
 
@@ -762,8 +763,12 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // If mentioned or in DM, have a conversation
+    // If mentioned or in DM — sync up, then respond based on user intent
     if (isMentioned || isPrivate) {
+      await Promise.all([
+        autoExtract(String(chatId), true),
+        maybeUpdateContext(String(chatId)),
+      ]);
       await handleConversation(chatId, userId, username, cleanText);
       return ok();
     }
