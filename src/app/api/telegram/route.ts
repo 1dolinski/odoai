@@ -1,3 +1,5 @@
+export const maxDuration = 300;
+
 import { NextRequest, NextResponse } from "next/server";
 import { connectDB } from "@/lib/mongodb";
 import { sendMessage, sendMessageWithButtons, getChatAdmins, reactToMessage, reactWithEmoji } from "@/lib/telegram";

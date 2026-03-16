@@ -22,7 +22,7 @@ export async function chat(messages: Message[], model?: string): Promise<string>
 export async function chatWithUsage(messages: Message[], model?: string): Promise<ChatResult> {
   const useModel = (model || DEFAULT_MODEL).trim();
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 45000);
+  const timeout = setTimeout(() => controller.abort(), 120000);
   let res: Response;
   try {
     res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
@@ -40,7 +40,7 @@ export async function chatWithUsage(messages: Message[], model?: string): Promis
     });
   } catch (e) {
     clearTimeout(timeout);
-    if ((e as Error).name === "AbortError") throw new Error(`OpenRouter timeout (${useModel}): request took >45s`);
+    if ((e as Error).name === "AbortError") throw new Error(`OpenRouter timeout (${useModel}): request took >120s`);
     throw e;
   }
   clearTimeout(timeout);

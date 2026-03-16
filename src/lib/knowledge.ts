@@ -26,7 +26,7 @@ async function qmdFetch(path: string, body?: unknown) {
     return res.json();
   } catch (e) {
     clearTimeout(timeout);
-    if ((e as Error).name === "AbortError") throw new Error(`QMD ${path} timeout (>8s)`);
+    if ((e as Error).name === "AbortError") throw new Error(`QMD ${path} timeout (>15s)`);
     throw e;
   }
 }
