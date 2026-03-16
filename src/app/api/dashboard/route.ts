@@ -41,6 +41,7 @@ export async function GET(req: NextRequest) {
       guidance: chat.guidance || "",
       contextSummary: chat.contextSummary,
       lastSyncAt: chat.lastSyncAt || null,
+      lastReviewedAt: chat.lastReviewedAt || null,
       messageCount: chat.messages?.length || 0,
     },
     tasks,
@@ -95,7 +96,7 @@ export async function PATCH(req: NextRequest) {
   await connectDB();
 
   const body = await req.json();
-  const { token, aiStyle, watchSettings, chatTitle } = body;
+  const { token, aiStyle, watchSettings, chatTitle, mode } = body;
 
   if (!token) return NextResponse.json({ error: "token required" }, { status: 400 });
 
@@ -104,6 +105,11 @@ export async function PATCH(req: NextRequest) {
 
   if (chatTitle && typeof chatTitle === "string") {
     chat.chatTitle = chatTitle.trim();
+  }
+
+  const VALID_MODES = ["passive", "active", "aggressive"];
+  if (mode && VALID_MODES.includes(mode)) {
+    chat.mode = mode;
   }
 
   if (aiStyle && VALID_STYLES.includes(aiStyle)) {

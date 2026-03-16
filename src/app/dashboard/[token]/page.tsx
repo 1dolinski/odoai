@@ -90,6 +90,7 @@ interface DashboardData {
     aiStyle: string;
     guidance: string;
     lastSyncAt: string | null;
+    lastReviewedAt: string | null;
     watchSettings: WatchSettings;
     contextSummary: string;
     messageCount: number;
@@ -167,6 +168,15 @@ export default function DashboardPage() {
       setGuidanceText(data.chat.guidance);
     }
   }, [data, guidanceText, guidanceSaved]);
+
+  async function setMode(newMode: string) {
+    setData((d) => d ? { ...d, chat: { ...d.chat, mode: newMode } } : d);
+    await fetch("/api/dashboard", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token, mode: newMode }),
+    });
+  }
 
   async function setAiStyle(style: AiStyle) {
     setSaving(true);
@@ -338,11 +348,30 @@ export default function DashboardPage() {
                 {data.chat.title} <span className="text-gray-300 text-base">✎</span>
               </h1>
             )}
-            <div className="flex gap-3 mt-2 text-sm">
-              <span className={`px-2 py-0.5 rounded text-xs font-medium ${data.chat.mode === "active" ? "bg-green-100 text-green-700" : "bg-gray-200 text-gray-600"}`}>
-                {data.chat.mode === "active" ? "Active" : "Passive"}
-              </span>
-              <span className="text-gray-500">{data.chat.messageCount} messages observed</span>
+            <div className="flex items-center gap-3 mt-2 text-sm">
+              <div className="flex gap-1 bg-gray-100 rounded-lg p-0.5">
+                {([
+                  { key: "passive", label: "Passive", color: "bg-gray-200 text-gray-700" },
+                  { key: "active", label: "Active", color: "bg-green-100 text-green-700" },
+                  { key: "aggressive", label: "Aggressive", color: "bg-red-100 text-red-700" },
+                ] as { key: string; label: string; color: string }[]).map((m) => (
+                  <button
+                    key={m.key}
+                    onClick={() => setMode(m.key)}
+                    className={`px-2.5 py-1 rounded-md text-xs font-medium transition-all ${
+                      data.chat.mode === m.key
+                        ? `${m.color} shadow-sm`
+                        : "text-gray-400 hover:text-gray-600"
+                    }`}
+                  >
+                    {m.label}
+                  </button>
+                ))}
+              </div>
+              <span className="text-gray-500">{data.chat.messageCount} msgs</span>
+              {data.chat.lastReviewedAt && (
+                <span className="text-xs text-gray-400">reviewed {formatRelativeTime(data.chat.lastReviewedAt)}</span>
+              )}
             </div>
           </div>
           <div className="flex items-center gap-3">

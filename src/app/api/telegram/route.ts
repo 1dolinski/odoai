@@ -742,6 +742,7 @@ export async function POST(req: NextRequest) {
       autoExtract(cid, true).catch(console.error);
       maybeUpdateContext(cid).catch(console.error);
       const actions = await handleConversation(chatId, userId, username, cleanText);
+      Chat.updateOne({ telegramChatId: cid }, { $set: { lastReviewedAt: new Date() } }).catch(console.error);
       Activity.create({
         telegramChatId: cid,
         type: "ai_result",
@@ -754,23 +755,55 @@ export async function POST(req: NextRequest) {
       return ok();
     }
 
-    // Passive mode: just observed. No response needed.
-    // Active mode: maybe proactively suggest something useful
-    const suggestion = await maybeProactiveSuggest(String(chatId));
-    if (suggestion) {
+    // Check mode for non-mentioned messages
+    const chatMode = (await Chat.findOne({ telegramChatId: String(chatId) }))?.mode || "passive";
+
+    // Aggressive mode: AI reviews every message and responds
+    if (chatMode === "aggressive") {
+      const cid = String(chatId);
       Activity.create({
-        telegramChatId: String(chatId),
+        telegramChatId: cid,
         type: "ai_triggered",
-        title: "AI proactive suggestion",
-        detail: suggestion.substring(0, 120),
+        title: "AI auto-review (aggressive)",
+        detail: cleanText.substring(0, 120),
+        actor: username || userId,
+      }).catch(console.error);
+      autoExtract(cid, true).catch(console.error);
+      const actions = await handleConversation(chatId, userId, username, cleanText);
+      Chat.updateOne({ telegramChatId: cid }, { $set: { lastReviewedAt: new Date() } }).catch(console.error);
+      Activity.create({
+        telegramChatId: cid,
+        type: "ai_result",
+        title: actions.length
+          ? `AI took ${actions.length} action${actions.length > 1 ? "s" : ""}`
+          : "AI reviewed (no actions)",
+        detail: actions.length ? actions.join(" · ") : "reviewed message",
         actor: "odoai",
       }).catch(console.error);
-      await sendMessage(chatId, suggestion, "");
-      await Chat.findOneAndUpdate(
-        { telegramChatId: String(chatId) },
-        { $push: { messages: { role: "assistant", content: suggestion } } }
-      );
+      return ok();
     }
+
+    // Active mode: maybe proactively suggest something useful
+    if (chatMode === "active") {
+      const suggestion = await maybeProactiveSuggest(String(chatId));
+      if (suggestion) {
+        Activity.create({
+          telegramChatId: String(chatId),
+          type: "ai_triggered",
+          title: "AI proactive suggestion",
+          detail: suggestion.substring(0, 120),
+          actor: "odoai",
+        }).catch(console.error);
+        await sendMessage(chatId, suggestion, "");
+        await Chat.findOneAndUpdate(
+          { telegramChatId: String(chatId) },
+          { $push: { messages: { role: "assistant", content: suggestion } } }
+        );
+      }
+    }
+
+    // Passive mode: just observed. Stamp lastReviewedAt so we know where we left off.
+    Chat.updateOne({ telegramChatId: String(chatId) }, { $set: { lastReviewedAt: new Date() } }).catch(console.error);
 
     return ok();
   } catch (error) {

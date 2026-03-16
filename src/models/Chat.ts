@@ -9,7 +9,7 @@ export interface IMessage {
   createdAt: Date;
 }
 
-export type ChatMode = "passive" | "active";
+export type ChatMode = "passive" | "active" | "aggressive";
 export type AiStyle = "concise" | "detailed" | "casual" | "professional" | "technical";
 
 export interface IWatchSettings {
@@ -46,6 +46,7 @@ export interface IChat extends Document {
   contextSummary: string;
   lastSummaryAt: Date;
   lastSyncAt: Date;
+  lastReviewedAt: Date;
   messagesSinceSummary: number;
   createdAt: Date;
   updatedAt: Date;
@@ -64,7 +65,7 @@ const ChatSchema = new Schema<IChat>(
   {
     telegramChatId: { type: String, required: true, unique: true, index: true },
     chatTitle: String,
-    mode: { type: String, enum: ["passive", "active"], default: "passive" },
+    mode: { type: String, enum: ["passive", "active", "aggressive"], default: "passive" },
     aiStyle: {
       type: String,
       enum: ["concise", "detailed", "casual", "professional", "technical"],
@@ -86,6 +87,7 @@ const ChatSchema = new Schema<IChat>(
     contextSummary: { type: String, default: "" },
     lastSummaryAt: { type: Date },
     lastSyncAt: { type: Date },
+    lastReviewedAt: { type: Date },
     messagesSinceSummary: { type: Number, default: 0 },
   },
   { timestamps: true }

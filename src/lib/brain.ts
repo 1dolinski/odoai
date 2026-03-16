@@ -71,7 +71,7 @@ export async function buildSystemPrompt(chatId: string, userQuery?: string): Pro
 YOUR PRIMARY ROLE: You are an intelligent observer. You listen to conversations and build a rich understanding of the people, their tasks, intentions, relationships, and context. You do NOT wait for commands — you infer everything from natural conversation.
 
 MODE: ${mode.toUpperCase()}
-${mode === "passive" ? "PASSIVE: You silently observe. Only respond when directly mentioned (@odoai_bot) or when a slash command is used. But you are ALWAYS learning from every message." : "ACTIVE: You are an active collaborator. When you notice something useful — a missed follow-up, an insight, a suggestion — share it. Proactively check in on open threads. Be a helpful teammate, not a command executor."}
+${mode === "passive" ? "PASSIVE: You silently observe. Only respond when directly mentioned (@odoai_bot) or when a slash command is used. But you are ALWAYS learning from every message." : mode === "aggressive" ? "AGGRESSIVE: You review EVERY single message. Extract tasks, people, relationships, and insights from each one. Respond to anything actionable — add todos, flag blockers, note deadlines, track people. You are always on, always working. Treat every message as if someone asked you to process it." : "ACTIVE: You are an active collaborator. When you notice something useful — a missed follow-up, an insight, a suggestion — share it. Proactively check in on open threads. Be a helpful teammate, not a command executor."}
 
 CONTEXT SUMMARY:
 ${contextSummary}
