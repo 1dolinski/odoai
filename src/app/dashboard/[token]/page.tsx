@@ -9,6 +9,12 @@ interface Subtask {
   done: boolean;
 }
 
+interface TitleChange {
+  from: string;
+  to: string;
+  at: string;
+}
+
 interface Task {
   _id: string;
   title: string;
@@ -18,6 +24,7 @@ interface Task {
   people?: string[];
   initiative?: string;
   subtasks?: Subtask[];
+  titleHistory?: TitleChange[];
   createdByUsername?: string;
   completedAt?: string;
   createdAt: string;
@@ -231,6 +238,7 @@ export default function DashboardPage() {
   const [newInitName, setNewInitName] = useState("");
   const [newInitDesc, setNewInitDesc] = useState("");
   const [editingDateId, setEditingDateId] = useState<string | null>(null);
+  const [editingTaskTitle, setEditingTaskTitle] = useState<{ id: string; draft: string } | null>(null);
   const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null);
   const [actionForm, setActionForm] = useState({ type: "todo" as string, title: "", dueDate: "", personName: "", personRole: "", statusTaskSearch: "", statusNewStatus: "done" as string, dumpText: "", dumpCategory: "general", dumpSubject: "", taskPeople: [] as string[], taskInitiative: "" });
   const [actionSaving, setActionSaving] = useState(false);
@@ -1759,9 +1767,34 @@ export default function DashboardPage() {
                   <div className="flex items-center gap-3">
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-1.5 flex-wrap">
-                        <span className={`font-medium text-sm ${t.status === "done" ? "line-through text-gray-400" : "text-gray-900"}`}>
-                          {t.title}
-                        </span>
+                        {editingTaskTitle?.id === t._id ? (
+                          <input
+                            autoFocus
+                            value={editingTaskTitle.draft}
+                            onChange={(e) => setEditingTaskTitle({ id: t._id, draft: e.target.value })}
+                            onBlur={async () => {
+                              const newTitle = editingTaskTitle.draft.trim();
+                              if (newTitle && newTitle !== t.title) {
+                                setData((d) => d ? { ...d, tasks: d.tasks.map((task) => task._id === t._id ? { ...task, title: newTitle, titleHistory: [...(task.titleHistory || []), { from: t.title, to: newTitle, at: new Date().toISOString() }] } : task) } : d);
+                                fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "renameTask", taskId: t._id, newTitle }) });
+                              }
+                              setEditingTaskTitle(null);
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                              if (e.key === "Escape") setEditingTaskTitle(null);
+                            }}
+                            className="font-medium text-sm text-gray-900 border border-indigo-300 rounded px-1.5 py-0.5 outline-none focus:ring-1 focus:ring-indigo-400 min-w-[200px]"
+                          />
+                        ) : (
+                          <span
+                            onClick={() => setEditingTaskTitle({ id: t._id, draft: t.title })}
+                            className={`font-medium text-sm cursor-pointer hover:bg-gray-100 rounded px-0.5 -mx-0.5 transition-colors ${t.status === "done" ? "line-through text-gray-400" : "text-gray-900"}`}
+                            title="Click to edit title"
+                          >
+                            {t.title}
+                          </span>
+                        )}
                         <button
                           onClick={() => setExpandedTaskId(expandedTaskId === t._id ? null : t._id)}
                           className={`transition-colors ${expandedTaskId === t._id ? "text-blue-500" : "text-gray-300 hover:text-gray-500"}`}
@@ -1833,6 +1866,18 @@ export default function DashboardPage() {
                   {expandedTaskId === t._id && (
                     <div className="mt-2 ml-0.5 text-xs text-gray-500 bg-white/60 border border-gray-100 rounded-md px-3 py-2 space-y-1.5">
                       {t.description && <p>{t.description}</p>}
+                      {t.titleHistory && t.titleHistory.length > 0 && (
+                        <div className="text-[10px] text-gray-400">
+                          <span className="font-medium">Title changes:</span>
+                          {t.titleHistory.map((h, hi) => (
+                            <span key={hi} className="ml-1">
+                              <span className="line-through">{h.from}</span> → <span className="text-gray-600">{h.to}</span>
+                              <span className="text-gray-300 ml-0.5">({new Date(h.at).toLocaleDateString("en-US", { month: "short", day: "numeric" })})</span>
+                              {hi < (t.titleHistory?.length || 0) - 1 && " · "}
+                            </span>
+                          ))}
+                        </div>
+                      )}
                       <div className="flex items-center gap-1.5 flex-wrap">
                         <span className="text-gray-400">Assigned:</span>
                         {(() => {

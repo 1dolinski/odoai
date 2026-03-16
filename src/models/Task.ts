@@ -8,6 +8,12 @@ export interface ISubtask {
   done: boolean;
 }
 
+export interface ITitleChange {
+  from: string;
+  to: string;
+  at: Date;
+}
+
 export interface ITask extends Document {
   telegramChatId: string;
   title: string;
@@ -17,6 +23,7 @@ export interface ITask extends Document {
   people: string[];
   initiative?: string;
   subtasks: ISubtask[];
+  titleHistory: ITitleChange[];
   createdBy: string;
   createdByUsername?: string;
   completedAt?: Date;
@@ -34,6 +41,7 @@ const TaskSchema = new Schema<ITask>(
     people: { type: [String], default: [] },
     initiative: { type: String, default: "" },
     subtasks: { type: [{ id: String, title: String, done: { type: Boolean, default: false } }], default: [] },
+    titleHistory: { type: [{ from: String, to: String, at: { type: Date, default: Date.now } }], default: [] },
     createdBy: { type: String, required: true },
     createdByUsername: String,
     completedAt: Date,

@@ -582,6 +582,21 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  if (action === "renameTask" && body.taskId && body.newTitle) {
+    const newTitle = (body.newTitle as string).trim();
+    if (!newTitle) return NextResponse.json({ error: "title required" }, { status: 400 });
+    const task = await Task.findOne({ _id: body.taskId, telegramChatId: chatId });
+    if (!task) return NextResponse.json({ error: "task not found" }, { status: 404 });
+    const oldTitle = task.title;
+    if (oldTitle !== newTitle) {
+      await Task.updateOne(
+        { _id: body.taskId },
+        { $set: { title: newTitle }, $push: { titleHistory: { from: oldTitle, to: newTitle, at: new Date() } } }
+      );
+    }
+    return NextResponse.json({ ok: true });
+  }
+
   if (action === "toggleSubtask" && body.taskId && body.subtaskId) {
     const task = await Task.findOne({ _id: body.taskId, telegramChatId: chatId });
     if (!task) return NextResponse.json({ error: "task not found" }, { status: 404 });
