@@ -7,18 +7,28 @@ async function qmdFetch(path: string, body?: unknown) {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (QMD_API_KEY) headers["Authorization"] = `Bearer ${QMD_API_KEY}`;
 
-  const res = await fetch(`${QMD_URL}${path}`, {
-    method: body ? "POST" : "GET",
-    headers,
-    ...(body ? { body: JSON.stringify(body) } : {}),
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
+  try {
+    const res = await fetch(`${QMD_URL}${path}`, {
+      method: body ? "POST" : "GET",
+      headers,
+      ...(body ? { body: JSON.stringify(body) } : {}),
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
 
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`QMD ${path} error ${res.status}: ${text}`);
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`QMD ${path} error ${res.status}: ${text}`);
+    }
+
+    return res.json();
+  } catch (e) {
+    clearTimeout(timeout);
+    if ((e as Error).name === "AbortError") throw new Error(`QMD ${path} timeout (>8s)`);
+    throw e;
   }
-
-  return res.json();
 }
 
 // ---- Ingest (push content to QMD service) ----
