@@ -1,3 +1,5 @@
+export const maxDuration = 60;
+
 import { NextRequest, NextResponse } from "next/server";
 import { connectDB } from "@/lib/mongodb";
 import { getSpendSummary, getRecentSpends } from "@/lib/spend";
@@ -446,6 +448,16 @@ export async function POST(req: NextRequest) {
     const titleLabel = subject ? `${category}: ${subject}` : `${category} dump`;
     Activity.create({ telegramChatId: chatId, type: "dump", title: titleLabel, detail: text.substring(0, 100), actor: "dashboard" }).catch(console.error);
     return NextResponse.json({ ok: true });
+  }
+
+  if (action === "askAboutFeed" && body.feedContent && body.question) {
+    const chatDoc = await Chat.findOne({ telegramChatId: chatId });
+    const model = chatDoc?.aiModel || undefined;
+    const response = await aiChat([
+      { role: "system", content: "You are odoai, answering a follow-up question about an AI feed item. Be concise and helpful. 2-3 sentences max." },
+      { role: "user", content: `Feed item (${body.feedType}): "${body.feedContent}"\n\nQuestion: ${body.question}${chatDoc?.contextSummary ? `\n\nChat context: ${chatDoc.contextSummary}` : ""}` },
+    ], model);
+    return NextResponse.json({ ok: true, answer: response });
   }
 
   if (action === "generateFeed") {

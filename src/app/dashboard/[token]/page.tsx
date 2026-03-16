@@ -225,6 +225,10 @@ export default function DashboardPage() {
   const [generatingSubtasks, setGeneratingSubtasks] = useState<string | null>(null);
   const [newSubtaskText, setNewSubtaskText] = useState<Record<string, string>>({});
   const [feedGenerating, setFeedGenerating] = useState(false);
+  const [seenFeedItems, setSeenFeedItems] = useState<Set<number>>(new Set());
+  const [feedQuestion, setFeedQuestion] = useState<{ index: number; text: string } | null>(null);
+  const [feedQuestionLoading, setFeedQuestionLoading] = useState(false);
+  const [feedAnswers, setFeedAnswers] = useState<Record<number, string>>({});
   const [newInitName, setNewInitName] = useState("");
   const [newInitDesc, setNewInitDesc] = useState("");
   const [editingDateId, setEditingDateId] = useState<string | null>(null);
@@ -524,12 +528,16 @@ export default function DashboardPage() {
 
   async function generateFeed() {
     setFeedGenerating(true);
-    await fetch("/api/dashboard", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ token, action: "generateFeed" }),
-    });
-    await fetchData();
+    try {
+      await fetch("/api/dashboard", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token, action: "generateFeed" }),
+      });
+      await fetchData();
+    } catch (e) {
+      console.error("generateFeed error:", e);
+    }
     setFeedGenerating(false);
   }
 
@@ -761,6 +769,7 @@ export default function DashboardPage() {
               ) : (
                 <div className="space-y-2 max-h-[400px] overflow-y-auto">
                   {data.chat.aiFeed.map((item, i) => {
+                    if (seenFeedItems.has(i)) return null;
                     const typeConfig: Record<string, { icon: string; color: string; bg: string }> = {
                       cleanup: { icon: "🧹", color: "text-orange-700", bg: "bg-orange-50 border-orange-200" },
                       suggestion: { icon: "💡", color: "text-blue-700", bg: "bg-blue-50 border-blue-200" },
@@ -779,6 +788,54 @@ export default function DashboardPage() {
                               <span className="text-xs text-gray-400">{formatET(item.createdAt)}</span>
                             </div>
                             <p className="text-sm text-gray-800">{item.content}</p>
+                            {feedAnswers[i] && (
+                              <div className="mt-2 bg-white/70 border border-gray-200 rounded-md px-3 py-2">
+                                <p className="text-xs text-gray-600 whitespace-pre-wrap">{feedAnswers[i]}</p>
+                              </div>
+                            )}
+                            {feedQuestion?.index === i && (
+                              <div className="mt-2 flex items-center gap-1.5">
+                                <input
+                                  type="text"
+                                  autoFocus
+                                  value={feedQuestion.text}
+                                  onChange={(e) => setFeedQuestion({ index: i, text: e.target.value })}
+                                  onKeyDown={async (e) => {
+                                    if (e.key === "Enter" && feedQuestion.text.trim()) {
+                                      setFeedQuestionLoading(true);
+                                      const res = await fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "askAboutFeed", feedContent: item.content, feedType: item.type, question: feedQuestion.text.trim() }) });
+                                      const json = await res.json();
+                                      setFeedAnswers((prev) => ({ ...prev, [i]: json.answer || "No answer" }));
+                                      setFeedQuestion(null);
+                                      setFeedQuestionLoading(false);
+                                    }
+                                    if (e.key === "Escape") setFeedQuestion(null);
+                                  }}
+                                  placeholder="Ask about this..."
+                                  className="flex-1 text-xs border border-gray-300 rounded px-2 py-1 focus:ring-1 focus:ring-indigo-300 focus:border-indigo-400 outline-none"
+                                  disabled={feedQuestionLoading}
+                                />
+                                {feedQuestionLoading && <span className="text-[10px] text-gray-400">Thinking...</span>}
+                              </div>
+                            )}
+                            <div className="flex items-center gap-2 mt-2">
+                              <button
+                                onClick={() => setSeenFeedItems((prev) => new Set(prev).add(i))}
+                                className="text-[10px] text-gray-400 hover:text-gray-600 font-medium transition-colors"
+                              >✓ Seen</button>
+                              <button
+                                onClick={async () => {
+                                  await fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "addTask", task: { title: item.content.length > 80 ? item.content.slice(0, 80) + "..." : item.content, status: "todo", description: item.content } }) });
+                                  setSeenFeedItems((prev) => new Set(prev).add(i));
+                                  fetchData();
+                                }}
+                                className="text-[10px] text-indigo-500 hover:text-indigo-700 font-medium transition-colors"
+                              >+ Todo</button>
+                              <button
+                                onClick={() => setFeedQuestion(feedQuestion?.index === i ? null : { index: i, text: "" })}
+                                className="text-[10px] text-amber-500 hover:text-amber-700 font-medium transition-colors"
+                              >? Ask</button>
+                            </div>
                           </div>
                         </div>
                       </div>
