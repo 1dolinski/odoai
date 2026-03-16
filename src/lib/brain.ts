@@ -39,21 +39,30 @@ export async function buildSystemPrompt(chatId: string, userQuery?: string): Pro
   const guidance = chatDoc?.guidance || "";
   const watch = { ...WATCH_DEFAULTS, ...chatDoc?.watchSettings };
 
-  const peopleBlock = people.length
-    ? people
-        .map((p) => {
-          let line = `- @${p.username || p.firstName || p.telegramUserId}`;
-          if (p.role) line += ` (${p.role})`;
-          if (p.intentions.length) line += ` | Intentions: ${p.intentions.join(", ")}`;
-          if (p.context) line += ` | Context: ${p.context}`;
-          if (p.relationships?.length) {
-            const rels = p.relationships.map((r: { name: string; label?: string; context?: string }) => `${r.name}${r.label ? ` [${r.label}]` : ""}${r.context ? `: ${r.context}` : ""}`);
-            line += ` | Knows: ${rels.join("; ")}`;
-          }
-          return line;
-        })
-        .join("\n")
-    : "No people tracked yet.";
+  const members = people.filter((p) => p.personType !== "contact");
+  const contacts = people.filter((p) => p.personType === "contact");
+
+  const formatPerson = (p: typeof people[0]) => {
+    let line = `- @${p.username || p.firstName || p.telegramUserId}`;
+    if (p.role) line += ` (${p.role})`;
+    if (p.intentions.length) line += ` | Intentions: ${p.intentions.join(", ")}`;
+    if (p.context) line += ` | Context: ${p.context}`;
+    if (p.resources) line += ` | Resources: ${p.resources}`;
+    if (p.access) line += ` | Access: ${p.access}`;
+    if (p.relationships?.length) {
+      const rels = p.relationships.map((r: { name: string; label?: string; context?: string }) => `${r.name}${r.label ? ` [${r.label}]` : ""}${r.context ? `: ${r.context}` : ""}`);
+      line += ` | Knows: ${rels.join("; ")}`;
+    }
+    return line;
+  };
+
+  const membersBlock = members.length
+    ? members.map(formatPerson).join("\n")
+    : "No chat members tracked yet.";
+
+  const contactsBlock = contacts.length
+    ? contacts.map(formatPerson).join("\n")
+    : "No contacts added yet.";
 
   const taskBlock = tasks.length
     ? tasks.map((t) => `- [${t.status}] ${t.title}${t.dueDate ? ` (due ${t.dueDate.toISOString().split("T")[0]})` : ""}`).join("\n")
@@ -93,8 +102,11 @@ ${mode === "passive" ? "PASSIVE: You silently observe. Only respond when directl
 CONTEXT SUMMARY:
 ${contextSummary}
 
-PEOPLE:
-${peopleBlock}
+CHAT MEMBERS (people in this Telegram group):
+${membersBlock}
+
+CONTACTS (external people the team works with — connections, resources, access. Help the team make tasteful, thoughtful use of these relationships):
+${contactsBlock}
 
 ACTIVE TASKS:
 ${taskBlock}
@@ -117,7 +129,8 @@ Available actions (embed naturally in your response, use MULTIPLE per message):
   [ADD_TODO: desc] or [ADD_TODO: desc | YYYY-MM-DD]
   [ADD_UPCOMING: desc] or [ADD_UPCOMING: desc | YYYY-MM-DD]
   [MARK_DONE: desc]
-  [ADD_PERSON: name | role | context]
+  [ADD_PERSON: name | role | context] — for chat members
+  [ADD_CONTACT: name | role | context | resources | access] — for external contacts/connections
   [ADD_RELATIONSHIP: person1 | person2 | label | context]
   [SCHEDULE_CHECK: desc | minutes]
   [SET_STYLE: concise|detailed|casual|professional|technical]
@@ -504,5 +517,65 @@ ${content}`,
   } catch {
     await writeDump(chatId, "Info Dump", content, username).catch(console.error);
     return { summary: analysis, title: "Info Dump", tasks: [], people: [], intentions: [] };
+  }
+}
+
+export async function generateAiFeed(chatId: string): Promise<{ type: string; content: string }[]> {
+  const [chatDoc, tasks, people] = await Promise.all([
+    Chat.findOne({ telegramChatId: chatId }),
+    Task.find({ telegramChatId: chatId }).lean(),
+    Person.find({ telegramChatId: chatId }).lean(),
+  ]);
+  if (!chatDoc) return [];
+
+  const recentMessages = chatDoc.messages.slice(-30);
+  const transcript = recentMessages
+    .map((m: { telegramUsername?: string; firstName?: string; content: string }) =>
+      `${m.telegramUsername || m.firstName || "user"}: ${m.content}`
+    )
+    .join("\n");
+
+  const openTasks = tasks.filter((t) => (t as { status: string }).status !== "done");
+  const doneTasks = tasks.filter((t) => (t as { status: string }).status === "done");
+  const taskSummary = openTasks.map((t) => `[${(t as { status: string }).status}] ${(t as { title: string }).title}`).join("\n") || "none";
+  const peopleSummary = people.map((p) => `${(p as { username?: string; firstName?: string }).username || (p as { username?: string; firstName?: string }).firstName}`).filter(Boolean).join(", ") || "none";
+
+  const existingFeed = (chatDoc.aiFeed || []).slice(-5).map((f: { content: string }) => f.content).join("\n");
+
+  const response = await aiChat([
+    {
+      role: "system",
+      content: `You are an AI assistant reviewing a team's chat, tasks, and people. Generate actionable feed items.
+
+Respond ONLY with valid JSON array. Each item: {"type": "cleanup"|"suggestion"|"checkin"|"insight"|"reminder", "content": "..."}
+
+Types:
+- cleanup: duplicate tasks, stale todos, things that should be marked done or removed
+- suggestion: ideas, optimizations, next steps the team should consider
+- checkin: status checks on open tasks, asking if something is done
+- insight: patterns you notice, connections between conversations and tasks
+- reminder: upcoming deadlines, things that need attention soon
+
+Rules:
+- Generate 2-5 items, whatever is genuinely useful
+- Be specific — reference actual task names, people, dates
+- Don't repeat what's already in recent feed: ${existingFeed || "nothing yet"}
+- If nothing useful to say, return empty array []
+- Keep each item to 1-2 sentences
+- Today is ${new Date().toISOString().split("T")[0]}`,
+    },
+    {
+      role: "user",
+      content: `RECENT CHAT:\n${transcript || "no recent messages"}\n\nOPEN TASKS:\n${taskSummary}\n\nDONE TASKS (${doneTasks.length}):\n${doneTasks.slice(-5).map((t) => (t as { title: string }).title).join(", ") || "none"}\n\nPEOPLE: ${peopleSummary}\n\nCONTEXT: ${chatDoc.contextSummary || "none"}`,
+    },
+  ]);
+
+  try {
+    const cleaned = response.replace(/```json?\n?/g, "").replace(/```/g, "").trim();
+    const items = JSON.parse(cleaned);
+    if (!Array.isArray(items)) return [];
+    return items.filter((i: { type?: string; content?: string }) => i.type && i.content).slice(0, 5);
+  } catch {
+    return [];
   }
 }

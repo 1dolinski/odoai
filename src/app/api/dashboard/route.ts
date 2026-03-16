@@ -7,7 +7,7 @@ import Person from "@/models/Person";
 import Job from "@/models/Job";
 import Check from "@/models/Check";
 import Activity from "@/models/Activity";
-import { autoExtract, maybeUpdateContext, deepProcessDump } from "@/lib/brain";
+import { autoExtract, maybeUpdateContext, deepProcessDump, generateAiFeed } from "@/lib/brain";
 import { writeKnowledge, writePersonKnowledge, writePeopleSnapshot } from "@/lib/knowledge";
 import { getChatAdmins } from "@/lib/telegram";
 
@@ -40,9 +40,12 @@ export async function GET(req: NextRequest) {
       aiStyle: chat.aiStyle || "concise",
       watchSettings: { ...WATCH_DEFAULTS, ...chat.watchSettings },
       guidance: chat.guidance || "",
+      dumps: (chat.dumps || []).sort((a: { createdAt: Date }, b: { createdAt: Date }) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()),
       contextSummary: chat.contextSummary,
       lastSyncAt: chat.lastSyncAt || null,
       lastReviewedAt: chat.lastReviewedAt || null,
+      aiFeedEnabled: chat.aiFeedEnabled ?? false,
+      aiFeed: (chat.aiFeed || []).sort((a: { createdAt: Date }, b: { createdAt: Date }) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()),
       messageCount: chat.messages?.length || 0,
     },
     tasks,
@@ -87,6 +90,7 @@ export async function GET(req: NextRequest) {
     })),
     spend: spendSummary,
     recentSpends,
+    walletAddress: process.env.WALLET_ADDRESS || "",
   });
 }
 
@@ -97,7 +101,7 @@ export async function PATCH(req: NextRequest) {
   await connectDB();
 
   const body = await req.json();
-  const { token, aiStyle, watchSettings, chatTitle, mode } = body;
+  const { token, aiStyle, watchSettings, chatTitle, mode, aiFeedEnabled } = body;
 
   if (!token) return NextResponse.json({ error: "token required" }, { status: 400 });
 
@@ -115,6 +119,10 @@ export async function PATCH(req: NextRequest) {
 
   if (aiStyle && VALID_STYLES.includes(aiStyle)) {
     chat.aiStyle = aiStyle;
+  }
+
+  if (typeof aiFeedEnabled === "boolean") {
+    chat.aiFeedEnabled = aiFeedEnabled;
   }
 
   if (watchSettings && typeof watchSettings === "object") {
@@ -176,6 +184,7 @@ export async function POST(req: NextRequest) {
           firstName: member.firstName || "",
           role: member.status === "creator" ? "owner" : member.status === "administrator" ? "admin" : "",
           source: "telegram",
+          personType: "member",
           intentions: [],
           relationships: [],
           messageCount: 0,
@@ -204,7 +213,10 @@ export async function POST(req: NextRequest) {
           email: contact.email || "",
           phone: contact.phone || "",
           notes: contact.notes || "",
+          resources: contact.resources || "",
+          access: contact.access || "",
           source: "manual",
+          personType: "contact",
           lastSeen: new Date(),
         },
         $setOnInsert: {
@@ -268,6 +280,17 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true });
   }
 
+  if (action === "updateTaskDate" && body.taskId) {
+    const update: Record<string, unknown> = {};
+    if (body.dueDate && /\d{4}-\d{2}-\d{2}/.test(body.dueDate)) {
+      update.dueDate = new Date(body.dueDate);
+    } else {
+      update.dueDate = null;
+    }
+    await Task.updateOne({ _id: body.taskId, telegramChatId: chatId }, { $set: update });
+    return NextResponse.json({ ok: true });
+  }
+
   if (action === "deleteTask" && body.taskId) {
     const task = await Task.findOneAndDelete({ _id: body.taskId, telegramChatId: chatId });
     if (task) {
@@ -282,16 +305,37 @@ export async function POST(req: NextRequest) {
     const person = await Person.findOne({ _id: body.personId, telegramChatId: chatId });
     if (!person) return NextResponse.json({ error: "person not found" }, { status: 404 });
     const personName = person.username || person.firstName || "unknown";
-    writePersonKnowledge(chatId, personName, text, { source: "dashboard" }).catch(console.error);
-    const notes = person.notes ? `${person.notes}\n\n${text}` : text;
-    await Person.updateOne({ _id: body.personId }, { $set: { notes } });
+    const entry = { text, source: "dashboard", createdAt: new Date() };
+    await Person.updateOne({ _id: body.personId }, { $push: { dumps: entry } });
+    writePersonKnowledge(chatId, personName, text, { source: "dashboard", timestamp: entry.createdAt.toISOString() }).catch(console.error);
+    Activity.create({ telegramChatId: chatId, type: "dump", title: `Dump → ${personName}`, detail: text.substring(0, 100), actor: "dashboard" }).catch(console.error);
     return NextResponse.json({ ok: true });
   }
 
   if (action === "dump" && body.text) {
     const text = (body.text as string).trim();
     if (!text) return NextResponse.json({ error: "text required" }, { status: 400 });
+    const entry = { text, source: "dashboard", createdAt: new Date() };
+    await Chat.updateOne({ telegramChatId: chatId }, { $push: { dumps: entry } });
     deepProcessDump(chatId, "dashboard", "dashboard", text).catch(console.error);
+    Activity.create({ telegramChatId: chatId, type: "dump", title: "Info dump", detail: text.substring(0, 100), actor: "dashboard" }).catch(console.error);
+    return NextResponse.json({ ok: true });
+  }
+
+  if (action === "generateFeed") {
+    const chatDoc = await Chat.findOne({ telegramChatId: chatId });
+    if (!chatDoc) return NextResponse.json({ error: "chat not found" }, { status: 404 });
+    const items = await generateAiFeed(chatId);
+    if (items.length) {
+      const entries = items.map((i) => ({ type: i.type, content: i.content, createdAt: new Date() }));
+      await Chat.updateOne({ telegramChatId: chatId }, { $push: { aiFeed: { $each: entries } } });
+      Activity.create({ telegramChatId: chatId, type: "ai_triggered", title: "AI feed generated", detail: `${items.length} items`, actor: "odoai" }).catch(console.error);
+    }
+    return NextResponse.json({ ok: true, items });
+  }
+
+  if (action === "clearFeed") {
+    await Chat.updateOne({ telegramChatId: chatId }, { $set: { aiFeed: [] } });
     return NextResponse.json({ ok: true });
   }
 

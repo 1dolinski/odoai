@@ -469,6 +469,26 @@ async function handleConversation(
     Activity.create({ telegramChatId: cid2, type: "person_added", title: name, detail: role || undefined, actor: username || userId }).catch(console.error);
   }
 
+  const contactMatches = [...response.matchAll(/\[ADD_CONTACT:\s*(.+?)\]/gi)];
+  for (const m of contactMatches) {
+    const parts = m[1].split("|").map((s) => s.trim());
+    const name = parts[0].replace("@", "");
+    const role = parts[1] || "";
+    const context = parts[2] || "";
+    const resources = parts[3] || "";
+    const access = parts[4] || "";
+    await Person.findOneAndUpdate(
+      { telegramChatId: cid2, $or: [{ username: name }, { firstName: name }] },
+      {
+        $set: { username: name, firstName: name, role, context, resources, access, personType: "contact", lastSeen: new Date() },
+        $setOnInsert: { telegramUserId: `manual_${name}`, source: "manual", intentions: [], relationships: [], messageCount: 0 },
+      },
+      { upsert: true }
+    );
+    actions.push(`+ contact: ${name}${role ? ` (${role})` : ""}`);
+    Activity.create({ telegramChatId: cid2, type: "person_added", title: name, detail: `contact${role ? ` â€” ${role}` : ""}`, actor: username || userId }).catch(console.error);
+  }
+
   const relMatches = [...response.matchAll(/\[ADD_RELATIONSHIP:\s*(.+?)\]/gi)];
   for (const m of relMatches) {
     const parts = m[1].split("|").map((s) => s.trim());
@@ -600,7 +620,7 @@ Do NOT schedule for casual chitchat or completed items. Be smart about timing â€
   }
 
   let cleanResponse = response
-    .replace(/\[(?:SEARCH|RECALL|ADD_TODO|ADD_UPCOMING|MARK_DONE|ADD_PERSON|ADD_RELATIONSHIP|SCHEDULE_CHECK|SET_STYLE|SET_CHECK_PACE):\s*.+?\]/gi, "")
+    .replace(/\[(?:SEARCH|RECALL|ADD_TODO|ADD_UPCOMING|MARK_DONE|ADD_PERSON|ADD_CONTACT|ADD_RELATIONSHIP|SCHEDULE_CHECK|SET_STYLE|SET_CHECK_PACE):\s*.+?\]/gi, "")
     .trim();
 
   const hasDate = todoMatches.some((m) => /\d{4}-\d{2}-\d{2}/.test(m[1]))

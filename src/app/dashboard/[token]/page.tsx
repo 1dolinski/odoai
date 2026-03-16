@@ -19,6 +19,12 @@ interface Relationship {
   context?: string;
 }
 
+interface DumpEntry {
+  text: string;
+  source: string;
+  createdAt: string;
+}
+
 interface Person {
   _id: string;
   username?: string;
@@ -30,7 +36,11 @@ interface Person {
   email?: string;
   phone?: string;
   notes?: string;
+  dumps?: DumpEntry[];
+  resources?: string;
+  access?: string;
   source: "telegram" | "manual";
+  personType: "member" | "contact";
   messageCount: number;
   lastSeen: string;
 }
@@ -90,8 +100,11 @@ interface DashboardData {
     mode: string;
     aiStyle: string;
     guidance: string;
+    dumps: DumpEntry[];
     lastSyncAt: string | null;
     lastReviewedAt: string | null;
+    aiFeedEnabled: boolean;
+    aiFeed: { type: string; content: string; createdAt: string }[];
     watchSettings: WatchSettings;
     contextSummary: string;
     messageCount: number;
@@ -108,6 +121,7 @@ interface DashboardData {
     byType: Record<string, { calls: number; tokens: number; cost: number }>;
   };
   recentSpends: SpendEntry[];
+  walletAddress: string;
 }
 
 type AiStyle = "concise" | "detailed" | "casual" | "professional" | "technical";
@@ -157,6 +171,13 @@ export default function DashboardPage() {
   const [personDumpSending, setPersonDumpSending] = useState(false);
   const [showActions, setShowActions] = useState(false);
   const [showWatch, setShowWatch] = useState(false);
+  const [showContext, setShowContext] = useState(false);
+  const [showDump, setShowDump] = useState(false);
+  const [showGuidance, setShowGuidance] = useState(false);
+  const [showWallet, setShowWallet] = useState(false);
+  const [showFeed, setShowFeed] = useState(false);
+  const [feedGenerating, setFeedGenerating] = useState(false);
+  const [editingDateId, setEditingDateId] = useState<string | null>(null);
   const [actionForm, setActionForm] = useState({ type: "todo" as string, title: "", dueDate: "", personName: "", personRole: "", statusTaskSearch: "", statusNewStatus: "done" as string, dumpText: "" });
   const [actionSaving, setActionSaving] = useState(false);
   const [actionDone, setActionDone] = useState("");
@@ -303,6 +324,24 @@ export default function DashboardPage() {
     });
   }
 
+  async function changeTaskDate(taskId: string, dateVal: string) {
+    setData((d) => {
+      if (!d) return d;
+      return {
+        ...d,
+        tasks: d.tasks.map((t) =>
+          t._id === taskId ? { ...t, dueDate: dateVal || undefined } : t
+        ),
+      };
+    });
+    setEditingDateId(null);
+    await fetch("/api/dashboard", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token, action: "updateTaskDate", taskId, dueDate: dateVal || null }),
+    });
+  }
+
   async function runAction() {
     setActionSaving(true);
     setActionDone("");
@@ -381,6 +420,35 @@ export default function DashboardPage() {
       body: JSON.stringify({ token, action: "deleteContact", contact: { _id: id } }),
     });
     fetchData();
+  }
+
+  async function toggleAiFeed(enabled: boolean) {
+    setData((d) => d ? { ...d, chat: { ...d.chat, aiFeedEnabled: enabled } } : d);
+    await fetch("/api/dashboard", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token, aiFeedEnabled: enabled }),
+    });
+  }
+
+  async function generateFeed() {
+    setFeedGenerating(true);
+    await fetch("/api/dashboard", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token, action: "generateFeed" }),
+    });
+    await fetchData();
+    setFeedGenerating(false);
+  }
+
+  async function clearFeed() {
+    await fetch("/api/dashboard", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token, action: "clearFeed" }),
+    });
+    setData((d) => d ? { ...d, chat: { ...d.chat, aiFeed: [] } } : d);
   }
 
   if (error) {
@@ -462,25 +530,41 @@ export default function DashboardPage() {
                   </button>
                 ))}
               </div>
+              <select
+                value={data.chat.aiStyle}
+                onChange={(e) => setAiStyle(e.target.value as AiStyle)}
+                className="text-xs bg-gray-100 border-0 rounded-md px-2 py-1 text-gray-600 cursor-pointer focus:outline-none focus:ring-2 focus:ring-blue-200"
+              >
+                {AI_STYLES.map((s) => (
+                  <option key={s.value} value={s.value}>{s.label}</option>
+                ))}
+              </select>
               <span className="text-gray-500">{data.chat.messageCount} msgs</span>
               {data.chat.lastReviewedAt && (
                 <span className="text-xs text-gray-400">reviewed {formatRelativeTime(data.chat.lastReviewedAt)}</span>
               )}
             </div>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
             <button
               onClick={syncNow}
               disabled={syncing}
-              className="flex items-center gap-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 transition-colors px-4 py-2.5 rounded-lg text-sm font-medium border border-gray-200 disabled:opacity-50"
+              className="flex items-center gap-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 transition-colors px-3 py-2 rounded-lg text-sm font-medium border border-gray-200 disabled:opacity-50"
             >
               <svg className={`w-4 h-4 ${syncing ? "animate-spin" : ""}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2" />
               </svg>
-              {syncing ? "Syncing..." : "Sync"}
-              {data.chat.lastSyncAt && (
-                <span className="text-xs text-gray-400 ml-1">· {formatRelativeTime(data.chat.lastSyncAt)}</span>
-              )}
+              {syncing ? "..." : "Sync"}
+            </button>
+            <button
+              onClick={() => { setShowWallet(!showWallet); setShowFeed(false); setShowContext(false); setShowDump(false); setShowGuidance(false); setShowActions(false); setShowWatch(false); }}
+              className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium border transition-all ${
+                showWallet ? "bg-gray-900 text-white border-gray-900" : "bg-gray-100 text-gray-600 border-gray-200 hover:border-gray-400"
+              }`}
+            >
+              <span>{data.spend.totalCalls} calls</span>
+              <span className="text-gray-400">·</span>
+              <span>{(data.spend.totalTokens / 1000).toFixed(1)}k tok</span>
             </button>
             <a
               href={`https://t.me/odoai_bot?start=open_${data.chat.telegramChatId}`}
@@ -494,24 +578,110 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {/* Quick Actions & Watch List */}
+        {/* Toolbar */}
         <section className="mb-10">
-          <div className="flex items-center gap-6">
-            <button
-              onClick={() => { setShowActions(!showActions); if (!showActions) setShowWatch(false); }}
-              className="flex items-center gap-2 text-lg font-semibold text-gray-800 hover:text-gray-600 transition-colors"
-            >
-              <svg className={`w-4 h-4 transition-transform ${showActions ? "rotate-90" : ""}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 18l6-6-6-6" /></svg>
-              Quick Actions
-            </button>
-            <button
-              onClick={() => { setShowWatch(!showWatch); if (!showWatch) setShowActions(false); }}
-              className="flex items-center gap-2 text-lg font-semibold text-gray-800 hover:text-gray-600 transition-colors"
-            >
-              <svg className={`w-4 h-4 transition-transform ${showWatch ? "rotate-90" : ""}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 18l6-6-6-6" /></svg>
-              Watch List
-            </button>
+          <div className="flex flex-wrap items-center gap-2">
+            {([
+              { key: "feed", label: "AI Feed", state: showFeed, set: setShowFeed },
+              { key: "context", label: "Chat Context", state: showContext, set: setShowContext },
+              { key: "dump", label: "Add Dump", state: showDump, set: setShowDump },
+              { key: "guidance", label: "Guidance", state: showGuidance, set: setShowGuidance },
+              { key: "actions", label: "Quick Actions", state: showActions, set: setShowActions },
+              { key: "watch", label: "Watch List", state: showWatch, set: setShowWatch },
+            ] as { key: string; label: string; state: boolean; set: (v: boolean) => void }[]).map((btn) => (
+              <button
+                key={btn.key}
+                onClick={() => {
+                  const next = !btn.state;
+                  setShowFeed(false); setShowContext(false); setShowDump(false); setShowGuidance(false); setShowActions(false); setShowWatch(false); setShowWallet(false);
+                  btn.set(next);
+                }}
+                className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all border ${
+                  btn.state
+                    ? "bg-gray-900 text-white border-gray-900"
+                    : "bg-white text-gray-600 border-gray-200 hover:border-gray-400"
+                }`}
+              >
+                {btn.label}
+              </button>
+            ))}
           </div>
+          {showFeed && (
+            <div className="mt-4 bg-white border border-gray-200 rounded-xl p-5 shadow-sm">
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-3">
+                  <h3 className="font-semibold text-gray-800">AI Feed</h3>
+                  <button
+                    onClick={() => toggleAiFeed(!data.chat.aiFeedEnabled)}
+                    className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+                      data.chat.aiFeedEnabled ? "bg-green-500" : "bg-gray-300"
+                    }`}
+                  >
+                    <span
+                      className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
+                        data.chat.aiFeedEnabled ? "translate-x-4" : "translate-x-0.5"
+                      }`}
+                    />
+                  </button>
+                  <span className="text-xs text-gray-500">{data.chat.aiFeedEnabled ? "Auto-generates in active/aggressive mode" : "Off"}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  {data.chat.aiFeed.length > 0 && (
+                    <button
+                      onClick={clearFeed}
+                      className="text-xs text-gray-400 hover:text-red-500 transition-colors"
+                    >
+                      Clear
+                    </button>
+                  )}
+                  <button
+                    onClick={generateFeed}
+                    disabled={feedGenerating}
+                    className="bg-gray-800 hover:bg-gray-900 text-white px-3 py-1.5 rounded-lg text-xs font-medium disabled:opacity-50 shadow-sm flex items-center gap-1.5"
+                  >
+                    {feedGenerating ? (
+                      <>
+                        <svg className="w-3 h-3 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2" /></svg>
+                        Generating...
+                      </>
+                    ) : "Generate Now"}
+                  </button>
+                </div>
+              </div>
+              {data.chat.aiFeed.length === 0 ? (
+                <div className="text-center py-8 text-gray-400 text-sm">
+                  No feed items yet. Click &quot;Generate Now&quot; or enable auto-generation for active/aggressive mode.
+                </div>
+              ) : (
+                <div className="space-y-2 max-h-[400px] overflow-y-auto">
+                  {data.chat.aiFeed.map((item, i) => {
+                    const typeConfig: Record<string, { icon: string; color: string; bg: string }> = {
+                      cleanup: { icon: "🧹", color: "text-orange-700", bg: "bg-orange-50 border-orange-200" },
+                      suggestion: { icon: "💡", color: "text-blue-700", bg: "bg-blue-50 border-blue-200" },
+                      checkin: { icon: "📋", color: "text-purple-700", bg: "bg-purple-50 border-purple-200" },
+                      insight: { icon: "🔍", color: "text-teal-700", bg: "bg-teal-50 border-teal-200" },
+                      reminder: { icon: "⏰", color: "text-red-700", bg: "bg-red-50 border-red-200" },
+                    };
+                    const cfg = typeConfig[item.type] || { icon: "📌", color: "text-gray-700", bg: "bg-gray-50 border-gray-200" };
+                    return (
+                      <div key={i} className={`border rounded-lg px-4 py-3 ${cfg.bg}`}>
+                        <div className="flex items-start gap-2">
+                          <span className="text-base mt-0.5">{cfg.icon}</span>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 mb-0.5">
+                              <span className={`text-xs font-semibold uppercase tracking-wide ${cfg.color}`}>{item.type}</span>
+                              <span className="text-xs text-gray-400">{formatET(item.createdAt)}</span>
+                            </div>
+                            <p className="text-sm text-gray-800">{item.content}</p>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
           {showActions && (
             <div className="mt-4 bg-white border border-gray-200 rounded-xl p-5 shadow-sm">
               <div className="flex gap-1 bg-gray-100 rounded-lg p-1 mb-4 w-fit">
@@ -668,6 +838,134 @@ export default function DashboardPage() {
               )}
             </div>
           )}
+          {showContext && (
+            <div className="mt-4 bg-white border border-gray-200 rounded-xl p-5 shadow-sm">
+              {data.chat.contextSummary ? (
+                <div className="text-sm text-gray-700 whitespace-pre-wrap">{data.chat.contextSummary}</div>
+              ) : (
+                <p className="text-sm text-gray-400 italic">No context yet. The AI builds this automatically as conversations happen.</p>
+              )}
+              {data.chat.dumps && data.chat.dumps.length > 0 && (
+                <div className="mt-4 pt-4 border-t border-gray-100">
+                  <div className="text-xs font-medium text-gray-500 mb-2">Past Dumps ({data.chat.dumps.length})</div>
+                  <div className="space-y-2 max-h-[250px] overflow-y-auto">
+                    {data.chat.dumps.map((d, i) => (
+                      <div key={i} className="bg-gray-50 border border-gray-100 rounded-lg px-3 py-2">
+                        <div className="text-sm text-gray-700">{d.text}</div>
+                        <div className="text-xs text-gray-400 mt-1">{formatET(d.createdAt)} · {d.source}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+          {showDump && (
+            <div className="mt-4 bg-white border border-gray-200 rounded-xl p-5 shadow-sm">
+              <p className="text-sm text-gray-500 mb-3">Paste notes, context, meeting transcripts, links — anything to get the AI up to speed.</p>
+              <textarea
+                value={dumpText}
+                onChange={(e) => setDumpText(e.target.value)}
+                placeholder="Paste information here..."
+                rows={4}
+                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 resize-y mb-3"
+              />
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={submitDump}
+                  disabled={dumpSending || !dumpText.trim()}
+                  className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50 shadow-sm"
+                >
+                  {dumpSending ? "Processing..." : "Submit Dump"}
+                </button>
+                {dumpSent && (
+                  <span className="text-sm text-green-600 font-medium">Processed and indexed</span>
+                )}
+              </div>
+            </div>
+          )}
+          {showGuidance && (
+            <div className="mt-4 bg-white border border-gray-200 rounded-xl p-5 shadow-sm">
+              <p className="text-sm text-gray-500 mb-3">Custom instructions for how the AI should behave in this chat.</p>
+              <textarea
+                value={guidanceText}
+                onChange={(e) => { setGuidanceText(e.target.value); setGuidanceSaved(false); }}
+                placeholder="e.g. Always respond in Spanish. Focus on dev tasks. Don't mention competitor X..."
+                rows={4}
+                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 resize-y mb-3"
+              />
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={saveGuidance}
+                  disabled={guidanceSaving}
+                  className="bg-gray-800 hover:bg-gray-900 text-white px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50 shadow-sm"
+                >
+                  {guidanceSaving ? "Saving..." : "Save Guidance"}
+                </button>
+                {guidanceSaved && (
+                  <span className="text-sm text-green-600 font-medium">Saved and indexed</span>
+                )}
+              </div>
+            </div>
+          )}
+          {showWallet && (
+            <div className="mt-4 bg-white border border-gray-200 rounded-xl p-5 shadow-sm">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="font-semibold text-gray-800">Wallet</h3>
+                {data.walletAddress && (
+                  <a
+                    href={`https://basescan.org/address/${data.walletAddress}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-xs text-blue-600 hover:text-blue-700 font-mono"
+                  >
+                    {data.walletAddress.slice(0, 6)}...{data.walletAddress.slice(-4)} ↗
+                  </a>
+                )}
+              </div>
+              <div className="grid grid-cols-3 gap-4 text-center mb-4">
+                <div>
+                  <div className="text-2xl font-bold text-gray-900">{data.spend.totalCalls}</div>
+                  <div className="text-xs text-gray-500">API Calls</div>
+                </div>
+                <div>
+                  <div className="text-2xl font-bold text-gray-900">{(data.spend.totalTokens / 1000).toFixed(1)}k</div>
+                  <div className="text-xs text-gray-500">Total Tokens</div>
+                </div>
+                <div>
+                  <div className="text-2xl font-bold text-gray-900">${data.spend.totalCost.toFixed(4)}</div>
+                  <div className="text-xs text-gray-500">Est. Cost</div>
+                </div>
+              </div>
+              {Object.keys(data.spend.byType).length > 0 && (
+                <div className="pt-3 border-t border-gray-100 space-y-1.5 mb-4">
+                  {Object.entries(data.spend.byType).map(([type, stats]) => (
+                    <div key={type} className="flex justify-between text-sm">
+                      <span className="text-gray-500">{type}</span>
+                      <span className="text-gray-700">{stats.calls} calls · {(stats.tokens / 1000).toFixed(1)}k tok</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {data.recentSpends.length > 0 && (
+                <div className="pt-3 border-t border-gray-100">
+                  <div className="text-xs uppercase tracking-wider text-gray-400 mb-2">Recent</div>
+                  <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                    {data.recentSpends.map((s, i) => (
+                      <div key={i} className="flex justify-between text-xs">
+                        <span className="text-gray-600 truncate mr-3">{s.label}</span>
+                        <span className="text-gray-400 whitespace-nowrap">
+                          {s.tokens ? `${s.tokens} tok` : s.type}
+                          {" · "}
+                          {formatET(s.createdAt)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
           {showWatch && (
             <div className="mt-4 bg-white border border-gray-200 rounded-xl p-5 shadow-sm">
               <p className="text-sm text-gray-500 mb-3">Toggle what odoai actively looks for in your conversations.</p>
@@ -749,8 +1047,25 @@ export default function DashboardPage() {
                           ? `done ${formatRelativeTime(t.completedAt)}`
                           : formatRelativeTime(t.createdAt)}
                       </span>
-                      {t.dueDate && (
-                        <span className="text-xs text-orange-500">due {new Date(t.dueDate).toLocaleDateString()}</span>
+                      {editingDateId === t._id ? (
+                        <input
+                          type="date"
+                          autoFocus
+                          defaultValue={t.dueDate ? new Date(t.dueDate).toISOString().split("T")[0] : ""}
+                          onBlur={(e) => changeTaskDate(t._id, e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") changeTaskDate(t._id, (e.target as HTMLInputElement).value);
+                            if (e.key === "Escape") setEditingDateId(null);
+                          }}
+                          className="text-xs border border-gray-300 rounded px-1 py-0.5"
+                        />
+                      ) : (
+                        <button
+                          onClick={() => setEditingDateId(t._id)}
+                          className={`text-xs ${t.dueDate ? "text-orange-500 hover:text-orange-600" : "text-gray-300 hover:text-gray-500"}`}
+                        >
+                          {t.dueDate ? `due ${new Date(t.dueDate).toLocaleDateString("en-US", { timeZone: "America/New_York", month: "short", day: "numeric" })}` : "+ date"}
+                        </button>
                       )}
                     </div>
                   </div>
@@ -821,7 +1136,7 @@ export default function DashboardPage() {
                       )}
                     </div>
                     <div className="text-right shrink-0">
-                      <div className="text-xs text-gray-500">{formatRelativeTime(c.scheduledFor)}</div>
+                      <div className="text-xs text-gray-500">{formatET(c.scheduledFor)}</div>
                       {c.triggeredByUsername && (
                         <div className="text-xs text-gray-400">@{c.triggeredByUsername}</div>
                       )}
@@ -844,27 +1159,53 @@ export default function DashboardPage() {
           </section>
         )}
 
+        {/* Chat Members */}
+        <section className="mb-10">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-lg font-semibold text-gray-800">Chat Members</h2>
+            <button
+              onClick={syncMembers}
+              disabled={syncingMembers}
+              className="text-sm text-gray-500 hover:text-gray-700 font-medium"
+            >
+              {syncingMembers ? "Syncing..." : "🔄 Sync from Telegram"}
+            </button>
+          </div>
+          <div className="flex flex-wrap gap-3">
+            {data.people.filter((p) => p.personType !== "contact").length === 0 && (
+              <p className="text-sm text-gray-400 italic">No members yet. Hit Sync to pull from Telegram.</p>
+            )}
+            {data.people.filter((p) => p.personType !== "contact").map((p) => (
+              <div key={p._id} className="bg-white border border-gray-200 rounded-lg px-4 py-3 shadow-sm flex items-center gap-3 min-w-[200px]">
+                <div className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-sm font-medium text-gray-600">
+                  {(p.username || p.firstName || "?")[0].toUpperCase()}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="font-medium text-sm text-gray-900 truncate">{p.username || p.firstName || "unknown"}</div>
+                  <div className="text-xs text-gray-400">
+                    {p.role && <span className="text-blue-600">{p.role}</span>}
+                    {p.role && p.messageCount > 0 && " · "}
+                    {p.messageCount > 0 && `${p.messageCount} msgs`}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        {/* Contacts */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-10">
-          {/* Contacts & People */}
           <section>
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-semibold text-gray-800">Contacts</h2>
-              <div className="flex gap-3">
-                <button
-                  onClick={syncMembers}
-                  disabled={syncingMembers}
-                  className="text-sm text-gray-500 hover:text-gray-700 font-medium"
-                >
-                  {syncingMembers ? "Syncing..." : "🔄 Sync"}
-                </button>
-                <button
-                  onClick={() => setShowAddContact(!showAddContact)}
-                  className="text-sm text-blue-600 hover:text-blue-700 font-medium"
-                >
-                  {showAddContact ? "Cancel" : "+ Add Contact"}
-                </button>
-              </div>
+              <button
+                onClick={() => setShowAddContact(!showAddContact)}
+                className="text-sm text-blue-600 hover:text-blue-700 font-medium"
+              >
+                {showAddContact ? "Cancel" : "+ Add Contact"}
+              </button>
             </div>
+            <p className="text-xs text-gray-400 mb-3">People you work with, have access to, or can leverage. The AI will help you make thoughtful use of these connections.</p>
 
             {showAddContact && (
               <div className="bg-white border border-blue-200 rounded-lg p-4 mb-4 shadow-sm">
@@ -876,7 +1217,7 @@ export default function DashboardPage() {
                     className="px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
                   />
                   <input
-                    placeholder="Role"
+                    placeholder="Role / title"
                     value={contactForm.role}
                     onChange={(e) => setContactForm((f) => ({ ...f, role: e.target.value }))}
                     className="px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
@@ -895,7 +1236,7 @@ export default function DashboardPage() {
                   />
                 </div>
                 <input
-                  placeholder="Notes"
+                  placeholder="Resources / what they bring (e.g. funding, design skills, distribution)"
                   value={contactForm.notes}
                   onChange={(e) => setContactForm((f) => ({ ...f, notes: e.target.value }))}
                   className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm mb-3 focus:outline-none focus:ring-2 focus:ring-blue-200"
@@ -911,40 +1252,45 @@ export default function DashboardPage() {
             )}
 
             <div className="space-y-3">
-              {data.people.length === 0 && (
-                <p className="text-sm text-gray-400 italic">No people tracked yet.</p>
+              {data.people.filter((p) => p.personType === "contact").length === 0 && (
+                <p className="text-sm text-gray-400 italic">No contacts yet. Add people you work with outside the chat.</p>
               )}
-              {data.people.map((p) => (
+              {data.people.filter((p) => p.personType === "contact").map((p) => (
                 <div key={p._id} className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm">
                   <div className="flex items-center justify-between mb-2">
                     <div className="flex items-center gap-2">
                       <span className="font-medium text-gray-900">
                         {p.username || p.firstName || "unknown"}
                       </span>
-                      <span className={`text-xs px-1.5 py-0.5 rounded ${
-                        p.source === "manual" ? "bg-blue-100 text-blue-600" : "bg-gray-100 text-gray-500"
-                      }`}>
-                        {p.source === "manual" ? "contact" : "telegram"}
-                      </span>
                     </div>
-                    <div className="flex items-center gap-2">
-                      {p.messageCount > 0 && <span className="text-xs text-gray-400">{p.messageCount} msgs</span>}
-                      {p.source === "manual" && (
-                        <button onClick={() => deleteContact(p._id)} className="text-xs text-red-400 hover:text-red-600">remove</button>
-                      )}
-                    </div>
+                    <button onClick={() => deleteContact(p._id)} className="text-xs text-red-400 hover:text-red-600">remove</button>
                   </div>
                   {p.role && <div className="text-xs text-blue-600 mb-1">{p.role}</div>}
                   {p.context && <div className="text-sm text-gray-500 mb-1">{p.context}</div>}
                   {(p.email || p.phone) && (
                     <div className="flex gap-3 text-xs text-gray-400 mb-1">
-                      {p.email && <span>{p.email}</span>}
-                      {p.phone && <span>{p.phone}</span>}
+                      {p.email && <span>📧 {p.email}</span>}
+                      {p.phone && <span>📱 {p.phone}</span>}
                     </div>
                   )}
-                  {p.notes && <div className="text-xs text-gray-400 italic mb-1">{p.notes}</div>}
+                  {(p.resources || p.access) && (
+                    <div className="mt-1 space-y-0.5">
+                      {p.resources && <div className="text-xs text-emerald-600">🔑 {p.resources}</div>}
+                      {p.access && <div className="text-xs text-amber-600">🔓 {p.access}</div>}
+                    </div>
+                  )}
+                  {p.dumps && p.dumps.length > 0 && (
+                    <div className="mt-1 space-y-1">
+                      {p.dumps.map((d, j) => (
+                        <div key={j} className="text-xs bg-gray-50 border border-gray-100 rounded px-2 py-1.5">
+                          <div className="text-gray-600">{d.text}</div>
+                          <div className="text-gray-300 mt-0.5">{formatET(d.createdAt)} · {d.source}</div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                   {p.intentions.length > 0 && (
-                    <div className="flex flex-wrap gap-1.5 mt-1">
+                    <div className="flex flex-wrap gap-1.5 mt-2">
                       {p.intentions.map((intent, j) => (
                         <span key={j} className="text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full">
                           {intent}
@@ -954,7 +1300,7 @@ export default function DashboardPage() {
                   )}
                   {p.relationships?.length > 0 && (
                     <div className="mt-2 pt-2 border-t border-gray-100">
-                      <div className="text-xs text-gray-400 mb-1">Relationships</div>
+                      <div className="text-xs text-gray-400 mb-1">Connections</div>
                       <div className="space-y-1">
                         {p.relationships.map((r, j) => (
                           <div key={j} className="flex items-start gap-1.5 text-xs">
@@ -1010,133 +1356,9 @@ export default function DashboardPage() {
             </div>
           </section>
 
-          {/* Wallet Spend */}
-          <section>
-            <h2 className="text-lg font-semibold mb-4 text-gray-800">Wallet Spend</h2>
-            <div className="bg-white border border-gray-200 rounded-lg p-5 mb-4 shadow-sm">
-              <div className="grid grid-cols-3 gap-4 text-center">
-                <div>
-                  <div className="text-2xl font-bold text-gray-900">{data.spend.totalCalls}</div>
-                  <div className="text-xs text-gray-500">API Calls</div>
-                </div>
-                <div>
-                  <div className="text-2xl font-bold text-gray-900">{(data.spend.totalTokens / 1000).toFixed(1)}k</div>
-                  <div className="text-xs text-gray-500">Tokens</div>
-                </div>
-                <div>
-                  <div className="text-2xl font-bold text-gray-900">${data.spend.totalCost.toFixed(4)}</div>
-                  <div className="text-xs text-gray-500">Est. Cost</div>
-                </div>
-              </div>
-
-              {Object.keys(data.spend.byType).length > 0 && (
-                <div className="mt-4 pt-4 border-t border-gray-100 space-y-2">
-                  {Object.entries(data.spend.byType).map(([type, stats]) => (
-                    <div key={type} className="flex justify-between text-sm">
-                      <span className="text-gray-500">{type}</span>
-                      <span className="text-gray-700">{stats.calls} calls · {(stats.tokens / 1000).toFixed(1)}k tokens</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {data.recentSpends.length > 0 && (
-              <div className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm">
-                <div className="text-xs uppercase tracking-wider text-gray-400 mb-3">Recent Activity</div>
-                <div className="space-y-2 max-h-60 overflow-y-auto">
-                  {data.recentSpends.map((s, i) => (
-                    <div key={i} className="flex justify-between text-xs">
-                      <span className="text-gray-600 truncate mr-3">{s.label}</span>
-                      <span className="text-gray-400 whitespace-nowrap">
-                        {s.tokens ? `${s.tokens} tok` : s.type}
-                        {" · "}
-                        {new Date(s.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </section>
         </div>
 
-        {/* AI Style Toggle */}
-        <section className="mb-10">
-          <h2 className="text-lg font-semibold mb-4 text-gray-800">AI Style</h2>
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3">
-            {AI_STYLES.map((style) => (
-              <button
-                key={style.value}
-                onClick={() => setAiStyle(style.value)}
-                disabled={saving}
-                className={`p-3 rounded-lg border text-left transition-all ${
-                  data.chat.aiStyle === style.value
-                    ? "border-blue-500 bg-blue-50 ring-1 ring-blue-200"
-                    : "border-gray-200 bg-white hover:border-gray-300 shadow-sm"
-                }`}
-              >
-                <div className="font-medium text-sm text-gray-900">{style.label}</div>
-                <div className="text-xs text-gray-500 mt-1">{style.desc}</div>
-              </button>
-            ))}
-          </div>
-        </section>
-
-        {/* Dump Info + Chat Guidance */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-10">
-          <section>
-            <h2 className="text-lg font-semibold mb-2 text-gray-800">Dump Info</h2>
-            <p className="text-sm text-gray-500 mb-3">Paste notes, context, meeting transcripts, links — anything to get the AI up to speed.</p>
-            <div className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm">
-              <textarea
-                value={dumpText}
-                onChange={(e) => setDumpText(e.target.value)}
-                placeholder="Paste information here..."
-                rows={6}
-                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 resize-y mb-3"
-              />
-              <div className="flex items-center gap-3">
-                <button
-                  onClick={submitDump}
-                  disabled={dumpSending || !dumpText.trim()}
-                  className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50 shadow-sm"
-                >
-                  {dumpSending ? "Processing..." : "Submit Dump"}
-                </button>
-                {dumpSent && (
-                  <span className="text-sm text-green-600 font-medium">Processed and indexed into memory</span>
-                )}
-              </div>
-            </div>
-          </section>
-
-          <section>
-            <h2 className="text-lg font-semibold mb-2 text-gray-800">Chat Guidance</h2>
-            <p className="text-sm text-gray-500 mb-3">Custom instructions for how the AI should behave in this chat. It will follow these closely.</p>
-            <div className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm">
-              <textarea
-                value={guidanceText}
-                onChange={(e) => { setGuidanceText(e.target.value); setGuidanceSaved(false); }}
-                placeholder="e.g. Always respond in Spanish. Focus on dev tasks. Don't mention competitor X..."
-                rows={6}
-                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 resize-y mb-3"
-              />
-              <div className="flex items-center gap-3">
-                <button
-                  onClick={saveGuidance}
-                  disabled={guidanceSaving}
-                  className="bg-gray-800 hover:bg-gray-900 text-white px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50 shadow-sm"
-                >
-                  {guidanceSaving ? "Saving..." : "Save Guidance"}
-                </button>
-                {guidanceSaved && (
-                  <span className="text-sm text-green-600 font-medium">Saved and indexed</span>
-                )}
-              </div>
-            </div>
-          </section>
-        </div>
+        {/* (Dump + Guidance moved to top toolbar) */}
 
         {/* Active Jobs */}
         {data.jobs.length > 0 && (
@@ -1171,7 +1393,7 @@ export default function DashboardPage() {
                     </div>
                     <div className="flex items-center gap-2 mt-0.5">
                       {a.actor && <span className="text-xs text-gray-400">@{a.actor}</span>}
-                      <span className="text-xs text-gray-400">{formatRelativeTime(a.createdAt)}</span>
+                      <span className="text-xs text-gray-400" title={formatET(a.createdAt)}>{formatET(a.createdAt)}</span>
                     </div>
                   </div>
                   <span className={`text-xs px-1.5 py-0.5 rounded shrink-0 ${activityBadge(a.type)}`}>
@@ -1183,15 +1405,7 @@ export default function DashboardPage() {
           </section>
         )}
 
-        {/* Context Summary */}
-        {data.chat.contextSummary && (
-          <section>
-            <h2 className="text-lg font-semibold mb-4 text-gray-800">Context Summary</h2>
-            <div className="bg-white border border-gray-200 rounded-lg p-5 shadow-sm">
-              <div className="text-sm text-gray-700 whitespace-pre-wrap">{data.chat.contextSummary}</div>
-            </div>
-          </section>
-        )}
+        {/* (Context Summary moved to top toolbar) */}
       </div>
     </div>
   );
@@ -1387,5 +1601,17 @@ function formatRelativeTime(dateStr: string) {
   }
   const days = Math.round(absDiff / 86400000);
   return isPast ? `${days}d ago` : `in ${days}d`;
+}
+
+function formatET(dateStr: string) {
+  const d = new Date(dateStr);
+  return d.toLocaleString("en-US", {
+    timeZone: "America/New_York",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  }) + " ET";
 }
 

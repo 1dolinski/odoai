@@ -45,10 +45,13 @@ export interface IChat extends Document {
   watchSettings: IWatchSettings;
   messages: IMessage[];
   guidance: string;
+  dumps: { text: string; source: string; createdAt: Date }[];
   contextSummary: string;
   lastSummaryAt: Date;
   lastSyncAt: Date;
   lastReviewedAt: Date;
+  aiFeedEnabled: boolean;
+  aiFeed: { type: string; content: string; createdAt: Date }[];
   messagesSinceSummary: number;
   createdAt: Date;
   updatedAt: Date;
@@ -87,10 +90,13 @@ const ChatSchema = new Schema<IChat>(
     },
     messages: [MessageSchema],
     guidance: { type: String, default: "" },
+    dumps: { type: [{ text: String, source: String, createdAt: { type: Date, default: Date.now } }], default: [] },
     contextSummary: { type: String, default: "" },
     lastSummaryAt: { type: Date },
     lastSyncAt: { type: Date },
     lastReviewedAt: { type: Date },
+    aiFeedEnabled: { type: Boolean, default: false },
+    aiFeed: [{ type: { type: String }, content: String, createdAt: { type: Date, default: Date.now } }],
     messagesSinceSummary: { type: Number, default: 0 },
   },
   { timestamps: true }
