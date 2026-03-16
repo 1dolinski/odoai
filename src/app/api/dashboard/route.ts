@@ -441,11 +441,10 @@ export async function POST(req: NextRequest) {
 
   if (action === "askAboutFeed" && body.feedContent && body.question) {
     const chatDoc = await Chat.findOne({ telegramChatId: chatId });
-    const model = chatDoc?.aiModel || undefined;
     const response = await aiChat([
       { role: "system", content: "You are odoai, answering a follow-up question about an AI feed item. Be concise and helpful. 2-3 sentences max." },
       { role: "user", content: `Feed item (${body.feedType}): "${body.feedContent}"\n\nQuestion: ${body.question}${chatDoc?.contextSummary ? `\n\nChat context: ${chatDoc.contextSummary}` : ""}` },
-    ], model);
+    ], "openai/gpt-4o-mini");
     return NextResponse.json({ ok: true, answer: response });
   }
 
@@ -541,11 +540,10 @@ export async function POST(req: NextRequest) {
     const chatDoc = await Chat.findOne({ telegramChatId: chatId });
     const otherTasks = await Task.find({ telegramChatId: chatId, status: { $ne: "done" } }).lean();
     const existing = otherTasks.map((t) => t.title).join(", ");
-    const model = chatDoc?.aiModel || undefined;
     const response = await aiChat([
       { role: "system", content: "You suggest practical next-step tasks. Return a JSON array of 2-5 short task title strings. Only return the JSON array, no markdown fences or explanation. Tasks should be specific, actionable, and not duplicate any existing tasks." },
       { role: "user", content: `Task: "${task.title}"${task.description ? `\nContext: ${task.description}` : ""}${chatDoc?.contextSummary ? `\nChat context: ${chatDoc.contextSummary}` : ""}\n\nExisting tasks (DO NOT suggest duplicates): ${existing}\n\nSuggest 2-5 practical next steps or sub-tasks:` },
-    ], model);
+    ], "openai/gpt-4o-mini");
     try {
       const cleaned = response.replace(/```json?\s*/g, "").replace(/```/g, "").trim();
       const suggestions = JSON.parse(cleaned);
@@ -559,12 +557,11 @@ export async function POST(req: NextRequest) {
     const task = await Task.findOne({ _id: body.taskId, telegramChatId: chatId });
     if (!task) return NextResponse.json({ error: "task not found" }, { status: 404 });
     const chatDoc = await Chat.findOne({ telegramChatId: chatId });
-    const model = chatDoc?.aiModel || undefined;
     const abilitiesCtx = chatDoc?.abilities ? `\nUser/team abilities & resources: ${chatDoc.abilities}` : "";
     const response = await aiChat([
       { role: "system", content: `You break tasks into simple, digestible subtasks (steps to completion). Each step should be concrete and achievable by someone with the described abilities. Return a JSON array of short step strings (3-8 steps). Only return the JSON array, no markdown fences or explanation.${abilitiesCtx}` },
       { role: "user", content: `Task: "${task.title}"${task.description ? `\nDescription: ${task.description}` : ""}${chatDoc?.contextSummary ? `\nChat context: ${chatDoc.contextSummary}` : ""}${abilitiesCtx}\n\nBreak this into simple, digestible steps:` },
-    ], model);
+    ], "openai/gpt-4o-mini");
     try {
       const cleaned = response.replace(/```json?\s*/g, "").replace(/```/g, "").trim();
       const steps: string[] = JSON.parse(cleaned);

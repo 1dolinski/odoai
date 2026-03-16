@@ -618,7 +618,7 @@ Rules:
       role: "user",
       content: `RECENT CHAT:\n${transcript || "no recent messages"}\n\nOPEN TASKS:\n${taskSummary}\n\nDONE TASKS (${doneTasks.length}):\n${doneTasks.slice(-5).map((t) => (t as { title: string }).title).join(", ") || "none"}\n\nPEOPLE: ${peopleSummary}\n\nCONTEXT: ${chatDoc.contextSummary || "none"}`,
     },
-  ], getModel(chatDoc));
+  ], "openai/gpt-4o-mini");
 
   try {
     const cleaned = response.replace(/```json?\n?/g, "").replace(/```/g, "").trim();
