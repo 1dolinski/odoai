@@ -1,0 +1,57 @@
+import mongoose, { Schema, Document } from "mongoose";
+
+export interface IMessage {
+  role: "user" | "assistant";
+  content: string;
+  telegramUserId?: string;
+  telegramUsername?: string;
+  firstName?: string;
+  createdAt: Date;
+}
+
+export type ChatMode = "passive" | "active";
+export type AiStyle = "concise" | "detailed" | "casual" | "professional" | "technical";
+
+export interface IChat extends Document {
+  telegramChatId: string;
+  chatTitle?: string;
+  mode: ChatMode;
+  aiStyle: AiStyle;
+  dashboardToken: string;
+  messages: IMessage[];
+  contextSummary: string;
+  lastSummaryAt: Date;
+  messagesSinceSummary: number;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+const MessageSchema = new Schema<IMessage>({
+  role: { type: String, enum: ["user", "assistant"], required: true },
+  content: { type: String, required: true },
+  telegramUserId: String,
+  telegramUsername: String,
+  firstName: String,
+  createdAt: { type: Date, default: Date.now },
+});
+
+const ChatSchema = new Schema<IChat>(
+  {
+    telegramChatId: { type: String, required: true, unique: true, index: true },
+    chatTitle: String,
+    mode: { type: String, enum: ["passive", "active"], default: "passive" },
+    aiStyle: {
+      type: String,
+      enum: ["concise", "detailed", "casual", "professional", "technical"],
+      default: "concise",
+    },
+    dashboardToken: { type: String, unique: true, sparse: true },
+    messages: [MessageSchema],
+    contextSummary: { type: String, default: "" },
+    lastSummaryAt: { type: Date },
+    messagesSinceSummary: { type: Number, default: 0 },
+  },
+  { timestamps: true }
+);
+
+export default mongoose.models.Chat || mongoose.model<IChat>("Chat", ChatSchema);

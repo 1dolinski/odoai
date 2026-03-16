@@ -1,0 +1,12 @@
+{
+  "name": "odoai-qmd-service",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "setup": "qmd collection add /data/knowledge --name odoai && qmd embed"
+  },
+  "dependencies": {
+    "@tobilu/qmd": "latest"
+  }
+}
