@@ -860,8 +860,8 @@ export default function DashboardPage() {
                         <div className="flex-1 min-w-0">
                           <div className="font-medium text-xs text-gray-900 truncate">{p.username || p.firstName || "unknown"}</div>
                           <div className="text-[10px] text-gray-400">
-                            {p.role && <span className="text-blue-600">{p.role}</span>}
-                            {p.role && p.messageCount > 0 && " · "}
+                            {p.role && p.role !== "null" && <span className="text-blue-600">{p.role}</span>}
+                            {p.role && p.role !== "null" && p.messageCount > 0 && " · "}
                             {p.messageCount > 0 && `${p.messageCount} msgs`}
                           </div>
                         </div>
@@ -970,7 +970,7 @@ export default function DashboardPage() {
                           <button onClick={() => deleteContact(p._id)} className="text-[10px] text-red-400 hover:text-red-600">remove</button>
                         </div>
                       </div>
-                      {p.role && <div className="text-xs text-blue-600 mb-0.5">{p.role}</div>}
+                      {p.role && p.role !== "null" && <div className="text-xs text-blue-600 mb-0.5">{p.role}</div>}
                       {p.context && <div className="text-xs text-gray-500 mb-0.5">{p.context}</div>}
                       {(p.email || p.phone) && (
                         <div className="flex gap-2 text-[10px] text-gray-400 mb-0.5">
@@ -996,7 +996,7 @@ export default function DashboardPage() {
                       )}
                       {p.intentions.length > 0 && (
                         <div className="flex flex-wrap gap-1 mt-1">
-                          {p.intentions.map((intent, j) => (
+                          {[...new Map(p.intentions.map((i) => [i.toLowerCase(), i])).values()].map((intent, j) => (
                             <span key={j} className="text-[10px] bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded-full">{intent}</span>
                           ))}
                         </div>

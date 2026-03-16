@@ -17,6 +17,18 @@ function normalize(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9 ]/g, "").replace(/\s+/g, " ").trim();
 }
 
+function dedupeIntentions(existing: string[], incoming: string[]): string[] {
+  const seen = new Set(existing.map((i) => i.toLowerCase()));
+  const merged = [...existing];
+  for (const i of incoming) {
+    if (!seen.has(i.toLowerCase())) {
+      seen.add(i.toLowerCase());
+      merged.push(i);
+    }
+  }
+  return merged;
+}
+
 function isSimilarTask(a: string, b: string): boolean {
   const na = normalize(a);
   const nb = normalize(b);
@@ -277,11 +289,14 @@ Rules:
         if (p.role) updates.role = p.role;
         if (p.context) updates.context = p.context;
 
+        if (p.intentions?.length) {
+          const existingPerson = await Person.findOne({ telegramChatId: chatId, $or: [{ username: name }, { firstName: name }] });
+          updates.intentions = dedupeIntentions(existingPerson?.intentions || [], p.intentions);
+        }
         await Person.findOneAndUpdate(
           { telegramChatId: chatId, $or: [{ username: name }, { firstName: name }] },
           {
             $set: updates,
-            $addToSet: p.intentions?.length ? { intentions: { $each: p.intentions } } : {},
             $setOnInsert: {
               telegramUserId: `inferred_${name}`,
               username: name,
@@ -493,11 +508,13 @@ ${content}`,
       for (const p of parsed.people) {
         const id = p.identifier?.replace("@", "") || "";
         if (!id) continue;
+        const existingP = await Person.findOne({ telegramChatId: chatId, $or: [{ username: id }, { firstName: id }] });
+        const setFields: Record<string, unknown> = { role: p.role, context: p.context };
+        if (p.intentions?.length) setFields.intentions = dedupeIntentions(existingP?.intentions || [], p.intentions);
         await Person.findOneAndUpdate(
           { telegramChatId: chatId, $or: [{ username: id }, { firstName: id }] },
           {
-            $set: { role: p.role, context: p.context },
-            $addToSet: { intentions: { $each: p.intentions || [] } },
+            $set: setFields,
             $setOnInsert: { telegramUserId: `dump_${id}`, source: "manual", relationships: [], messageCount: 0 },
           },
           { upsert: true, setDefaultsOnInsert: true }
@@ -528,9 +545,10 @@ ${content}`,
     }
 
     if (parsed.intentions?.length) {
+      const existingUser = await Person.findOne({ telegramUserId: userId, telegramChatId: chatId });
       await Person.findOneAndUpdate(
         { telegramUserId: userId, telegramChatId: chatId },
-        { $addToSet: { intentions: { $each: parsed.intentions } } }
+        { $set: { intentions: dedupeIntentions(existingUser?.intentions || [], parsed.intentions) } }
       );
     }
 
