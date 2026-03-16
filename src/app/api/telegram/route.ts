@@ -4,11 +4,13 @@ import { sendMessage, sendMessageWithButtons } from "@/lib/telegram";
 import { chat as aiChat, chatWithUsage } from "@/lib/openrouter";
 import { webSearch } from "@/lib/search";
 import { qmdSearch, qmdStatus, formatQMDResults, writePeopleSnapshot } from "@/lib/knowledge";
-import { buildSystemPrompt, maybeUpdateContext, extractPersonInfo, deepProcessDump } from "@/lib/brain";
+import { buildSystemPrompt, maybeUpdateContext, autoExtract, extractPersonInfo, deepProcessDump, maybeProactiveSuggest } from "@/lib/brain";
 import Chat from "@/models/Chat";
 import Task from "@/models/Task";
 import Job from "@/models/Job";
 import Person from "@/models/Person";
+import Check from "@/models/Check";
+import Activity from "@/models/Activity";
 import SharedLink from "@/models/SharedLink";
 import { nanoid } from "nanoid";
 import { trackSpend } from "@/lib/spend";
@@ -47,21 +49,49 @@ interface TelegramUpdate {
 // ---- Commands ----
 
 async function cmdHelp(chatId: number) {
-  return sendMessage(
-    chatId,
-    `🤖 *odoai*\n\nI live in your chat. I listen, learn context, and help when you need me.\n\n*Modes:*\n/passive — I only respond when mentioned\n/active <job> — I become an active collaborator\n/status — Current mode & context\n/dashboard — Open web dashboard\n\n*Tasks:*\n/add <task> — Add todo\n/upcoming <task> — Add upcoming\n/done <task> — Mark done\n/tasks — View board\n/optimize — AI plan optimization\n\n*Context:*\n/dump <info> — Feed me info (I extract tasks, people, intentions)\n/recall <query> — Search my memory (QMD semantic search)\n/people — Who I know in this chat\n/search <query> — Web search\n\n*Sharing:*\n/share <title> | <content>\n\nOr just mention me ${BOT_USERNAME} to talk.`
-  );
+  const helpText = [
+    "🤖 odoai",
+    "",
+    "I live in your chat. I listen, learn context, and help when you need me.",
+    "",
+    "Modes:",
+    "/passive — I only respond when mentioned",
+    "/active [job] — I become an active collaborator",
+    "/status — Current mode & context",
+    "/dashboard — Open web dashboard",
+    "",
+    "Tasks:",
+    "/add [task] — Add todo",
+    "/upcoming [task] — Add upcoming",
+    "/done [task] — Mark done",
+    "/tasks — View board",
+    "/optimize — AI plan optimization",
+    "",
+    "Context:",
+    "/dump [info] — Feed me info (I extract tasks, people, intentions)",
+    "/recall [query] — Search my memory",
+    "/people — Who I know in this chat",
+    "/search [query] — Web search",
+    "",
+    "Sharing:",
+    "/share [title] | [content]",
+    "",
+    `Or just mention me ${BOT_USERNAME} to talk.`,
+  ].join("\n");
+  return sendMessage(chatId, helpText, "");
 }
 
 async function cmdAdd(chatId: number, userId: string, username: string | undefined, args: string) {
   if (!args) return sendMessage(chatId, "Usage: /add <task>");
   await Task.create({ telegramChatId: String(chatId), title: args, status: "todo", createdBy: userId, createdByUsername: username });
+  Activity.create({ telegramChatId: String(chatId), type: "task_added", title: args, actor: username || userId }).catch(console.error);
   return sendMessage(chatId, `✅ *todo*: ${args}`);
 }
 
 async function cmdUpcoming(chatId: number, userId: string, username: string | undefined, args: string) {
   if (!args) return sendMessage(chatId, "Usage: /upcoming <task>");
   await Task.create({ telegramChatId: String(chatId), title: args, status: "upcoming", createdBy: userId, createdByUsername: username });
+  Activity.create({ telegramChatId: String(chatId), type: "task_upcoming", title: args, actor: username || userId }).catch(console.error);
   return sendMessage(chatId, `📋 *upcoming*: ${args}`);
 }
 
@@ -73,11 +103,15 @@ async function cmdDone(chatId: number, userId: string, username: string | undefi
     status: { $ne: "done" },
   });
   if (existing) {
+    const prevStatus = existing.status;
     existing.status = "done";
+    existing.completedAt = new Date();
     await existing.save();
+    Activity.create({ telegramChatId: String(chatId), type: "task_converted", title: existing.title, detail: `${prevStatus} → done`, actor: username || userId }).catch(console.error);
     return sendMessage(chatId, `🎉 Done: ${existing.title}`);
   }
-  await Task.create({ telegramChatId: String(chatId), title: args, status: "done", createdBy: userId, createdByUsername: username });
+  await Task.create({ telegramChatId: String(chatId), title: args, status: "done", createdBy: userId, createdByUsername: username, completedAt: new Date() });
+  Activity.create({ telegramChatId: String(chatId), type: "task_done", title: args, actor: username || userId }).catch(console.error);
   return sendMessage(chatId, `🎉 Done: ${args}`);
 }
 
@@ -364,14 +398,220 @@ async function handleConversation(
     trackSpend(cid, "openrouter", `chat follow-up #${iterations}`, result.totalTokens).catch(console.error);
   }
 
-  // Clean any remaining tool markers from final response
-  response = response.replace(/\[(?:SEARCH|RECALL):\s*.+?\]/gi, "").trim();
+  // Execute action directives
+  const actions: string[] = [];
+  const cid2 = String(chatId);
 
-  await sendMessage(chatId, response);
+  const todoMatches = [...response.matchAll(/\[ADD_TODO:\s*(.+?)\]/gi)];
+  for (const m of todoMatches) {
+    const parts = m[1].split("|").map((s) => s.trim());
+    const title = parts[0];
+    const dueDate = parts[1] && /\d{4}-\d{2}-\d{2}/.test(parts[1]) ? new Date(parts[1]) : undefined;
+    const update: Record<string, unknown> = { status: "todo", createdBy: userId, createdByUsername: username };
+    if (dueDate) update.dueDate = dueDate;
+    await Task.findOneAndUpdate(
+      { telegramChatId: cid2, title },
+      { $set: update },
+      { upsert: true }
+    );
+    actions.push(`+ todo: ${title}${dueDate ? ` (due ${parts[1]})` : ""}`);
+    Activity.create({ telegramChatId: cid2, type: "task_added", title, detail: dueDate ? `due ${parts[1]}` : undefined, actor: username || userId }).catch(console.error);
+  }
+
+  const upcomingMatches = [...response.matchAll(/\[ADD_UPCOMING:\s*(.+?)\]/gi)];
+  for (const m of upcomingMatches) {
+    const parts = m[1].split("|").map((s) => s.trim());
+    const title = parts[0];
+    const dueDate = parts[1] && /\d{4}-\d{2}-\d{2}/.test(parts[1]) ? new Date(parts[1]) : undefined;
+    const update: Record<string, unknown> = { status: "upcoming", createdBy: userId, createdByUsername: username };
+    if (dueDate) update.dueDate = dueDate;
+    await Task.findOneAndUpdate(
+      { telegramChatId: cid2, title },
+      { $set: update },
+      { upsert: true }
+    );
+    actions.push(`+ upcoming: ${title}${dueDate ? ` (due ${parts[1]})` : ""}`);
+    Activity.create({ telegramChatId: cid2, type: "task_upcoming", title, detail: dueDate ? `due ${parts[1]}` : undefined, actor: username || userId }).catch(console.error);
+  }
+
+  const doneMatches = [...response.matchAll(/\[MARK_DONE:\s*(.+?)\]/gi)];
+  for (const m of doneMatches) {
+    const existing = await Task.findOne({
+      telegramChatId: cid2,
+      title: { $regex: new RegExp(m[1].trim(), "i") },
+      status: { $ne: "done" },
+    });
+    if (existing) {
+      const prevStatus = existing.status;
+      existing.status = "done";
+      existing.completedAt = new Date();
+      await existing.save();
+      actions.push(`✓ done: ${existing.title}`);
+      Activity.create({ telegramChatId: cid2, type: "task_converted", title: existing.title, detail: `${prevStatus} → done`, actor: username || userId }).catch(console.error);
+    }
+  }
+
+  const personMatches = [...response.matchAll(/\[ADD_PERSON:\s*(.+?)\]/gi)];
+  for (const m of personMatches) {
+    const parts = m[1].split("|").map((s) => s.trim());
+    const name = parts[0].replace("@", "");
+    const role = parts[1] || "";
+    const context = parts[2] || "";
+    await Person.findOneAndUpdate(
+      { telegramChatId: cid2, $or: [{ username: name }, { firstName: name }] },
+      {
+        $set: { username: name, firstName: name, role, context, lastSeen: new Date() },
+        $setOnInsert: { telegramUserId: `manual_${name}`, intentions: [], relationships: [], messageCount: 0 },
+      },
+      { upsert: true }
+    );
+    actions.push(`+ person: ${name}${role ? ` (${role})` : ""}`);
+    Activity.create({ telegramChatId: cid2, type: "person_added", title: name, detail: role || undefined, actor: username || userId }).catch(console.error);
+  }
+
+  const relMatches = [...response.matchAll(/\[ADD_RELATIONSHIP:\s*(.+?)\]/gi)];
+  for (const m of relMatches) {
+    const parts = m[1].split("|").map((s) => s.trim());
+    const [person1, person2, label, context] = [parts[0], parts[1], parts[2] || "", parts[3] || ""];
+    if (person1 && person2) {
+      await Person.updateOne(
+        { telegramChatId: cid2, $or: [{ username: person1 }, { firstName: person1 }] },
+        { $addToSet: { relationships: { name: person2, label, context } } }
+      );
+      await Person.updateOne(
+        { telegramChatId: cid2, $or: [{ username: person2 }, { firstName: person2 }] },
+        { $addToSet: { relationships: { name: person1, label, context } } }
+      );
+      actions.push(`🔗 ${person1} ↔ ${person2}${label ? ` (${label})` : ""}`);
+      Activity.create({ telegramChatId: cid2, type: "person_added", title: `${person1} ↔ ${person2}`, detail: context || label || undefined, actor: username || userId }).catch(console.error);
+    }
+  }
+
+  const checkMatches = [...response.matchAll(/\[SCHEDULE_CHECK:\s*(.+?)\]/gi)];
+  for (const m of checkMatches) {
+    const parts = m[1].split("|").map((s) => s.trim());
+    const desc = parts[0];
+    const minutes = parseInt(parts[1]) || 30;
+    const scheduledFor = new Date(Date.now() + minutes * 60 * 1000);
+    await Check.create({
+      telegramChatId: cid2,
+      description: desc,
+      scheduledFor,
+      context: text,
+      triggeredBy: userId,
+      triggeredByUsername: username,
+    });
+    actions.push(`⏰ check in ${minutes}m: ${desc}`);
+    Activity.create({ telegramChatId: cid2, type: "check_scheduled", title: desc, detail: `in ${minutes}m`, actor: username || userId }).catch(console.error);
+  }
+
+  // In active mode, auto-schedule a smart check if the conversation seems actionable
+  // and no check was already explicitly scheduled
+  const chatDocForMode = await Chat.findOne({ telegramChatId: cid2 });
+  if (chatDocForMode?.mode === "active" && checkMatches.length === 0) {
+    const shouldSchedule = await aiChat([
+      {
+        role: "system",
+        content: `You decide whether a follow-up check-in should be scheduled based on a conversation. 
+Respond with ONLY a JSON object: {"schedule": true/false, "description": "what to check", "minutes": number}
+Schedule if: someone committed to a deliverable, a deadline was mentioned, a task was just added that needs follow-up, or there's an open question.
+Do NOT schedule for casual chitchat or completed items. Be smart about timing — match the urgency.`,
+      },
+      {
+        role: "user",
+        content: `User said: "${text}"\nBot responded: "${response.substring(0, 300)}"`,
+      },
+    ]);
+    try {
+      const parsed = JSON.parse(shouldSchedule.replace(/```json?\n?/g, "").replace(/```/g, "").trim());
+      if (parsed.schedule && parsed.description && parsed.minutes) {
+        const scheduledFor = new Date(Date.now() + parsed.minutes * 60 * 1000);
+        await Check.create({
+          telegramChatId: cid2,
+          description: parsed.description,
+          scheduledFor,
+          context: text,
+          triggeredBy: "system",
+        });
+        actions.push(`⏰ auto-check in ${parsed.minutes}m: ${parsed.description}`);
+      }
+    } catch {
+      // AI didn't return valid JSON — no check scheduled, that's fine
+    }
+  }
+
+  // Self-tuning: style changes
+  const styleMatch = response.match(/\[SET_STYLE:\s*(\w+)\]/i);
+  if (styleMatch) {
+    const validStyles = ["concise", "detailed", "casual", "professional", "technical"];
+    const newStyle = styleMatch[1].toLowerCase();
+    if (validStyles.includes(newStyle)) {
+      await Chat.updateOne({ telegramChatId: cid2 }, { $set: { aiStyle: newStyle } });
+      actions.push(`🎨 style → ${newStyle}`);
+      Activity.create({ telegramChatId: cid2, type: "style_changed", title: `Style → ${newStyle}`, actor: "odoai" }).catch(console.error);
+    }
+  }
+
+  // Self-tuning: check-in pace
+  const paceMatch = response.match(/\[SET_CHECK_PACE:\s*(\w+)\]/i);
+  if (paceMatch) {
+    const pace = paceMatch[1].toLowerCase();
+    if (pace === "pause") {
+      await Check.updateMany(
+        { telegramChatId: cid2, status: "pending" },
+        { $set: { status: "skipped" } }
+      );
+      actions.push("⏸ checks paused");
+    } else if (pace === "resume") {
+      await Check.updateMany(
+        { telegramChatId: cid2, status: "skipped" },
+        { $set: { status: "pending" } }
+      );
+      actions.push("▶ checks resumed");
+    } else if (pace === "slower") {
+      const pending = await Check.find({ telegramChatId: cid2, status: "pending" });
+      for (const c of pending) {
+        const remaining = c.scheduledFor.getTime() - Date.now();
+        if (remaining > 0) {
+          c.scheduledFor = new Date(Date.now() + remaining * 2);
+          await c.save();
+        }
+      }
+      await Job.updateMany(
+        { telegramChatId: cid2, status: "active" },
+        [{ $set: { checkInIntervalMin: { $multiply: ["$checkInIntervalMin", 2] } } }]
+      );
+      actions.push("🐢 check pace slower");
+    } else if (pace === "faster") {
+      const pending = await Check.find({ telegramChatId: cid2, status: "pending" });
+      for (const c of pending) {
+        const remaining = c.scheduledFor.getTime() - Date.now();
+        if (remaining > 0) {
+          c.scheduledFor = new Date(Date.now() + remaining / 2);
+          await c.save();
+        }
+      }
+      await Job.updateMany(
+        { telegramChatId: cid2, status: "active" },
+        [{ $set: { checkInIntervalMin: { $max: [5, { $divide: ["$checkInIntervalMin", 2] }] } } }]
+      );
+      actions.push("🐇 check pace faster");
+    }
+  }
+
+  let cleanResponse = response
+    .replace(/\[(?:SEARCH|RECALL|ADD_TODO|ADD_UPCOMING|MARK_DONE|ADD_PERSON|ADD_RELATIONSHIP|SCHEDULE_CHECK|SET_STYLE|SET_CHECK_PACE):\s*.+?\]/gi, "")
+    .trim();
+
+  if (actions.length) {
+    cleanResponse += "\n\n" + actions.join("\n");
+  }
+
+  await sendMessage(chatId, cleanResponse);
 
   await Chat.findOneAndUpdate(
-    { telegramChatId: String(chatId) },
-    { $push: { messages: { role: "assistant", content: response } } }
+    { telegramChatId: cid2 },
+    { $push: { messages: { role: "assistant", content: cleanResponse } } }
   );
 }
 
@@ -472,7 +712,8 @@ export async function POST(req: NextRequest) {
       extractPersonInfo(String(chatId), userId, username, firstName, text),
     ]);
 
-    // Background: maybe update context summary + QMD knowledge
+    // Background: auto-extract insights + update context summary + QMD knowledge
+    autoExtract(String(chatId)).catch(console.error);
     maybeUpdateContext(String(chatId)).catch(console.error);
 
     const isMentioned = text.includes(BOT_USERNAME);
@@ -527,31 +768,22 @@ export async function POST(req: NextRequest) {
       return ok();
     }
 
-    // Passive mode: just observed. No response.
-    // Active mode: check if we should proactively respond
-    const chatDoc = await Chat.findOne({ telegramChatId: String(chatId) });
-    if (chatDoc?.mode === "active") {
-      const activeJobs = await Job.find({ telegramChatId: String(chatId), status: "active" });
-      if (activeJobs.length) {
-        const jobContext = activeJobs.map((j) => j.title).join(", ");
-        const shouldRespond = await aiChat([
-          {
-            role: "system",
-            content: `You are deciding whether to respond to a message in a group chat. The active job is: "${jobContext}". Only respond "YES" if the message is directly relevant to the job and you have something useful to add. Otherwise respond "NO". Single word answer only.`,
-          },
-          { role: "user", content: text },
-        ]);
-
-        if (shouldRespond.trim().toUpperCase() === "YES") {
-          await handleConversation(chatId, userId, username, text);
-        }
-      }
+    // Passive mode: just observed. No response needed.
+    // Active mode: maybe proactively suggest something useful
+    const suggestion = await maybeProactiveSuggest(String(chatId));
+    if (suggestion) {
+      await sendMessage(chatId, suggestion, "");
+      await Chat.findOneAndUpdate(
+        { telegramChatId: String(chatId) },
+        { $push: { messages: { role: "assistant", content: suggestion } } }
+      );
     }
 
     return ok();
   } catch (error) {
     console.error("Telegram webhook error:", error);
-    return NextResponse.json({ ok: true });
+    const message = error instanceof Error ? error.message : String(error);
+    return NextResponse.json({ ok: false, error: message }, { status: 200 });
   }
 }
 

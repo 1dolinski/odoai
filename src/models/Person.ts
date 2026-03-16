@@ -1,9 +1,9 @@
 import mongoose, { Schema, Document } from "mongoose";
 
 export interface IRelationship {
-  personId: string;
+  name: string;
   label: string;
-  notes: string;
+  context: string;
 }
 
 export interface IPerson extends Document {
@@ -15,6 +15,10 @@ export interface IPerson extends Document {
   context: string;
   intentions: string[];
   relationships: IRelationship[];
+  email?: string;
+  phone?: string;
+  notes?: string;
+  source: "telegram" | "manual";
   messageCount: number;
   lastSeen: Date;
   createdAt: Date;
@@ -22,9 +26,9 @@ export interface IPerson extends Document {
 }
 
 const RelationshipSchema = new Schema<IRelationship>({
-  personId: { type: String, required: true },
-  label: String,
-  notes: String,
+  name: { type: String, required: true },
+  label: { type: String, default: "" },
+  context: { type: String, default: "" },
 });
 
 const PersonSchema = new Schema<IPerson>(
@@ -37,6 +41,10 @@ const PersonSchema = new Schema<IPerson>(
     context: { type: String, default: "" },
     intentions: [String],
     relationships: [RelationshipSchema],
+    email: String,
+    phone: String,
+    notes: String,
+    source: { type: String, enum: ["telegram", "manual"], default: "telegram" },
     messageCount: { type: Number, default: 0 },
     lastSeen: { type: Date, default: Date.now },
   },

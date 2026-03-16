@@ -12,15 +12,39 @@ export interface IMessage {
 export type ChatMode = "passive" | "active";
 export type AiStyle = "concise" | "detailed" | "casual" | "professional" | "technical";
 
+export interface IWatchSettings {
+  deadlines: boolean;
+  blockers: boolean;
+  actionItems: boolean;
+  sentiment: boolean;
+  questions: boolean;
+  followUps: boolean;
+  newPeople: boolean;
+  decisions: boolean;
+}
+
+export const WATCH_DEFAULTS: IWatchSettings = {
+  deadlines: true,
+  blockers: true,
+  actionItems: true,
+  sentiment: false,
+  questions: true,
+  followUps: true,
+  newPeople: true,
+  decisions: false,
+};
+
 export interface IChat extends Document {
   telegramChatId: string;
   chatTitle?: string;
   mode: ChatMode;
   aiStyle: AiStyle;
   dashboardToken: string;
+  watchSettings: IWatchSettings;
   messages: IMessage[];
   contextSummary: string;
   lastSummaryAt: Date;
+  lastSyncAt: Date;
   messagesSinceSummary: number;
   createdAt: Date;
   updatedAt: Date;
@@ -46,9 +70,20 @@ const ChatSchema = new Schema<IChat>(
       default: "concise",
     },
     dashboardToken: { type: String, unique: true, sparse: true },
+    watchSettings: {
+      deadlines: { type: Boolean, default: true },
+      blockers: { type: Boolean, default: true },
+      actionItems: { type: Boolean, default: true },
+      sentiment: { type: Boolean, default: false },
+      questions: { type: Boolean, default: true },
+      followUps: { type: Boolean, default: true },
+      newPeople: { type: Boolean, default: true },
+      decisions: { type: Boolean, default: false },
+    },
     messages: [MessageSchema],
     contextSummary: { type: String, default: "" },
     lastSummaryAt: { type: Date },
+    lastSyncAt: { type: Date },
     messagesSinceSummary: { type: Number, default: 0 },
   },
   { timestamps: true }

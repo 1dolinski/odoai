@@ -1,10 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { connectDB } from "@/lib/mongodb";
 import { getSpendSummary, getRecentSpends } from "@/lib/spend";
-import Chat, { AiStyle } from "@/models/Chat";
+import Chat, { AiStyle, WATCH_DEFAULTS } from "@/models/Chat";
 import Task from "@/models/Task";
 import Person from "@/models/Person";
 import Job from "@/models/Job";
+import Check from "@/models/Check";
+import Activity from "@/models/Activity";
+import { autoExtract, maybeUpdateContext } from "@/lib/brain";
 
 export async function GET(req: NextRequest) {
   await connectDB();
@@ -17,10 +20,12 @@ export async function GET(req: NextRequest) {
 
   const chatId = chat.telegramChatId;
 
-  const [tasks, people, jobs, spendSummary, recentSpends] = await Promise.all([
+  const [tasks, people, jobs, checks, activities, spendSummary, recentSpends] = await Promise.all([
     Task.find({ telegramChatId: chatId }).sort({ createdAt: -1 }).lean(),
     Person.find({ telegramChatId: chatId }).sort({ messageCount: -1 }).lean(),
     Job.find({ telegramChatId: chatId }).sort({ createdAt: -1 }).lean(),
+    Check.find({ telegramChatId: chatId }).sort({ scheduledFor: 1 }).lean(),
+    Activity.find({ telegramChatId: chatId }).sort({ createdAt: -1 }).limit(50).lean(),
     getSpendSummary(chatId),
     getRecentSpends(chatId),
   ]);
@@ -31,32 +36,64 @@ export async function GET(req: NextRequest) {
       title: chat.chatTitle || "Untitled Chat",
       mode: chat.mode,
       aiStyle: chat.aiStyle || "concise",
+      watchSettings: { ...WATCH_DEFAULTS, ...chat.watchSettings },
       contextSummary: chat.contextSummary,
+      lastSyncAt: chat.lastSyncAt || null,
       messageCount: chat.messages?.length || 0,
     },
     tasks,
     people: people.map((p) => ({
+      _id: p._id,
       username: p.username,
       firstName: p.firstName,
       role: p.role,
       context: p.context,
       intentions: p.intentions,
+      relationships: (p.relationships || []).map((r: { name: string; label: string; context: string }) => ({
+        name: r.name,
+        label: r.label,
+        context: r.context,
+      })),
+      email: p.email,
+      phone: p.phone,
+      notes: p.notes,
+      source: p.source || "telegram",
       messageCount: p.messageCount,
       lastSeen: p.lastSeen,
     })),
     jobs,
+    checks: checks.map((c) => ({
+      _id: c._id,
+      description: c.description,
+      status: c.status,
+      scheduledFor: c.scheduledFor,
+      context: c.context,
+      triggeredByUsername: c.triggeredByUsername,
+      result: c.result,
+      completedAt: c.completedAt,
+      createdAt: c.createdAt,
+    })),
+    activities: activities.map((a) => ({
+      _id: a._id,
+      type: a.type,
+      title: a.title,
+      detail: a.detail,
+      actor: a.actor,
+      createdAt: a.createdAt,
+    })),
     spend: spendSummary,
     recentSpends,
   });
 }
 
 const VALID_STYLES: AiStyle[] = ["concise", "detailed", "casual", "professional", "technical"];
+const VALID_WATCH_KEYS = ["deadlines", "blockers", "actionItems", "sentiment", "questions", "followUps", "newPeople", "decisions"];
 
 export async function PATCH(req: NextRequest) {
   await connectDB();
 
   const body = await req.json();
-  const { token, aiStyle } = body;
+  const { token, aiStyle, watchSettings } = body;
 
   if (!token) return NextResponse.json({ error: "token required" }, { status: 400 });
 
@@ -65,8 +102,94 @@ export async function PATCH(req: NextRequest) {
 
   if (aiStyle && VALID_STYLES.includes(aiStyle)) {
     chat.aiStyle = aiStyle;
-    await chat.save();
   }
 
-  return NextResponse.json({ ok: true, aiStyle: chat.aiStyle });
+  if (watchSettings && typeof watchSettings === "object") {
+    if (!chat.watchSettings) {
+      chat.watchSettings = { ...WATCH_DEFAULTS };
+    }
+    for (const key of VALID_WATCH_KEYS) {
+      if (key in watchSettings && typeof watchSettings[key] === "boolean") {
+        (chat.watchSettings as Record<string, boolean>)[key] = watchSettings[key];
+      }
+    }
+    chat.markModified("watchSettings");
+  }
+
+  await chat.save();
+
+  return NextResponse.json({ ok: true, aiStyle: chat.aiStyle, watchSettings: chat.watchSettings });
+}
+
+export async function POST(req: NextRequest) {
+  await connectDB();
+
+  const body = await req.json();
+  const { token, action, contact } = body;
+
+  if (!token) return NextResponse.json({ error: "token required" }, { status: 400 });
+
+  const chat = await Chat.findOne({ dashboardToken: token }).lean();
+  if (!chat) return NextResponse.json({ error: "invalid token" }, { status: 404 });
+
+  const chatId = chat.telegramChatId;
+
+  if (action === "sync") {
+    await Promise.all([
+      autoExtract(chatId, true),
+      maybeUpdateContext(chatId),
+    ]);
+    const updated = await Chat.findOne({ telegramChatId: chatId }).lean();
+    return NextResponse.json({ ok: true, lastSyncAt: updated?.lastSyncAt });
+  }
+
+  if (action === "addContact" && contact) {
+    const name = (contact.name || "").trim();
+    if (!name) return NextResponse.json({ error: "name required" }, { status: 400 });
+
+    const person = await Person.findOneAndUpdate(
+      { telegramChatId: chatId, $or: [{ username: name }, { firstName: name }] },
+      {
+        $set: {
+          username: name,
+          firstName: name,
+          role: contact.role || "",
+          context: contact.context || "",
+          email: contact.email || "",
+          phone: contact.phone || "",
+          notes: contact.notes || "",
+          source: "manual",
+          lastSeen: new Date(),
+        },
+        $setOnInsert: {
+          telegramUserId: `manual_${name}_${Date.now()}`,
+          intentions: [],
+          relationships: [],
+          messageCount: 0,
+        },
+      },
+      { upsert: true, new: true }
+    );
+
+    return NextResponse.json({ ok: true, person });
+  }
+
+  if (action === "updateContact" && contact && contact._id) {
+    const update: Record<string, string> = {};
+    if (contact.role !== undefined) update.role = contact.role;
+    if (contact.context !== undefined) update.context = contact.context;
+    if (contact.email !== undefined) update.email = contact.email;
+    if (contact.phone !== undefined) update.phone = contact.phone;
+    if (contact.notes !== undefined) update.notes = contact.notes;
+
+    await Person.updateOne({ _id: contact._id, telegramChatId: chatId }, { $set: update });
+    return NextResponse.json({ ok: true });
+  }
+
+  if (action === "deleteContact" && contact?._id) {
+    await Person.deleteOne({ _id: contact._id, telegramChatId: chatId, source: "manual" });
+    return NextResponse.json({ ok: true });
+  }
+
+  return NextResponse.json({ error: "unknown action" }, { status: 400 });
 }
