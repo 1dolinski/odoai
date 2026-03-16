@@ -850,7 +850,10 @@ export default function DashboardPage() {
                 )}
                 {data.people.filter((p) => p.personType !== "contact").map((p) => {
                   const pName = (p.username || p.firstName || "").toLowerCase();
-                  const memberTasks = pName ? data.tasks.filter((t) => t.people?.some((tp) => tp.toLowerCase() === pName)) : [];
+                  const personTasks = pName ? data.tasks.filter((t) => t.people?.some((tp) => tp.toLowerCase() === pName)) : [];
+                  const activeTasks = personTasks.filter((t) => t.status !== "done");
+                  const doneTasks = personTasks.filter((t) => t.status === "done");
+                  const dedupedIntentions = [...new Map(p.intentions.map((i) => [i.toLowerCase(), i])).values()];
                   return (
                     <div key={p._id} className="bg-gray-50 border border-gray-200 rounded-lg p-3">
                       <div className="flex items-center gap-2">
@@ -868,38 +871,72 @@ export default function DashboardPage() {
                         <button
                           onClick={async () => {
                             setData((d) => d ? { ...d, people: d.people.map((pp) => pp._id === p._id ? { ...pp, personType: "contact" as const } : pp) } : d);
-                            await fetch("/api/dashboard", {
-                              method: "POST",
-                              headers: { "Content-Type": "application/json" },
-                              body: JSON.stringify({ token, action: "updateContact", contact: { _id: p._id, personType: "contact" } }),
-                            });
+                            await fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "updateContact", contact: { _id: p._id, personType: "contact" } }) });
                             await fetchData();
                           }}
                           className="text-[10px] text-blue-500 hover:text-blue-700 transition-colors whitespace-nowrap font-medium"
                           title="Move to contacts"
-                        >
-                          → contact
-                        </button>
+                        >→ contact</button>
                       </div>
-                      {p.context && <div className="text-xs text-gray-500 mt-1 ml-9">{p.context}</div>}
-                      {p.dumps && p.dumps.length > 0 && (
-                        <div className="mt-1.5 ml-9 space-y-1">
-                          {p.dumps.map((d, j) => (
-                            <div key={j} className="text-[10px] bg-white border border-gray-100 rounded px-2 py-1">
-                              <div className="text-gray-600">{d.text}</div>
-                              <div className="text-gray-300 mt-0.5">{formatET(d.createdAt)}</div>
+                      {(p.context || (p.relationships && p.relationships.length > 0)) && (
+                        <div className="mt-2 ml-9">
+                          <div className="text-[10px] font-medium text-gray-400 uppercase tracking-wide mb-0.5">How we know them</div>
+                          {p.context && <div className="text-xs text-gray-600">{p.context}</div>}
+                          {p.relationships && p.relationships.length > 0 && (
+                            <div className="mt-0.5 space-y-0.5">
+                              {p.relationships.map((r, j) => (
+                                <div key={j} className="text-[10px] text-gray-500">
+                                  <span className="text-gray-400">↔</span> <span className="font-medium text-gray-700">{r.name}</span>
+                                  {r.label && <span className="text-blue-600"> [{r.label}]</span>}
+                                  {r.context && <span> — {r.context}</span>}
+                                </div>
+                              ))}
                             </div>
-                          ))}
+                          )}
                         </div>
                       )}
-                      {memberTasks.length > 0 && (
-                        <div className="mt-1.5 ml-9">
-                          <div className="text-[10px] text-gray-400 mb-0.5">Tasks ({memberTasks.length})</div>
-                          {memberTasks.map((t) => (
+                      {(dedupedIntentions.length > 0 || p.resources || p.access) && (
+                        <div className="mt-2 ml-9">
+                          <div className="text-[10px] font-medium text-gray-400 uppercase tracking-wide mb-0.5">How they can help</div>
+                          {dedupedIntentions.length > 0 && (
+                            <div className="flex flex-wrap gap-1 mb-0.5">
+                              {dedupedIntentions.map((intent, j) => (
+                                <span key={j} className="text-[10px] bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded-full">{intent}</span>
+                              ))}
+                            </div>
+                          )}
+                          {p.resources && <div className="text-[10px] text-emerald-600">🔑 {p.resources}</div>}
+                          {p.access && <div className="text-[10px] text-amber-600">🔓 {p.access}</div>}
+                        </div>
+                      )}
+                      {personTasks.length > 0 && (
+                        <div className="mt-2 ml-9">
+                          <div className="text-[10px] font-medium text-gray-400 uppercase tracking-wide mb-0.5">Tasks ({activeTasks.length} active{doneTasks.length > 0 ? `, ${doneTasks.length} done` : ""})</div>
+                          {activeTasks.map((t) => (
                             <div key={t._id} className="flex items-center gap-1.5 text-[10px]">
-                              <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${t.status === "done" ? "bg-green-400" : t.status === "upcoming" ? "bg-yellow-400" : "bg-blue-400"}`} />
-                              <span className={t.status === "done" ? "line-through text-gray-400" : "text-gray-700"}>{t.title}</span>
+                              <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${t.status === "upcoming" ? "bg-yellow-400" : "bg-blue-400"}`} />
+                              <span className="text-gray-700">{t.title}</span>
                               <span className="text-gray-300 ml-auto">{t.status}</span>
+                            </div>
+                          ))}
+                          {doneTasks.length > 0 && activeTasks.length > 0 && <div className="border-t border-gray-100 mt-1 pt-0.5" />}
+                          {doneTasks.slice(0, 3).map((t) => (
+                            <div key={t._id} className="flex items-center gap-1.5 text-[10px]">
+                              <span className="w-1.5 h-1.5 rounded-full shrink-0 bg-green-400" />
+                              <span className="line-through text-gray-400">{t.title}</span>
+                              <span className="text-gray-300 ml-auto">done</span>
+                            </div>
+                          ))}
+                          {doneTasks.length > 3 && <div className="text-[10px] text-gray-400">+{doneTasks.length - 3} more done</div>}
+                        </div>
+                      )}
+                      {p.dumps && p.dumps.length > 0 && (
+                        <div className="mt-2 ml-9">
+                          <div className="text-[10px] font-medium text-gray-400 uppercase tracking-wide mb-0.5">Notes ({p.dumps.length})</div>
+                          {p.dumps.map((d, j) => (
+                            <div key={j} className="text-[10px] bg-white border border-gray-100 rounded px-2 py-1 mb-0.5">
+                              <div className="text-gray-600">{d.text}</div>
+                              <div className="text-gray-300 mt-0.5">{formatET(d.createdAt)}</div>
                             </div>
                           ))}
                         </div>
@@ -953,10 +990,24 @@ export default function DashboardPage() {
                   {data.people.filter((p) => p.personType === "contact").length === 0 && (
                     <p className="text-sm text-gray-400 italic">No contacts yet.</p>
                   )}
-                  {data.people.filter((p) => p.personType === "contact").map((p) => (
+                  {data.people.filter((p) => p.personType === "contact").map((p) => {
+                    const pName = (p.username || p.firstName || "").toLowerCase();
+                    const personTasks = pName ? data.tasks.filter((t) => t.people?.some((tp) => tp.toLowerCase() === pName)) : [];
+                    const activeTasks = personTasks.filter((t) => t.status !== "done");
+                    const doneTasks = personTasks.filter((t) => t.status === "done");
+                    const dedupedIntentions = [...new Map(p.intentions.map((i) => [i.toLowerCase(), i])).values()];
+                    return (
                     <div key={p._id} className="bg-gray-50 border border-gray-200 rounded-lg p-3">
                       <div className="flex items-center justify-between mb-1">
-                        <span className="font-medium text-sm text-gray-900">{p.username || p.firstName || "unknown"}</span>
+                        <div className="flex items-center gap-2">
+                          <div className="w-7 h-7 rounded-full bg-indigo-100 flex items-center justify-center text-xs font-medium text-indigo-600 shrink-0">
+                            {(p.username || p.firstName || "?")[0].toUpperCase()}
+                          </div>
+                          <div>
+                            <span className="font-medium text-sm text-gray-900">{p.username || p.firstName || "unknown"}</span>
+                            {p.role && p.role !== "null" && <div className="text-[10px] text-blue-600">{p.role}</div>}
+                          </div>
+                        </div>
                         <div className="flex items-center gap-2">
                           <button
                             onClick={async () => {
@@ -970,66 +1021,76 @@ export default function DashboardPage() {
                           <button onClick={() => deleteContact(p._id)} className="text-[10px] text-red-400 hover:text-red-600">remove</button>
                         </div>
                       </div>
-                      {p.role && p.role !== "null" && <div className="text-xs text-blue-600 mb-0.5">{p.role}</div>}
-                      {p.context && <div className="text-xs text-gray-500 mb-0.5">{p.context}</div>}
-                      {(p.email || p.phone) && (
-                        <div className="flex gap-2 text-[10px] text-gray-400 mb-0.5">
-                          {p.email && <span>📧 {p.email}</span>}
-                          {p.phone && <span>📱 {p.phone}</span>}
+                      {(p.context || (p.relationships && p.relationships.length > 0) || p.email || p.phone) && (
+                        <div className="mt-2 ml-9">
+                          <div className="text-[10px] font-medium text-gray-400 uppercase tracking-wide mb-0.5">How we know them</div>
+                          {p.context && <div className="text-xs text-gray-600">{p.context}</div>}
+                          {(p.email || p.phone) && (
+                            <div className="flex gap-2 text-[10px] text-gray-400 mt-0.5">
+                              {p.email && <span>📧 {p.email}</span>}
+                              {p.phone && <span>📱 {p.phone}</span>}
+                            </div>
+                          )}
+                          {p.relationships && p.relationships.length > 0 && (
+                            <div className="mt-0.5 space-y-0.5">
+                              {p.relationships.map((r, j) => (
+                                <div key={j} className="text-[10px] text-gray-500">
+                                  <span className="text-gray-400">↔</span> <span className="font-medium text-gray-700">{r.name}</span>
+                                  {r.label && <span className="text-blue-600"> [{r.label}]</span>}
+                                  {r.context && <span> — {r.context}</span>}
+                                </div>
+                              ))}
+                            </div>
+                          )}
                         </div>
                       )}
-                      {(p.resources || p.access) && (
-                        <div className="space-y-0.5">
+                      {(dedupedIntentions.length > 0 || p.resources || p.access) && (
+                        <div className="mt-2 ml-9">
+                          <div className="text-[10px] font-medium text-gray-400 uppercase tracking-wide mb-0.5">How they can help</div>
+                          {dedupedIntentions.length > 0 && (
+                            <div className="flex flex-wrap gap-1 mb-0.5">
+                              {dedupedIntentions.map((intent, j) => (
+                                <span key={j} className="text-[10px] bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded-full">{intent}</span>
+                              ))}
+                            </div>
+                          )}
                           {p.resources && <div className="text-[10px] text-emerald-600">🔑 {p.resources}</div>}
                           {p.access && <div className="text-[10px] text-amber-600">🔓 {p.access}</div>}
                         </div>
                       )}
+                      {personTasks.length > 0 && (
+                        <div className="mt-2 ml-9">
+                          <div className="text-[10px] font-medium text-gray-400 uppercase tracking-wide mb-0.5">Tasks ({activeTasks.length} active{doneTasks.length > 0 ? `, ${doneTasks.length} done` : ""})</div>
+                          {activeTasks.map((t) => (
+                            <div key={t._id} className="flex items-center gap-1.5 text-[10px]">
+                              <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${t.status === "upcoming" ? "bg-yellow-400" : "bg-blue-400"}`} />
+                              <span className="text-gray-700">{t.title}</span>
+                              <span className="text-gray-300 ml-auto">{t.status}</span>
+                            </div>
+                          ))}
+                          {doneTasks.length > 0 && activeTasks.length > 0 && <div className="border-t border-gray-100 mt-1 pt-0.5" />}
+                          {doneTasks.slice(0, 3).map((t) => (
+                            <div key={t._id} className="flex items-center gap-1.5 text-[10px]">
+                              <span className="w-1.5 h-1.5 rounded-full shrink-0 bg-green-400" />
+                              <span className="line-through text-gray-400">{t.title}</span>
+                              <span className="text-gray-300 ml-auto">done</span>
+                            </div>
+                          ))}
+                          {doneTasks.length > 3 && <div className="text-[10px] text-gray-400">+{doneTasks.length - 3} more done</div>}
+                        </div>
+                      )}
                       {p.dumps && p.dumps.length > 0 && (
-                        <div className="mt-1 space-y-1">
+                        <div className="mt-2 ml-9">
+                          <div className="text-[10px] font-medium text-gray-400 uppercase tracking-wide mb-0.5">Notes ({p.dumps.length})</div>
                           {p.dumps.map((d, j) => (
-                            <div key={j} className="text-[10px] bg-white border border-gray-100 rounded px-2 py-1">
+                            <div key={j} className="text-[10px] bg-white border border-gray-100 rounded px-2 py-1 mb-0.5">
                               <div className="text-gray-600">{d.text}</div>
                               <div className="text-gray-300 mt-0.5">{formatET(d.createdAt)}</div>
                             </div>
                           ))}
                         </div>
                       )}
-                      {p.intentions.length > 0 && (
-                        <div className="flex flex-wrap gap-1 mt-1">
-                          {[...new Map(p.intentions.map((i) => [i.toLowerCase(), i])).values()].map((intent, j) => (
-                            <span key={j} className="text-[10px] bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded-full">{intent}</span>
-                          ))}
-                        </div>
-                      )}
-                      {p.relationships?.length > 0 && (
-                        <div className="mt-1 pt-1 border-t border-gray-100">
-                          {p.relationships.map((r, j) => (
-                            <div key={j} className="flex items-start gap-1 text-[10px]">
-                              <span className="text-gray-400">🔗</span>
-                              <span className="font-medium text-gray-700">{r.name}</span>
-                              {r.label && <span className="text-blue-600">[{r.label}]</span>}
-                              {r.context && <span className="text-gray-500">— {r.context}</span>}
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                      {(() => {
-                        const pName = (p.username || p.firstName || "").toLowerCase();
-                        const personTasks = pName ? data.tasks.filter((t) => t.people?.some((tp) => tp.toLowerCase() === pName)) : [];
-                        return personTasks.length > 0 ? (
-                          <div className="mt-1 pt-1 border-t border-gray-100">
-                            <div className="text-[10px] text-gray-400 mb-0.5">Tasks ({personTasks.length})</div>
-                            {personTasks.map((t) => (
-                              <div key={t._id} className="flex items-center gap-1.5 text-[10px]">
-                                <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${t.status === "done" ? "bg-green-400" : t.status === "upcoming" ? "bg-yellow-400" : "bg-blue-400"}`} />
-                                <span className={t.status === "done" ? "line-through text-gray-400" : "text-gray-700"}>{t.title}</span>
-                                <span className="text-gray-300 ml-auto">{t.status}</span>
-                              </div>
-                            ))}
-                          </div>
-                        ) : null;
-                      })()}
-                      <div className="mt-1 pt-1 border-t border-gray-100">
+                      <div className="mt-1.5 ml-9">
                         {personDumpId === p._id ? (
                           <div className="space-y-1.5">
                             <textarea autoFocus value={personDumpText} onChange={(e) => setPersonDumpText(e.target.value)} placeholder={`Add info about ${p.username || p.firstName || "this person"}...`} rows={2} className="w-full px-2 py-1 border border-gray-200 rounded-lg text-[10px] focus:outline-none focus:ring-2 focus:ring-blue-200 resize-y" />
