@@ -21,17 +21,29 @@ export async function chat(messages: Message[], model?: string): Promise<string>
 
 export async function chatWithUsage(messages: Message[], model?: string): Promise<ChatResult> {
   const useModel = (model || DEFAULT_MODEL).trim();
-  const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${OPENROUTER_API_KEY}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: useModel,
-      messages,
-    }),
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 45000);
+  let res: Response;
+  try {
+    res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: useModel,
+        messages,
+        max_tokens: 2000,
+      }),
+      signal: controller.signal,
+    });
+  } catch (e) {
+    clearTimeout(timeout);
+    if ((e as Error).name === "AbortError") throw new Error(`OpenRouter timeout (${useModel}): request took >45s`);
+    throw e;
+  }
+  clearTimeout(timeout);
 
   if (!res.ok) {
     const err = await res.text();

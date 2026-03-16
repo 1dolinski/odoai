@@ -452,17 +452,22 @@ export async function POST(req: NextRequest) {
   if (action === "generateFeed") {
     const chatDoc = await Chat.findOne({ telegramChatId: chatId });
     if (!chatDoc) return NextResponse.json({ error: "chat not found" }, { status: 404 });
-    const items = await generateAiFeed(chatId);
-    if (items.length) {
-      const entries = items.map((i) => ({ type: i.type, content: i.content, createdAt: new Date() }));
-      await Chat.updateOne({ telegramChatId: chatId }, { $push: { aiFeed: { $each: entries } } });
-      Activity.create({ telegramChatId: chatId, type: "ai_triggered", title: "AI feed generated", detail: `${items.length} items`, actor: "odoai" }).catch(console.error);
-      const shouts = items.filter((i) => i.type === "shout");
-      for (const s of shouts) {
-        sendMessage(chatId, s.content).catch(console.error);
+    try {
+      const items = await generateAiFeed(chatId);
+      if (items.length) {
+        const entries = items.map((i) => ({ type: i.type, content: i.content, createdAt: new Date() }));
+        await Chat.updateOne({ telegramChatId: chatId }, { $push: { aiFeed: { $each: entries } } });
+        Activity.create({ telegramChatId: chatId, type: "ai_triggered", title: "AI feed generated", detail: `${items.length} items`, actor: "odoai" }).catch(console.error);
+        const shouts = items.filter((i) => i.type === "shout");
+        for (const s of shouts) {
+          sendMessage(chatId, s.content).catch(console.error);
+        }
       }
+      return NextResponse.json({ ok: true, items });
+    } catch (err) {
+      console.error("generateFeed error:", err);
+      return NextResponse.json({ ok: false, items: [], error: String(err) });
     }
-    return NextResponse.json({ ok: true, items });
   }
 
   if (action === "feedItemStatus" && typeof body.feedIndex === "number" && body.status) {
