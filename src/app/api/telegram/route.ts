@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { connectDB } from "@/lib/mongodb";
-import { sendMessage, sendMessageWithButtons, getChatAdmins, reactToMessage } from "@/lib/telegram";
+import { sendMessage, sendMessageWithButtons, getChatAdmins, reactToMessage, reactWithEmoji } from "@/lib/telegram";
 import { chat as aiChat, chatWithUsage } from "@/lib/openrouter";
 import { webSearch } from "@/lib/search";
 import { qmdSearch, qmdStatus, formatQMDResults, writePeopleSnapshot } from "@/lib/knowledge";
@@ -884,12 +884,16 @@ export async function POST(req: NextRequest) {
         detail: cleanText.substring(0, 120),
         actor: username || userId,
       }).catch(console.error);
+      reactWithEmoji(chatId, msg.message_id, "👀").catch(console.error);
       autoExtract(cid, true).catch(console.error);
       maybeUpdateContext(cid).catch(console.error);
       const actions = await handleConversation(chatId, userId, username, cleanText, {
         silent: isSilent,
         messageId: msg.message_id,
       });
+      if (actions.length === 0) {
+        reactWithEmoji(chatId, msg.message_id, "👌").catch(console.error);
+      }
       Chat.updateOne({ telegramChatId: cid }, { $set: { lastReviewedAt: new Date() } }).catch(console.error);
       Activity.create({
         telegramChatId: cid,
@@ -909,6 +913,7 @@ export async function POST(req: NextRequest) {
     // Aggressive mode: AI reviews every message silently — react with emoji only
     if (chatMode === "aggressive") {
       const cid = String(chatId);
+      reactWithEmoji(chatId, msg.message_id, "👀").catch(console.error);
       Activity.create({
         telegramChatId: cid,
         type: "ai_triggered",
@@ -921,6 +926,9 @@ export async function POST(req: NextRequest) {
         silent: true,
         messageId: msg.message_id,
       });
+      if (actions.length === 0) {
+        reactWithEmoji(chatId, msg.message_id, "👌").catch(console.error);
+      }
       Chat.updateOne({ telegramChatId: cid }, { $set: { lastReviewedAt: new Date() } }).catch(console.error);
       Activity.create({
         telegramChatId: cid,

@@ -47,6 +47,22 @@ export async function sendMessageWithButtons(
 
 const ACTION_EMOJIS = ["👍", "👏", "🔥", "🎉", "🏆"];
 
+export async function reactWithEmoji(
+  chatId: number | string,
+  messageId: number,
+  emoji: string
+) {
+  await fetch(`${BASE}/setMessageReaction`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      chat_id: chatId,
+      message_id: messageId,
+      reaction: [{ type: "emoji", emoji }],
+    }),
+  }).catch(console.error);
+}
+
 export async function reactToMessage(
   chatId: number | string,
   messageId: number,
