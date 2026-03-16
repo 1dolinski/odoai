@@ -68,9 +68,23 @@ export async function buildSystemPrompt(chatId: string, userQuery?: string): Pro
     ? contacts.map(formatPerson).join("\n")
     : "No contacts added yet.";
 
+  const initiatives = (chatDoc?.initiatives || []).filter((i: { status: string }) => i.status === "active");
+
   const taskBlock = tasks.length
-    ? tasks.map((t) => `- [${t.status}] ${t.title}${t.dueDate ? ` (due ${t.dueDate.toISOString().split("T")[0]})` : ""}`).join("\n")
+    ? tasks.map((t) => {
+        let line = `- [${t.status}] ${t.title}`;
+        if (t.dueDate) line += ` (due ${t.dueDate.toISOString().split("T")[0]})`;
+        if (t.initiative) {
+          const ini = initiatives.find((i: { id: string }) => i.id === t.initiative);
+          if (ini) line += ` [initiative: ${(ini as { name: string }).name}]`;
+        }
+        return line;
+      }).join("\n")
     : "No active tasks.";
+
+  const initiativeBlock = initiatives.length
+    ? initiatives.map((i: { name: string; description: string }) => `- ${i.name}${i.description ? `: ${i.description}` : ""}`).join("\n")
+    : "No initiatives defined yet.";
 
   const jobBlock = activeJobs.length
     ? activeJobs.map((j) => `- ${j.title}: ${j.description}`).join("\n")
@@ -112,6 +126,9 @@ ${membersBlock}
 CONTACTS (external people the team works with — connections, resources, access. Help the team make tasteful, thoughtful use of these relationships):
 ${contactsBlock}
 
+INITIATIVES (ongoing workstreams — tag new tasks with the relevant initiative when applicable):
+${initiativeBlock}
+
 ACTIVE TASKS:
 ${taskBlock}
 
@@ -130,8 +147,8 @@ CRITICAL: Break every message into AS MANY individual actions as needed. A singl
 DEDUP: NEVER add a task that already exists in ACTIVE TASKS above, even if worded slightly differently. "print stand inserts" and "printing stand inserts" are the SAME task. "make QR code" and "making QR code" are the SAME task. Check the existing list carefully before adding. If a task is essentially the same thing, do NOT emit an ADD_TODO/ADD_UPCOMING directive for it.
 
 Available actions (embed naturally in your response, use MULTIPLE per message):
-  [ADD_TODO: desc | YYYY-MM-DD | context | @person1,@person2] — context = 1-sentence explanation (ALWAYS include). Last field = comma-separated names of people involved (members or contacts). Include people whenever a task relates to or involves someone.
-  [ADD_UPCOMING: desc | YYYY-MM-DD | context | @person1,@person2] — same format as ADD_TODO
+  [ADD_TODO: desc | YYYY-MM-DD | context | @person1,@person2 | #initiative] — context = 1-sentence explanation (ALWAYS include). People field = comma-separated names of people involved. Initiative field = name of the initiative this task belongs to (from INITIATIVES list above). Omit fields you don't need but always include context.
+  [ADD_UPCOMING: desc | YYYY-MM-DD | context | @person1,@person2 | #initiative] — same format as ADD_TODO
   [MARK_DONE: desc]
   [ADD_PERSON: name | role | context] — for chat members
   [ADD_CONTACT: name | role | context | resources | access] — for external contacts/connections

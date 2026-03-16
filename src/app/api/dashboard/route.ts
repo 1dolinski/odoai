@@ -50,6 +50,7 @@ export async function GET(req: NextRequest) {
       messageCount: chat.messages?.length || 0,
     },
     tasks,
+    initiatives: chat.initiatives || [],
     people: people.map((p) => ({
       _id: p._id,
       username: p.username,
@@ -66,6 +67,10 @@ export async function GET(req: NextRequest) {
       phone: p.phone,
       notes: p.notes,
       source: p.source || "telegram",
+      personType: p.personType || "member",
+      dumps: p.dumps || [],
+      resources: p.resources || "",
+      access: p.access || "",
       messageCount: p.messageCount,
       lastSeen: p.lastSeen,
     })),
@@ -364,6 +369,49 @@ export async function POST(req: NextRequest) {
       writeKnowledge(chatId, "context", "chat-guidance", `# Chat Guidance\n\n${guidance}`).catch(console.error);
     }
     return NextResponse.json({ ok: true, guidance });
+  }
+
+  if (action === "addInitiative" && body.initiative) {
+    const { name, description } = body.initiative as { name: string; description?: string };
+    if (!name?.trim()) return NextResponse.json({ error: "name required" }, { status: 400 });
+    const id = `ini_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const entry = { id, name: name.trim(), description: (description || "").trim(), status: "active", createdAt: new Date() };
+    await Chat.updateOne({ telegramChatId: chatId }, { $push: { initiatives: entry } });
+    Activity.create({ telegramChatId: chatId, type: "dump", title: `Initiative: ${name.trim()}`, detail: (description || "").substring(0, 100), actor: "dashboard" }).catch(console.error);
+    return NextResponse.json({ ok: true, initiative: entry });
+  }
+
+  if (action === "updateInitiative" && body.initiativeId) {
+    const { initiativeId, name, description, status } = body as { initiativeId: string; name?: string; description?: string; status?: string };
+    const update: Record<string, string> = {};
+    if (name !== undefined) update["initiatives.$.name"] = name.trim();
+    if (description !== undefined) update["initiatives.$.description"] = description.trim();
+    if (status !== undefined) update["initiatives.$.status"] = status;
+    await Chat.updateOne(
+      { telegramChatId: chatId, "initiatives.id": initiativeId },
+      { $set: update }
+    );
+    return NextResponse.json({ ok: true });
+  }
+
+  if (action === "deleteInitiative" && body.initiativeId) {
+    await Chat.updateOne(
+      { telegramChatId: chatId },
+      { $pull: { initiatives: { id: body.initiativeId } } }
+    );
+    await Task.updateMany(
+      { telegramChatId: chatId, initiative: body.initiativeId },
+      { $set: { initiative: "" } }
+    );
+    return NextResponse.json({ ok: true });
+  }
+
+  if (action === "setTaskInitiative" && body.taskId !== undefined) {
+    await Task.updateOne(
+      { _id: body.taskId, telegramChatId: chatId },
+      { $set: { initiative: body.initiative || "" } }
+    );
+    return NextResponse.json({ ok: true });
   }
 
   return NextResponse.json({ error: "unknown action" }, { status: 400 });

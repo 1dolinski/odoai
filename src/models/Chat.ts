@@ -36,6 +36,14 @@ export const WATCH_DEFAULTS: IWatchSettings = {
   opportunities: true,
 };
 
+export interface IInitiative {
+  id: string;
+  name: string;
+  description: string;
+  status: "active" | "paused" | "completed";
+  createdAt: Date;
+}
+
 export interface IChat extends Document {
   telegramChatId: string;
   chatTitle?: string;
@@ -47,6 +55,7 @@ export interface IChat extends Document {
   messages: IMessage[];
   guidance: string;
   dumps: { text: string; source: string; category: string; subject: string; createdAt: Date }[];
+  initiatives: IInitiative[];
   contextSummary: string;
   lastSummaryAt: Date;
   lastSyncAt: Date;
@@ -93,6 +102,7 @@ const ChatSchema = new Schema<IChat>(
     messages: [MessageSchema],
     guidance: { type: String, default: "" },
     dumps: { type: [{ text: String, source: String, category: { type: String, default: "general" }, subject: { type: String, default: "" }, createdAt: { type: Date, default: Date.now } }], default: [] },
+    initiatives: { type: [{ id: String, name: String, description: { type: String, default: "" }, status: { type: String, enum: ["active", "paused", "completed"], default: "active" }, createdAt: { type: Date, default: Date.now } }], default: [] },
     contextSummary: { type: String, default: "" },
     lastSummaryAt: { type: Date },
     lastSyncAt: { type: Date },

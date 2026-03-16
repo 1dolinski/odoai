@@ -398,19 +398,30 @@ async function handleConversation(
   const actions: string[] = [];
   const cid2 = String(chatId);
 
+  const chatInitiatives = chatDoc?.initiatives?.filter((i: { status: string }) => i.status === "active") || [];
+  function resolveInitiative(parts: string[]): string {
+    const iniPart = parts.find((p) => p.startsWith("#"));
+    if (!iniPart) return "";
+    const name = iniPart.replace(/^#/, "").trim().toLowerCase();
+    const match = chatInitiatives.find((i: { name: string }) => i.name.toLowerCase() === name);
+    return match ? (match as { id: string }).id : "";
+  }
+
   const todoMatches = [...response.matchAll(/\[ADD_TODO:\s*(.+?)\]/gi)];
   for (const m of todoMatches) {
     const parts = m[1].split("|").map((s) => s.trim());
     const title = parts[0];
     const dueDate = parts[1] && /\d{4}-\d{2}-\d{2}/.test(parts[1]) ? new Date(parts[1]) : undefined;
-    const contextPart = parts.find((p, i) => i > 0 && !/\d{4}-\d{2}-\d{2}/.test(p) && !p.startsWith("@"));
+    const contextPart = parts.find((p, i) => i > 0 && !/\d{4}-\d{2}-\d{2}/.test(p) && !p.startsWith("@") && !p.startsWith("#"));
     const peoplePart = parts.find((p) => p.startsWith("@"));
     const people = peoplePart ? peoplePart.split(",").map((n) => n.trim().replace(/^@/, "")).filter(Boolean) : [];
+    const initiative = resolveInitiative(parts);
     const existing = await findSimilarTask(cid2, title);
     if (existing) {
       const upd: Record<string, unknown> = {};
       if (dueDate) upd.dueDate = dueDate;
       if (contextPart && !existing.description) upd.description = contextPart;
+      if (initiative) upd.initiative = initiative;
       if (people.length) upd.$addToSet = { people: { $each: people } };
       if (Object.keys(upd).length) {
         const addToSet = upd.$addToSet;
@@ -425,6 +436,7 @@ async function handleConversation(
     const taskData: Record<string, unknown> = { telegramChatId: cid2, title, status: "todo", createdBy: userId, createdByUsername: username, people };
     if (dueDate) taskData.dueDate = dueDate;
     if (contextPart) taskData.description = contextPart;
+    if (initiative) taskData.initiative = initiative;
     await Task.create(taskData);
     actions.push(`+ todo: ${title}${people.length ? ` (${people.join(", ")})` : ""}${dueDate ? ` (due ${parts[1]})` : ""}`);
     Activity.create({ telegramChatId: cid2, type: "task_added", title, detail: contextPart || (dueDate ? `due ${parts[1]}` : undefined), actor: username || userId }).catch(console.error);
@@ -435,14 +447,16 @@ async function handleConversation(
     const parts = m[1].split("|").map((s) => s.trim());
     const title = parts[0];
     const dueDate = parts[1] && /\d{4}-\d{2}-\d{2}/.test(parts[1]) ? new Date(parts[1]) : undefined;
-    const contextPart = parts.find((p, i) => i > 0 && !/\d{4}-\d{2}-\d{2}/.test(p) && !p.startsWith("@"));
+    const contextPart = parts.find((p, i) => i > 0 && !/\d{4}-\d{2}-\d{2}/.test(p) && !p.startsWith("@") && !p.startsWith("#"));
     const peoplePart = parts.find((p) => p.startsWith("@"));
     const people = peoplePart ? peoplePart.split(",").map((n) => n.trim().replace(/^@/, "")).filter(Boolean) : [];
+    const initiative = resolveInitiative(parts);
     const existing = await findSimilarTask(cid2, title);
     if (existing) {
       const upd: Record<string, unknown> = {};
       if (dueDate) upd.dueDate = dueDate;
       if (contextPart && !existing.description) upd.description = contextPart;
+      if (initiative) upd.initiative = initiative;
       if (people.length) upd.$addToSet = { people: { $each: people } };
       if (Object.keys(upd).length) {
         const addToSet = upd.$addToSet;
@@ -457,6 +471,7 @@ async function handleConversation(
     const taskData: Record<string, unknown> = { telegramChatId: cid2, title, status: "upcoming", createdBy: userId, createdByUsername: username, people };
     if (dueDate) taskData.dueDate = dueDate;
     if (contextPart) taskData.description = contextPart;
+    if (initiative) taskData.initiative = initiative;
     await Task.create(taskData);
     actions.push(`+ upcoming: ${title}${people.length ? ` (${people.join(", ")})` : ""}${dueDate ? ` (due ${parts[1]})` : ""}`);
     Activity.create({ telegramChatId: cid2, type: "task_upcoming", title, detail: contextPart || (dueDate ? `due ${parts[1]}` : undefined), actor: username || userId }).catch(console.error);

@@ -9,6 +9,7 @@ export interface ITask extends Document {
   status: TaskStatus;
   dueDate?: Date;
   people: string[];
+  initiative?: string;
   createdBy: string;
   createdByUsername?: string;
   completedAt?: Date;
@@ -24,6 +25,7 @@ const TaskSchema = new Schema<ITask>(
     status: { type: String, enum: ["todo", "upcoming", "done"], default: "todo" },
     dueDate: Date,
     people: { type: [String], default: [] },
+    initiative: { type: String, default: "" },
     createdBy: { type: String, required: true },
     createdByUsername: String,
     completedAt: Date,

@@ -10,8 +10,17 @@ interface Task {
   status: "todo" | "upcoming" | "done";
   dueDate?: string;
   people?: string[];
+  initiative?: string;
   createdByUsername?: string;
   completedAt?: string;
+  createdAt: string;
+}
+
+interface Initiative {
+  id: string;
+  name: string;
+  description: string;
+  status: "active" | "paused" | "completed";
   createdAt: string;
 }
 
@@ -114,6 +123,7 @@ interface DashboardData {
     contextSummary: string;
     messageCount: number;
   };
+  initiatives: Initiative[];
   tasks: Task[];
   people: Person[];
   jobs: Job[];
@@ -195,8 +205,11 @@ export default function DashboardPage() {
   const [showGuidance, setShowGuidance] = useState(false);
   const [showWallet, setShowWallet] = useState(false);
   const [showPeople, setShowPeople] = useState(false);
+  const [showInitiatives, setShowInitiatives] = useState(false);
   const [showFeed, setShowFeed] = useState(false);
   const [feedGenerating, setFeedGenerating] = useState(false);
+  const [newInitName, setNewInitName] = useState("");
+  const [newInitDesc, setNewInitDesc] = useState("");
   const [editingDateId, setEditingDateId] = useState<string | null>(null);
   const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null);
   const [actionForm, setActionForm] = useState({ type: "todo" as string, title: "", dueDate: "", personName: "", personRole: "", statusTaskSearch: "", statusNewStatus: "done" as string, dumpText: "", dumpCategory: "general", dumpSubject: "" });
@@ -629,6 +642,7 @@ export default function DashboardPage() {
             {([
               { key: "feed", label: "AI Feed", state: showFeed, set: setShowFeed },
               { key: "people", label: `People (${data.people.length})`, state: showPeople, set: setShowPeople },
+              { key: "initiatives", label: `Initiatives (${(data.initiatives || []).filter((i) => i.status === "active").length})`, state: showInitiatives, set: setShowInitiatives },
               { key: "context", label: "Chat Context", state: showContext, set: setShowContext },
               { key: "dump", label: "Add Dump", state: showDump, set: setShowDump },
               { key: "guidance", label: "Guidance", state: showGuidance, set: setShowGuidance },
@@ -639,7 +653,7 @@ export default function DashboardPage() {
                 key={btn.key}
                 onClick={() => {
                   const next = !btn.state;
-                  setShowFeed(false); setShowPeople(false); setShowContext(false); setShowDump(false); setShowGuidance(false); setShowActions(false); setShowWatch(false); setShowWallet(false);
+                  setShowFeed(false); setShowPeople(false); setShowInitiatives(false); setShowContext(false); setShowDump(false); setShowGuidance(false); setShowActions(false); setShowWatch(false); setShowWallet(false);
                   btn.set(next);
                 }}
                 className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all border ${
@@ -721,6 +735,96 @@ export default function DashboardPage() {
                             <p className="text-sm text-gray-800">{item.content}</p>
                           </div>
                         </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+          {showInitiatives && (
+            <div className="mt-4 bg-white border border-gray-200 rounded-xl p-5 shadow-sm">
+              <h3 className="font-semibold text-gray-800 mb-4">Initiatives</h3>
+              <div className="flex gap-2 mb-4">
+                <input
+                  value={newInitName}
+                  onChange={(e) => setNewInitName(e.target.value)}
+                  placeholder="Initiative name (e.g. Content Creation)"
+                  onKeyDown={(e) => { if (e.key === "Enter" && newInitName.trim()) { fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "addInitiative", initiative: { name: newInitName, description: newInitDesc } }) }).then(() => { setNewInitName(""); setNewInitDesc(""); fetchData(); }); } }}
+                  className="flex-1 px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-purple-200"
+                />
+                <input
+                  value={newInitDesc}
+                  onChange={(e) => setNewInitDesc(e.target.value)}
+                  placeholder="Description (optional)"
+                  className="flex-1 px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-purple-200"
+                />
+                <button
+                  onClick={() => {
+                    if (!newInitName.trim()) return;
+                    fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "addInitiative", initiative: { name: newInitName, description: newInitDesc } }) }).then(() => { setNewInitName(""); setNewInitDesc(""); fetchData(); });
+                  }}
+                  disabled={!newInitName.trim()}
+                  className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50 shrink-0"
+                >
+                  Add
+                </button>
+              </div>
+              {(data.initiatives || []).length === 0 ? (
+                <p className="text-sm text-gray-400 italic">No initiatives yet. Add one above.</p>
+              ) : (
+                <div className="space-y-3">
+                  {(data.initiatives || []).map((ini) => {
+                    const iniTasks = data.tasks.filter((t) => t.initiative === ini.id);
+                    const iniDumps = data.chat.dumps.filter((d) => d.category === "initiative" && d.subject?.toLowerCase() === ini.name.toLowerCase());
+                    const doneTasks = iniTasks.filter((t) => t.status === "done").length;
+                    const totalTasks = iniTasks.length;
+                    return (
+                      <div key={ini.id} className={`border rounded-lg p-4 ${ini.status === "active" ? "border-purple-200 bg-purple-50/50" : ini.status === "paused" ? "border-yellow-200 bg-yellow-50/30" : "border-gray-200 bg-gray-50"}`}>
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className={`w-2 h-2 rounded-full shrink-0 ${ini.status === "active" ? "bg-purple-500" : ini.status === "paused" ? "bg-yellow-500" : "bg-gray-400"}`} />
+                          <span className="font-medium text-sm text-gray-900">{ini.name}</span>
+                          <select
+                            value={ini.status}
+                            onChange={(e) => {
+                              fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "updateInitiative", initiativeId: ini.id, status: e.target.value }) }).then(() => fetchData());
+                            }}
+                            className="text-[10px] border border-gray-200 rounded px-1 py-0.5 bg-white ml-auto"
+                          >
+                            <option value="active">Active</option>
+                            <option value="paused">Paused</option>
+                            <option value="completed">Completed</option>
+                          </select>
+                          <button
+                            onClick={() => { if (confirm(`Delete "${ini.name}"?`)) { fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "deleteInitiative", initiativeId: ini.id }) }).then(() => fetchData()); } }}
+                            className="text-[10px] text-red-400 hover:text-red-600"
+                            title="Delete"
+                          >✕</button>
+                        </div>
+                        {ini.description && <p className="text-xs text-gray-500 ml-4 mb-2">{ini.description}</p>}
+                        <div className="ml-4 flex items-center gap-3 text-[10px] text-gray-400">
+                          {totalTasks > 0 && (
+                            <span>{doneTasks}/{totalTasks} tasks done</span>
+                          )}
+                          {totalTasks > 0 && (
+                            <div className="flex-1 max-w-[120px] bg-gray-200 rounded-full h-1.5">
+                              <div className="bg-purple-500 h-1.5 rounded-full" style={{ width: `${(doneTasks / totalTasks) * 100}%` }} />
+                            </div>
+                          )}
+                          {iniDumps.length > 0 && <span>{iniDumps.length} dumps</span>}
+                        </div>
+                        {iniTasks.length > 0 && (
+                          <div className="mt-2 ml-4 space-y-0.5">
+                            {iniTasks.slice(0, 5).map((t) => (
+                              <div key={t._id} className="flex items-center gap-1.5 text-[10px]">
+                                <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${t.status === "done" ? "bg-green-400" : t.status === "upcoming" ? "bg-yellow-400" : "bg-blue-400"}`} />
+                                <span className={t.status === "done" ? "line-through text-gray-400" : "text-gray-700"}>{t.title}</span>
+                                <span className="text-gray-300 ml-auto">{t.status}</span>
+                              </div>
+                            ))}
+                            {iniTasks.length > 5 && <div className="text-[10px] text-gray-400">+{iniTasks.length - 5} more</div>}
+                          </div>
+                        )}
                       </div>
                     );
                   })}
@@ -1045,6 +1149,7 @@ export default function DashboardPage() {
                       <option value="person">Person</option>
                       <option value="business">Business</option>
                       <option value="event">Event</option>
+                      <option value="initiative">Initiative</option>
                     </select>
                     {(actionForm.dumpCategory || "general") !== "general" && (
                       <input
@@ -1123,7 +1228,7 @@ export default function DashboardPage() {
                       <div key={i} className="bg-gray-50 border border-gray-100 rounded-lg px-3 py-2">
                         <div className="flex items-center gap-1.5 mb-1">
                           {d.category && d.category !== "general" && (
-                            <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${d.category === "person" ? "bg-indigo-100 text-indigo-700" : d.category === "business" ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>
+                            <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${d.category === "person" ? "bg-indigo-100 text-indigo-700" : d.category === "business" ? "bg-emerald-100 text-emerald-700" : d.category === "initiative" ? "bg-purple-100 text-purple-700" : "bg-amber-100 text-amber-700"}`}>
                               {d.category}
                             </span>
                           )}
@@ -1151,12 +1256,13 @@ export default function DashboardPage() {
                   <option value="person">Person</option>
                   <option value="business">Business</option>
                   <option value="event">Event</option>
+                  <option value="initiative">Initiative</option>
                 </select>
                 {dumpCategory !== "general" && (
                   <input
                     value={dumpSubject}
                     onChange={(e) => setDumpSubject(e.target.value)}
-                    placeholder={dumpCategory === "person" ? "Person name..." : dumpCategory === "business" ? "Business name..." : "Event name..."}
+                    placeholder={dumpCategory === "person" ? "Person name..." : dumpCategory === "business" ? "Business name..." : dumpCategory === "initiative" ? "Initiative name..." : "Event name..."}
                     className="flex-1 px-2 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
                   />
                 )}
@@ -1338,7 +1444,7 @@ export default function DashboardPage() {
                         <span className={`font-medium text-sm ${t.status === "done" ? "line-through text-gray-400" : "text-gray-900"}`}>
                           {t.title}
                         </span>
-                        {(t.description || (t.people && t.people.length > 0)) && (
+                        {(t.description || (t.people && t.people.length > 0) || t.initiative || (data.initiatives || []).length > 0) && (
                           <button
                             onClick={() => setExpandedTaskId(expandedTaskId === t._id ? null : t._id)}
                             className={`transition-colors ${expandedTaskId === t._id ? "text-blue-500" : "text-gray-300 hover:text-gray-500"}`}
@@ -1358,6 +1464,7 @@ export default function DashboardPage() {
                             ))}
                           </span>
                         )}
+                        {t.initiative && (() => { const ini = (data.initiatives || []).find((i) => i.id === t.initiative); return ini ? (<span className="inline-flex items-center text-[10px] font-medium bg-purple-50 text-purple-600 border border-purple-100 rounded-full px-1.5 py-0.5 ml-1">{ini.name}</span>) : null; })()}
                       </div>
                       <div className="flex items-center gap-2 mt-0.5">
                         {t.createdByUsername && (
@@ -1413,6 +1520,21 @@ export default function DashboardPage() {
                           ))}
                         </div>
                       )}
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-gray-400">Initiative:</span>
+                        <select
+                          value={t.initiative || ""}
+                          onChange={(e) => {
+                            fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "setTaskInitiative", taskId: t._id, initiative: e.target.value }) }).then(() => fetchData());
+                          }}
+                          className="text-[10px] border border-gray-200 rounded px-1.5 py-0.5 bg-white"
+                        >
+                          <option value="">None</option>
+                          {(data.initiatives || []).map((ini) => (
+                            <option key={ini.id} value={ini.id}>{ini.name}</option>
+                          ))}
+                        </select>
+                      </div>
                     </div>
                   )}
                 </div>
