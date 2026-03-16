@@ -86,7 +86,7 @@ export async function GET(req: NextRequest) {
           if (p.role && !existing.role) existing.role = p.role;
           if (p.source === "telegram") existing.source = "telegram";
           existing.intentions = [...new Set([...existing.intentions, ...p.intentions])];
-          existing.relationships = [...existing.relationships, ...p.relationships.filter((r) => !existing.relationships.some((er) => er.name === r.name))];
+          existing.relationships = [...existing.relationships, ...p.relationships.filter((r: { name: string }) => !existing.relationships.some((er: { name: string }) => er.name === r.name))];
           existing.dumps = [...existing.dumps, ...p.dumps];
           if (p.resources && !existing.resources) existing.resources = p.resources;
           if (p.access && !existing.access) existing.access = p.access;
