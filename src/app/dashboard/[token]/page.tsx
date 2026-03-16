@@ -24,6 +24,8 @@ interface Relationship {
 interface DumpEntry {
   text: string;
   source: string;
+  category?: string;
+  subject?: string;
   createdAt: string;
 }
 
@@ -173,6 +175,8 @@ export default function DashboardPage() {
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
   const [dumpText, setDumpText] = useState("");
+  const [dumpCategory, setDumpCategory] = useState("general");
+  const [dumpSubject, setDumpSubject] = useState("");
   const [dumpSending, setDumpSending] = useState(false);
   const [dumpSent, setDumpSent] = useState(false);
   const [guidanceText, setGuidanceText] = useState("");
@@ -195,7 +199,7 @@ export default function DashboardPage() {
   const [feedGenerating, setFeedGenerating] = useState(false);
   const [editingDateId, setEditingDateId] = useState<string | null>(null);
   const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null);
-  const [actionForm, setActionForm] = useState({ type: "todo" as string, title: "", dueDate: "", personName: "", personRole: "", statusTaskSearch: "", statusNewStatus: "done" as string, dumpText: "" });
+  const [actionForm, setActionForm] = useState({ type: "todo" as string, title: "", dueDate: "", personName: "", personRole: "", statusTaskSearch: "", statusNewStatus: "done" as string, dumpText: "", dumpCategory: "general", dumpSubject: "" });
   const [actionSaving, setActionSaving] = useState(false);
   const [actionDone, setActionDone] = useState("");
 
@@ -297,9 +301,10 @@ export default function DashboardPage() {
     await fetch("/api/dashboard", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ token, action: "dump", text: dumpText }),
+      body: JSON.stringify({ token, action: "dump", text: dumpText, category: dumpCategory, subject: dumpSubject }),
     });
     setDumpText("");
+    setDumpSubject("");
     setDumpSending(false);
     setDumpSent(true);
     setTimeout(() => setDumpSent(false), 4000);
@@ -390,12 +395,14 @@ export default function DashboardPage() {
       }
     } else if (actionForm.type === "dump") {
       if (!actionForm.dumpText.trim()) { setActionSaving(false); return; }
+      const cat = actionForm.dumpCategory || "general";
+      const subj = actionForm.dumpSubject || "";
       await fetch("/api/dashboard", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token, action: "dump", text: actionForm.dumpText }),
+        body: JSON.stringify({ token, action: "dump", text: actionForm.dumpText, category: cat, subject: subj }),
       });
-      setActionDone("Dump processed and indexed");
+      setActionDone(subj ? `${cat} dump (${subj}) indexed` : "Dump processed and indexed");
     } else {
       if (!actionForm.title.trim()) { setActionSaving(false); return; }
       const taskData: Record<string, string> = { title: actionForm.title, status: actionForm.type };
@@ -407,7 +414,7 @@ export default function DashboardPage() {
       });
       setActionDone(`Added ${actionForm.type}: ${actionForm.title}`);
     }
-    setActionForm((f) => ({ ...f, title: "", dueDate: "", personName: "", personRole: "", statusTaskSearch: "", dumpText: "" }));
+    setActionForm((f) => ({ ...f, title: "", dueDate: "", personName: "", personRole: "", statusTaskSearch: "", dumpText: "", dumpCategory: "general", dumpSubject: "" }));
     setActionSaving(false);
     fetchData();
     setTimeout(() => setActionDone(""), 3000);
@@ -733,39 +740,82 @@ export default function DashboardPage() {
                   {syncingMembers ? "Syncing..." : "Sync from Telegram"}
                 </button>
               </div>
-              <div className="flex flex-wrap gap-2 mb-5">
+              <div className="space-y-2 mb-5">
                 {data.people.filter((p) => p.personType !== "contact").length === 0 && (
                   <p className="text-sm text-gray-400 italic">No members yet. Hit Sync to pull from Telegram.</p>
                 )}
-                {data.people.filter((p) => p.personType !== "contact").map((p) => (
-                  <div key={p._id} className="bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 flex items-center gap-2 min-w-[180px]">
-                    <div className="w-7 h-7 rounded-full bg-gray-200 flex items-center justify-center text-xs font-medium text-gray-600">
-                      {(p.username || p.firstName || "?")[0].toUpperCase()}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="font-medium text-xs text-gray-900 truncate">{p.username || p.firstName || "unknown"}</div>
-                      <div className="text-[10px] text-gray-400">
-                        {p.role && <span className="text-blue-600">{p.role}</span>}
-                        {p.role && p.messageCount > 0 && " · "}
-                        {p.messageCount > 0 && `${p.messageCount} msgs`}
+                {data.people.filter((p) => p.personType !== "contact").map((p) => {
+                  const pName = (p.username || p.firstName || "").toLowerCase();
+                  const memberTasks = pName ? data.tasks.filter((t) => t.people?.some((tp) => tp.toLowerCase() === pName)) : [];
+                  return (
+                    <div key={p._id} className="bg-gray-50 border border-gray-200 rounded-lg p-3">
+                      <div className="flex items-center gap-2">
+                        <div className="w-7 h-7 rounded-full bg-gray-200 flex items-center justify-center text-xs font-medium text-gray-600 shrink-0">
+                          {(p.username || p.firstName || "?")[0].toUpperCase()}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="font-medium text-xs text-gray-900 truncate">{p.username || p.firstName || "unknown"}</div>
+                          <div className="text-[10px] text-gray-400">
+                            {p.role && <span className="text-blue-600">{p.role}</span>}
+                            {p.role && p.messageCount > 0 && " · "}
+                            {p.messageCount > 0 && `${p.messageCount} msgs`}
+                          </div>
+                        </div>
+                        <button
+                          onClick={async () => {
+                            setData((d) => d ? { ...d, people: d.people.map((pp) => pp._id === p._id ? { ...pp, personType: "contact" as const } : pp) } : d);
+                            await fetch("/api/dashboard", {
+                              method: "POST",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({ token, action: "updateContact", contact: { _id: p._id, personType: "contact" } }),
+                            });
+                            await fetchData();
+                          }}
+                          className="text-[10px] text-blue-500 hover:text-blue-700 transition-colors whitespace-nowrap font-medium"
+                          title="Move to contacts"
+                        >
+                          → contact
+                        </button>
+                      </div>
+                      {p.context && <div className="text-xs text-gray-500 mt-1 ml-9">{p.context}</div>}
+                      {p.dumps && p.dumps.length > 0 && (
+                        <div className="mt-1.5 ml-9 space-y-1">
+                          {p.dumps.map((d, j) => (
+                            <div key={j} className="text-[10px] bg-white border border-gray-100 rounded px-2 py-1">
+                              <div className="text-gray-600">{d.text}</div>
+                              <div className="text-gray-300 mt-0.5">{formatET(d.createdAt)}</div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {memberTasks.length > 0 && (
+                        <div className="mt-1.5 ml-9">
+                          <div className="text-[10px] text-gray-400 mb-0.5">Tasks ({memberTasks.length})</div>
+                          {memberTasks.map((t) => (
+                            <div key={t._id} className="flex items-center gap-1.5 text-[10px]">
+                              <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${t.status === "done" ? "bg-green-400" : t.status === "upcoming" ? "bg-yellow-400" : "bg-blue-400"}`} />
+                              <span className={t.status === "done" ? "line-through text-gray-400" : "text-gray-700"}>{t.title}</span>
+                              <span className="text-gray-300 ml-auto">{t.status}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      <div className="mt-1.5 ml-9">
+                        {personDumpId === p._id ? (
+                          <div className="space-y-1.5">
+                            <textarea autoFocus value={personDumpText} onChange={(e) => setPersonDumpText(e.target.value)} placeholder={`Add info about ${p.username || p.firstName || "this person"}...`} rows={2} className="w-full px-2 py-1 border border-gray-200 rounded-lg text-[10px] focus:outline-none focus:ring-2 focus:ring-blue-200 resize-y" />
+                            <div className="flex gap-1.5">
+                              <button onClick={() => submitPersonDump(p._id)} disabled={personDumpSending || !personDumpText.trim()} className="text-[10px] bg-blue-600 text-white px-2 py-0.5 rounded font-medium disabled:opacity-50">{personDumpSending ? "Saving..." : "Save"}</button>
+                              <button onClick={() => { setPersonDumpId(null); setPersonDumpText(""); }} className="text-[10px] text-gray-400 hover:text-gray-600">Cancel</button>
+                            </div>
+                          </div>
+                        ) : (
+                          <button onClick={() => setPersonDumpId(p._id)} className="text-[10px] text-blue-600 hover:text-blue-700 font-medium">+ Add info</button>
+                        )}
                       </div>
                     </div>
-                    <button
-                      onClick={async () => {
-                        await fetch("/api/dashboard", {
-                          method: "POST",
-                          headers: { "Content-Type": "application/json" },
-                          body: JSON.stringify({ token, action: "updateContact", contact: { _id: p._id, personType: "contact" } }),
-                        });
-                        fetchData();
-                      }}
-                      className="text-[10px] text-gray-300 hover:text-blue-600 transition-colors whitespace-nowrap"
-                      title="Move to contacts"
-                    >
-                      → contact
-                    </button>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
 
               <div className="border-t border-gray-200 pt-4">
@@ -985,12 +1035,31 @@ export default function DashboardPage() {
                 </div>
               ) : actionForm.type === "dump" ? (
                 <div className="space-y-3">
+                  <div className="flex items-center gap-2">
+                    <select
+                      value={actionForm.dumpCategory || "general"}
+                      onChange={(e) => setActionForm((f) => ({ ...f, dumpCategory: e.target.value }))}
+                      className="px-2 py-1.5 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-200"
+                    >
+                      <option value="general">General</option>
+                      <option value="person">Person</option>
+                      <option value="business">Business</option>
+                      <option value="event">Event</option>
+                    </select>
+                    {(actionForm.dumpCategory || "general") !== "general" && (
+                      <input
+                        value={actionForm.dumpSubject || ""}
+                        onChange={(e) => setActionForm((f) => ({ ...f, dumpSubject: e.target.value }))}
+                        placeholder={`${(actionForm.dumpCategory || "person").charAt(0).toUpperCase() + (actionForm.dumpCategory || "person").slice(1)} name...`}
+                        className="flex-1 px-2 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
+                      />
+                    )}
+                  </div>
                   <div>
-                    <label className="text-xs text-gray-500 mb-1 block">Dump info</label>
                     <textarea
                       value={actionForm.dumpText}
                       onChange={(e) => setActionForm((f) => ({ ...f, dumpText: e.target.value }))}
-                      placeholder="Paste notes, context, meeting transcripts, links..."
+                      placeholder={((actionForm.dumpCategory || "general") === "general") ? "Paste notes, context, meeting transcripts, links..." : `Info about this ${actionForm.dumpCategory}...`}
                       rows={4}
                       className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 resize-y"
                     />
@@ -1052,6 +1121,14 @@ export default function DashboardPage() {
                   <div className="space-y-2 max-h-[250px] overflow-y-auto">
                     {data.chat.dumps.map((d, i) => (
                       <div key={i} className="bg-gray-50 border border-gray-100 rounded-lg px-3 py-2">
+                        <div className="flex items-center gap-1.5 mb-1">
+                          {d.category && d.category !== "general" && (
+                            <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${d.category === "person" ? "bg-indigo-100 text-indigo-700" : d.category === "business" ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>
+                              {d.category}
+                            </span>
+                          )}
+                          {d.subject && <span className="text-xs font-medium text-gray-700">{d.subject}</span>}
+                        </div>
                         <div className="text-sm text-gray-700">{d.text}</div>
                         <div className="text-xs text-gray-400 mt-1">{formatET(d.createdAt)} · {d.source}</div>
                       </div>
@@ -1064,10 +1141,30 @@ export default function DashboardPage() {
           {showDump && (
             <div className="mt-4 bg-white border border-gray-200 rounded-xl p-5 shadow-sm">
               <p className="text-sm text-gray-500 mb-3">Paste notes, context, meeting transcripts, links — anything to get the AI up to speed.</p>
+              <div className="flex items-center gap-2 mb-3">
+                <select
+                  value={dumpCategory}
+                  onChange={(e) => setDumpCategory(e.target.value)}
+                  className="px-2 py-1.5 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-200"
+                >
+                  <option value="general">General</option>
+                  <option value="person">Person</option>
+                  <option value="business">Business</option>
+                  <option value="event">Event</option>
+                </select>
+                {dumpCategory !== "general" && (
+                  <input
+                    value={dumpSubject}
+                    onChange={(e) => setDumpSubject(e.target.value)}
+                    placeholder={dumpCategory === "person" ? "Person name..." : dumpCategory === "business" ? "Business name..." : "Event name..."}
+                    className="flex-1 px-2 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
+                  />
+                )}
+              </div>
               <textarea
                 value={dumpText}
                 onChange={(e) => setDumpText(e.target.value)}
-                placeholder="Paste information here..."
+                placeholder={dumpCategory === "general" ? "Paste information here..." : `Info about this ${dumpCategory}...`}
                 rows={4}
                 className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 resize-y mb-3"
               />

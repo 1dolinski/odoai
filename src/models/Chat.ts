@@ -46,7 +46,7 @@ export interface IChat extends Document {
   watchSettings: IWatchSettings;
   messages: IMessage[];
   guidance: string;
-  dumps: { text: string; source: string; createdAt: Date }[];
+  dumps: { text: string; source: string; category: string; subject: string; createdAt: Date }[];
   contextSummary: string;
   lastSummaryAt: Date;
   lastSyncAt: Date;
@@ -92,7 +92,7 @@ const ChatSchema = new Schema<IChat>(
     },
     messages: [MessageSchema],
     guidance: { type: String, default: "" },
-    dumps: { type: [{ text: String, source: String, createdAt: { type: Date, default: Date.now } }], default: [] },
+    dumps: { type: [{ text: String, source: String, category: { type: String, default: "general" }, subject: { type: String, default: "" }, createdAt: { type: Date, default: Date.now } }], default: [] },
     contextSummary: { type: String, default: "" },
     lastSummaryAt: { type: Date },
     lastSyncAt: { type: Date },

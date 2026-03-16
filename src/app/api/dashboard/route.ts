@@ -329,10 +329,14 @@ export async function POST(req: NextRequest) {
   if (action === "dump" && body.text) {
     const text = (body.text as string).trim();
     if (!text) return NextResponse.json({ error: "text required" }, { status: 400 });
-    const entry = { text, source: "dashboard", createdAt: new Date() };
+    const category = (body.category as string || "general").trim();
+    const subject = (body.subject as string || "").trim();
+    const entry = { text, source: "dashboard", category, subject, createdAt: new Date() };
     await Chat.updateOne({ telegramChatId: chatId }, { $push: { dumps: entry } });
-    deepProcessDump(chatId, "dashboard", "dashboard", text).catch(console.error);
-    Activity.create({ telegramChatId: chatId, type: "dump", title: "Info dump", detail: text.substring(0, 100), actor: "dashboard" }).catch(console.error);
+    const dumpContext = subject ? `[${category}: ${subject}] ${text}` : text;
+    deepProcessDump(chatId, "dashboard", "dashboard", dumpContext).catch(console.error);
+    const titleLabel = subject ? `${category}: ${subject}` : `${category} dump`;
+    Activity.create({ telegramChatId: chatId, type: "dump", title: titleLabel, detail: text.substring(0, 100), actor: "dashboard" }).catch(console.error);
     return NextResponse.json({ ok: true });
   }
 
