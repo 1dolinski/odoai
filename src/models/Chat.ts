@@ -62,7 +62,7 @@ export interface IChat extends Document {
   lastSyncAt: Date;
   lastReviewedAt: Date;
   aiFeedEnabled: boolean;
-  aiFeed: { type: string; content: string; createdAt: Date }[];
+  aiFeed: { type: string; content: string; status: string; createdAt: Date }[];
   messagesSinceSummary: number;
   createdAt: Date;
   updatedAt: Date;
@@ -110,7 +110,7 @@ const ChatSchema = new Schema<IChat>(
     lastSyncAt: { type: Date },
     lastReviewedAt: { type: Date },
     aiFeedEnabled: { type: Boolean, default: false },
-    aiFeed: [{ type: { type: String }, content: String, createdAt: { type: Date, default: Date.now } }],
+    aiFeed: [{ type: { type: String }, content: String, status: { type: String, enum: ["new", "seen", "actioned"], default: "new" }, createdAt: { type: Date, default: Date.now } }],
     messagesSinceSummary: { type: Number, default: 0 },
   },
   { timestamps: true }

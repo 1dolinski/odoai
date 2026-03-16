@@ -127,7 +127,7 @@ interface DashboardData {
     lastSyncAt: string | null;
     lastReviewedAt: string | null;
     aiFeedEnabled: boolean;
-    aiFeed: { type: string; content: string; createdAt: string }[];
+    aiFeed: { type: string; content: string; status?: string; createdAt: string }[];
     watchSettings: WatchSettings;
     contextSummary: string;
     messageCount: number;
@@ -225,7 +225,6 @@ export default function DashboardPage() {
   const [generatingSubtasks, setGeneratingSubtasks] = useState<string | null>(null);
   const [newSubtaskText, setNewSubtaskText] = useState<Record<string, string>>({});
   const [feedGenerating, setFeedGenerating] = useState(false);
-  const [seenFeedItems, setSeenFeedItems] = useState<Set<number>>(new Set());
   const [feedQuestion, setFeedQuestion] = useState<{ index: number; text: string } | null>(null);
   const [feedQuestionLoading, setFeedQuestionLoading] = useState(false);
   const [feedAnswers, setFeedAnswers] = useState<Record<number, string>>({});
@@ -540,7 +539,6 @@ export default function DashboardPage() {
         const newEntries = json.items.map((i: { type: string; content: string }) => ({ type: i.type, content: i.content, createdAt: now }));
         setData((d) => d ? { ...d, chat: { ...d.chat, aiFeed: [...newEntries, ...d.chat.aiFeed] } } : d);
       }
-      setSeenFeedItems(new Set());
       setFeedAnswers({});
     } catch (e) {
       console.error("generateFeed error:", e);
@@ -776,7 +774,7 @@ export default function DashboardPage() {
               ) : (
                 <div className="space-y-2 max-h-[400px] overflow-y-auto">
                   {data.chat.aiFeed.map((item, i) => {
-                    if (seenFeedItems.has(i)) return null;
+                    if (item.status === "seen" || item.status === "actioned") return null;
                     const typeConfig: Record<string, { icon: string; color: string; bg: string }> = {
                       cleanup: { icon: "🧹", color: "text-orange-700", bg: "bg-orange-50 border-orange-200" },
                       suggestion: { icon: "💡", color: "text-blue-700", bg: "bg-blue-50 border-blue-200" },
@@ -829,13 +827,17 @@ export default function DashboardPage() {
                             )}
                             <div className="flex items-center gap-2 mt-2">
                               <button
-                                onClick={() => setSeenFeedItems((prev) => new Set(prev).add(i))}
+                                onClick={async () => {
+                                  setData((d) => d ? { ...d, chat: { ...d.chat, aiFeed: d.chat.aiFeed.map((f, fi) => fi === i ? { ...f, status: "seen" } : f) } } : d);
+                                  fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "feedItemStatus", feedIndex: i, status: "seen" }) });
+                                }}
                                 className="text-[10px] text-gray-400 hover:text-gray-600 font-medium transition-colors"
                               >✓ Seen</button>
                               <button
                                 onClick={async () => {
+                                  setData((d) => d ? { ...d, chat: { ...d.chat, aiFeed: d.chat.aiFeed.map((f, fi) => fi === i ? { ...f, status: "actioned" } : f) } } : d);
                                   await fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "addTask", task: { title: item.content.length > 80 ? item.content.slice(0, 80) + "..." : item.content, status: "todo", description: item.content } }) });
-                                  setSeenFeedItems((prev) => new Set(prev).add(i));
+                                  fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "feedItemStatus", feedIndex: i, status: "actioned" }) });
                                   fetchData();
                                 }}
                                 className="text-[10px] text-indigo-500 hover:text-indigo-700 font-medium transition-colors"
@@ -850,6 +852,11 @@ export default function DashboardPage() {
                       </div>
                     );
                   })}
+                  {(() => {
+                    const dismissed = data.chat.aiFeed.filter((f) => f.status === "seen" || f.status === "actioned").length;
+                    if (!dismissed) return null;
+                    return <p className="text-[10px] text-gray-400 mt-2 text-center">{dismissed} dismissed item{dismissed !== 1 ? "s" : ""}</p>;
+                  })()}
                 </div>
               )}
             </div>

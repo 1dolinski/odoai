@@ -476,6 +476,16 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, items });
   }
 
+  if (action === "feedItemStatus" && typeof body.feedIndex === "number" && body.status) {
+    const chatDoc = await Chat.findOne({ telegramChatId: chatId });
+    if (chatDoc && chatDoc.aiFeed[body.feedIndex]) {
+      chatDoc.aiFeed[body.feedIndex].status = body.status;
+      chatDoc.markModified("aiFeed");
+      await chatDoc.save();
+    }
+    return NextResponse.json({ ok: true });
+  }
+
   if (action === "clearFeed") {
     await Chat.updateOne({ telegramChatId: chatId }, { $set: { aiFeed: [] } });
     return NextResponse.json({ ok: true });
