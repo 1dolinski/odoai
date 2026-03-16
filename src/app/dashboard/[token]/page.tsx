@@ -529,12 +529,19 @@ export default function DashboardPage() {
   async function generateFeed() {
     setFeedGenerating(true);
     try {
-      await fetch("/api/dashboard", {
+      const res = await fetch("/api/dashboard", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ token, action: "generateFeed" }),
       });
-      await fetchData();
+      const json = await res.json();
+      if (json.items?.length) {
+        const now = new Date().toISOString();
+        const newEntries = json.items.map((i: { type: string; content: string }) => ({ type: i.type, content: i.content, createdAt: now }));
+        setData((d) => d ? { ...d, chat: { ...d.chat, aiFeed: [...newEntries, ...d.chat.aiFeed] } } : d);
+      }
+      setSeenFeedItems(new Set());
+      setFeedAnswers({});
     } catch (e) {
       console.error("generateFeed error:", e);
     }
