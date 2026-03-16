@@ -173,6 +173,10 @@ export async function PATCH(req: NextRequest) {
     await Chat.updateOne({ dashboardToken: token }, { $set: update });
   }
 
+  if (typeof abilities === "string" && abilities.trim()) {
+    writeKnowledge(chat.telegramChatId, "context", "team-abilities", `# Team Abilities & Resources\n\n${abilities.trim()}`).catch(console.error);
+  }
+
   return NextResponse.json({ ok: true, aiStyle: update.aiStyle ?? chat.aiStyle, watchSettings: update.watchSettings ?? chat.watchSettings });
   } catch (err) {
     console.error("PATCH /api/dashboard error:", err);
@@ -498,6 +502,7 @@ export async function POST(req: NextRequest) {
     const entry = { id, name: name.trim(), description: (description || "").trim(), status: "active", createdAt: new Date() };
     await Chat.updateOne({ telegramChatId: chatId }, { $push: { initiatives: entry } });
     Activity.create({ telegramChatId: chatId, type: "dump", title: `Initiative: ${name.trim()}`, detail: (description || "").substring(0, 100), actor: "dashboard" }).catch(console.error);
+    writeKnowledge(chatId, "context", `initiative-${id}`, `# Initiative: ${name.trim()}\n\n${(description || "").trim() || "No description."}\n\nStatus: active\nCreated: ${new Date().toISOString().split("T")[0]}`).catch(console.error);
     return NextResponse.json({ ok: true, initiative: entry });
   }
 

@@ -1,5 +1,5 @@
 import { chat as aiChat } from "@/lib/openrouter";
-import { qmdSearch, writeDump, writeContextSummary, writePeopleSnapshot, writePersonKnowledge, writeTasksSnapshot, formatQMDResults } from "@/lib/knowledge";
+import { qmdSearch, writeKnowledge, writeDump, writeContextSummary, writePeopleSnapshot, writePersonKnowledge, writeTasksSnapshot, formatQMDResults } from "@/lib/knowledge";
 import Chat, { WATCH_DEFAULTS } from "@/models/Chat";
 import Task from "@/models/Task";
 import Person from "@/models/Person";
@@ -586,37 +586,71 @@ export async function generateAiFeed(chatId: string): Promise<{ type: string; co
   const openTasks = tasks.filter((t) => (t as { status: string }).status !== "done");
   const doneTasks = tasks.filter((t) => (t as { status: string }).status === "done");
   const taskSummary = openTasks.map((t) => `[${(t as { status: string }).status}] ${(t as { title: string }).title}`).join("\n") || "none";
-  const peopleSummary = people.map((p) => `${(p as { username?: string; firstName?: string }).username || (p as { username?: string; firstName?: string }).firstName}`).filter(Boolean).join(", ") || "none";
+  const peopleSummary = people.map((p) => {
+    const name = (p as { username?: string; firstName?: string }).username || (p as { username?: string; firstName?: string }).firstName;
+    const role = (p as { role?: string }).role;
+    const intentions = (p as { intentions?: string[] }).intentions || [];
+    return name ? `${name}${role && role !== "null" ? ` (${role})` : ""}${intentions.length ? ` — ${intentions.join(", ")}` : ""}` : null;
+  }).filter(Boolean).join("\n") || "none";
 
   const existingFeed = (chatDoc.aiFeed || []).slice(-5).map((f: { content: string }) => f.content).join("\n");
+
+  const initiatives = (chatDoc.initiatives || []).filter((i: { status: string }) => i.status === "active");
+  const initiativeBlock = initiatives.length
+    ? initiatives.map((i: { name: string; description: string }) => `- ${i.name}${i.description ? `: ${i.description}` : ""}`).join("\n")
+    : "";
+
+  const abilitiesBlock = chatDoc.abilities || "";
+
+  const dumps = (chatDoc.dumps || []).slice(-10).map((d: { text: string; category: string; subject: string }) =>
+    `[${d.category}${d.subject ? `:${d.subject}` : ""}] ${d.text.substring(0, 150)}`
+  ).join("\n");
+
+  // Pull relevant context from QMD based on current tasks and recent chat
+  const searchQueries = [
+    openTasks.slice(0, 3).map((t) => (t as { title: string }).title).join(", "),
+    recentMessages.slice(-5).map((m: { content: string }) => m.content).join(" ").substring(0, 200),
+  ].filter((q) => q.length > 5);
+
+  let qmdContext = "";
+  for (const q of searchQueries) {
+    try {
+      const results = await qmdSearch(q, 4);
+      if (results.length) {
+        qmdContext += results.map((r) => `- ${r.title}: ${r.snippet?.substring(0, 150) || ""}`).join("\n") + "\n";
+      }
+    } catch { /* QMD unavailable */ }
+  }
 
   const response = await aiChat([
     {
       role: "system",
-      content: `You are an AI assistant reviewing a team's chat, tasks, and people. Generate actionable feed items.
+      content: `You are an AI assistant reviewing a team's chat, tasks, people, knowledge base, and initiatives. Generate actionable feed items that are timely, relevant, and leverage everything you know.
 
 Respond ONLY with valid JSON array. Each item: {"type": "cleanup"|"suggestion"|"checkin"|"insight"|"reminder"|"shout", "content": "..."}
 
 Types:
 - cleanup: duplicate tasks, stale todos, things that should be marked done or removed
-- suggestion: ideas, optimizations, next steps the team should consider
+- suggestion: ideas, optimizations, next steps the team should consider — leverage knowledge from dumps, people's abilities, and initiatives
 - checkin: status checks on open tasks, asking if something is done
-- insight: patterns you notice, connections between conversations and tasks
+- insight: patterns you notice, connections between conversations/tasks/people/knowledge — connect the dots
 - reminder: upcoming deadlines, things that need attention soon
 - shout: ONLY for truly high-impact, easy-win ideas worth interrupting the group for. Write these conversationally as if talking to friends: "hey guys, you should think about X because Y — it's pretty easy and could Z". Keep it casual and compelling. Use shout SPARINGLY — max 1 per generation, only if something is genuinely great.
 
 Rules:
 - Generate 2-5 items, whatever is genuinely useful
-- Be specific — reference actual task names, people, dates
+- Be specific — reference actual task names, people, dates, initiatives
+- Cross-reference knowledge base findings with current tasks to surface connections
+- Consider the team's abilities when suggesting actions — suggest things they can actually do
 - Don't repeat what's already in recent feed: ${existingFeed || "nothing yet"}
 - If nothing useful to say, return empty array []
 - Keep each item to 1-2 sentences (shout can be slightly longer)
 - Today is ${new Date().toISOString().split("T")[0]}
-- shout items get posted directly to the group chat, so make them count — only use for really obvious high-value, low-effort wins`,
+- shout items get posted directly to the group chat, so make them count`,
     },
     {
       role: "user",
-      content: `RECENT CHAT:\n${transcript || "no recent messages"}\n\nOPEN TASKS:\n${taskSummary}\n\nDONE TASKS (${doneTasks.length}):\n${doneTasks.slice(-5).map((t) => (t as { title: string }).title).join(", ") || "none"}\n\nPEOPLE: ${peopleSummary}\n\nCONTEXT: ${chatDoc.contextSummary || "none"}`,
+      content: `RECENT CHAT:\n${transcript || "no recent messages"}\n\nOPEN TASKS:\n${taskSummary}\n\nDONE TASKS (${doneTasks.length}):\n${doneTasks.slice(-5).map((t) => (t as { title: string }).title).join(", ") || "none"}\n\nPEOPLE:\n${peopleSummary}${initiativeBlock ? `\n\nACTIVE INITIATIVES:\n${initiativeBlock}` : ""}${abilitiesBlock ? `\n\nTEAM ABILITIES:\n${abilitiesBlock}` : ""}${dumps ? `\n\nRECENT DUMPS/NOTES:\n${dumps}` : ""}${qmdContext ? `\n\nKNOWLEDGE BASE (semantic memory — relevant stored info):\n${qmdContext}` : ""}\n\nCONTEXT: ${chatDoc.contextSummary || "none"}`,
     },
   ], "openai/gpt-4o-mini");
 
@@ -624,7 +658,15 @@ Rules:
     const cleaned = response.replace(/```json?\n?/g, "").replace(/```/g, "").trim();
     const items = JSON.parse(cleaned);
     if (!Array.isArray(items)) return [];
-    return items.filter((i: { type?: string; content?: string }) => i.type && i.content).slice(0, 5);
+    const filtered = items.filter((i: { type?: string; content?: string }) => i.type && i.content).slice(0, 5);
+
+    // Write insights back to QMD for future retrieval
+    if (filtered.length) {
+      const insightContent = filtered.map((i: { type: string; content: string }) => `[${i.type}] ${i.content}`).join("\n\n");
+      writeKnowledge(chatId, "context", `feed-${Date.now()}`, `# AI Feed Insights — ${new Date().toISOString().split("T")[0]}\n\n${insightContent}`).catch(console.error);
+    }
+
+    return filtered;
   } catch {
     return [];
   }
