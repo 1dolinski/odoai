@@ -3,6 +3,12 @@
 import { useEffect, useState, useCallback } from "react";
 import { useParams } from "next/navigation";
 
+interface Subtask {
+  id: string;
+  title: string;
+  done: boolean;
+}
+
 interface Task {
   _id: string;
   title: string;
@@ -11,6 +17,7 @@ interface Task {
   dueDate?: string;
   people?: string[];
   initiative?: string;
+  subtasks?: Subtask[];
   createdByUsername?: string;
   completedAt?: string;
   createdAt: string;
@@ -115,6 +122,7 @@ interface DashboardData {
     aiModel: string;
     aiStyle: string;
     guidance: string;
+    abilities: string;
     dumps: DumpEntry[];
     lastSyncAt: string | null;
     lastReviewedAt: string | null;
@@ -211,6 +219,11 @@ export default function DashboardPage() {
   const [showPeople, setShowPeople] = useState(false);
   const [showInitiatives, setShowInitiatives] = useState(false);
   const [showFeed, setShowFeed] = useState(false);
+  const [showAbilities, setShowAbilities] = useState(false);
+  const [abilitiesDraft, setAbilitiesDraft] = useState("");
+  const [abilitiesSaving, setAbilitiesSaving] = useState(false);
+  const [generatingSubtasks, setGeneratingSubtasks] = useState<string | null>(null);
+  const [newSubtaskText, setNewSubtaskText] = useState<Record<string, string>>({});
   const [feedGenerating, setFeedGenerating] = useState(false);
   const [newInitName, setNewInitName] = useState("");
   const [newInitDesc, setNewInitDesc] = useState("");
@@ -238,6 +251,12 @@ export default function DashboardPage() {
       setGuidanceText(data.chat.guidance);
     }
   }, [data, guidanceText, guidanceSaved]);
+
+  useEffect(() => {
+    if (data?.chat.abilities !== undefined && abilitiesDraft === "" && !abilitiesSaving) {
+      setAbilitiesDraft(data.chat.abilities);
+    }
+  }, [data, abilitiesDraft, abilitiesSaving]);
 
   async function setMode(newMode: string) {
     setData((d) => d ? { ...d, chat: { ...d.chat, mode: newMode } } : d);
@@ -674,12 +693,13 @@ export default function DashboardPage() {
               { key: "guidance", label: "Guidance", state: showGuidance, set: setShowGuidance },
               { key: "actions", label: "Quick Actions", state: showActions, set: setShowActions },
               { key: "watch", label: "Watch List", state: showWatch, set: setShowWatch },
+              { key: "abilities", label: "Abilities", state: showAbilities, set: setShowAbilities },
             ] as { key: string; label: string; state: boolean; set: (v: boolean) => void }[]).map((btn) => (
               <button
                 key={btn.key}
                 onClick={() => {
                   const next = !btn.state;
-                  setShowFeed(false); setShowPeople(false); setShowInitiatives(false); setShowContext(false); setShowDump(false); setShowGuidance(false); setShowActions(false); setShowWatch(false); setShowWallet(false);
+                  setShowFeed(false); setShowPeople(false); setShowInitiatives(false); setShowContext(false); setShowDump(false); setShowGuidance(false); setShowActions(false); setShowWatch(false); setShowWallet(false); setShowAbilities(false);
                   btn.set(next);
                 }}
                 className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all border ${
@@ -1586,6 +1606,37 @@ export default function DashboardPage() {
               </div>
             </div>
           )}
+
+          {showAbilities && (
+            <div className="mt-4 bg-white border border-gray-200 rounded-xl p-5 shadow-sm">
+              <h3 className="text-sm font-semibold text-gray-800 mb-1">Team Abilities & Resources</h3>
+              <p className="text-xs text-gray-500 mb-3">Describe what you and your team can do — skills, tools, access, budget. The AI uses this to tailor task breakdowns and subtask steps to what&apos;s actually achievable.</p>
+              <textarea
+                value={abilitiesDraft}
+                onChange={(e) => setAbilitiesDraft(e.target.value)}
+                placeholder="e.g. We can code in TypeScript/Python, have access to Figma, $500/mo budget for tools, can do video editing in DaVinci..."
+                className="w-full border border-gray-200 rounded-lg p-3 text-sm min-h-[100px] focus:ring-2 focus:ring-indigo-300 focus:border-indigo-400 outline-none"
+              />
+              <div className="flex items-center gap-2 mt-2">
+                <button
+                  disabled={abilitiesSaving}
+                  onClick={async () => {
+                    setAbilitiesSaving(true);
+                    await fetch("/api/dashboard", {
+                      method: "PATCH",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ token, abilities: abilitiesDraft }),
+                    });
+                    setAbilitiesSaving(false);
+                  }}
+                  className="px-4 py-2 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700 disabled:opacity-50 transition-colors"
+                >
+                  {abilitiesSaving ? "Saving..." : "Save"}
+                </button>
+                <span className="text-xs text-gray-400">Used by AI when generating subtask steps</span>
+              </div>
+            </div>
+          )}
         </section>
 
         {/* Task Board */}
@@ -1655,6 +1706,11 @@ export default function DashboardPage() {
                           </span>
                         )}
                         {t.initiative && (() => { const ini = (data.initiatives || []).find((i) => i.id === t.initiative); return ini ? (<span className="inline-flex items-center text-[10px] font-medium bg-purple-50 text-purple-600 border border-purple-100 rounded-full px-1.5 py-0.5 ml-1">{ini.name}</span>) : null; })()}
+                        {t.subtasks && t.subtasks.length > 0 && (
+                          <span className={`inline-flex items-center text-[10px] font-medium rounded-full px-1.5 py-0.5 ml-1 border ${t.subtasks.every((s) => s.done) ? "bg-green-50 text-green-600 border-green-100" : "bg-gray-50 text-gray-500 border-gray-200"}`}>
+                            {t.subtasks.filter((s) => s.done).length}/{t.subtasks.length} steps
+                          </span>
+                        )}
                       </div>
                       <div className="flex items-center gap-2 mt-0.5">
                         {t.createdByUsername && (
@@ -1750,6 +1806,74 @@ export default function DashboardPage() {
                           ))}
                         </select>
                       </div>
+                      {/* Subtasks */}
+                      <div className="pt-1.5 border-t border-gray-100 mt-1.5">
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="text-gray-400 font-medium">Steps:</span>
+                          <button
+                            onClick={async () => {
+                              setGeneratingSubtasks(t._id);
+                              const res = await fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "generateSubtasks", taskId: t._id }) });
+                              const json = await res.json();
+                              if (json.subtasks) {
+                                setData((d) => d ? { ...d, tasks: d.tasks.map((task) => task._id === t._id ? { ...task, subtasks: json.subtasks } : task) } : d);
+                              }
+                              setGeneratingSubtasks(null);
+                            }}
+                            disabled={generatingSubtasks === t._id}
+                            className="text-[10px] text-indigo-600 hover:text-indigo-700 font-medium disabled:opacity-50"
+                          >
+                            {generatingSubtasks === t._id ? "Generating..." : (t.subtasks && t.subtasks.length > 0 ? "🔄 Regenerate" : "🧩 Break down steps")}
+                          </button>
+                          {t.subtasks && t.subtasks.length > 0 && (
+                            <span className="text-[10px] text-gray-300">{t.subtasks.filter((s) => s.done).length}/{t.subtasks.length} done</span>
+                          )}
+                        </div>
+                        {t.subtasks && t.subtasks.length > 0 && (
+                          <div className="space-y-0.5 mb-1.5">
+                            {t.subtasks.map((sub) => (
+                              <div key={sub.id} className="flex items-center gap-1.5 group/sub">
+                                <button
+                                  onClick={async () => {
+                                    setData((d) => d ? { ...d, tasks: d.tasks.map((task) => task._id === t._id ? { ...task, subtasks: (task.subtasks || []).map((s) => s.id === sub.id ? { ...s, done: !s.done } : s) } : task) } : d);
+                                    await fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "toggleSubtask", taskId: t._id, subtaskId: sub.id }) });
+                                  }}
+                                  className={`w-3.5 h-3.5 rounded border flex items-center justify-center shrink-0 transition-colors ${sub.done ? "bg-green-500 border-green-500 text-white" : "border-gray-300 hover:border-indigo-400"}`}
+                                >
+                                  {sub.done && <svg className="w-2.5 h-2.5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" /></svg>}
+                                </button>
+                                <span className={`text-[10px] flex-1 ${sub.done ? "line-through text-gray-300" : "text-gray-600"}`}>{sub.title}</span>
+                                <button
+                                  onClick={async () => {
+                                    setData((d) => d ? { ...d, tasks: d.tasks.map((task) => task._id === t._id ? { ...task, subtasks: (task.subtasks || []).filter((s) => s.id !== sub.id) } : task) } : d);
+                                    await fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "removeSubtask", taskId: t._id, subtaskId: sub.id }) });
+                                  }}
+                                  className="text-[10px] text-gray-300 hover:text-red-400 opacity-0 group-hover/sub:opacity-100 transition-opacity shrink-0"
+                                >✕</button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        <div className="flex items-center gap-1">
+                          <input
+                            type="text"
+                            value={newSubtaskText[t._id] || ""}
+                            onChange={(e) => setNewSubtaskText((prev) => ({ ...prev, [t._id]: e.target.value }))}
+                            onKeyDown={async (e) => {
+                              if (e.key === "Enter" && (newSubtaskText[t._id] || "").trim()) {
+                                const title = newSubtaskText[t._id].trim();
+                                const tempSub = { id: `${Date.now()}-m`, title, done: false };
+                                setData((d) => d ? { ...d, tasks: d.tasks.map((task) => task._id === t._id ? { ...task, subtasks: [...(task.subtasks || []), tempSub] } : task) } : d);
+                                setNewSubtaskText((prev) => ({ ...prev, [t._id]: "" }));
+                                await fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "addSubtask", taskId: t._id, title }) });
+                              }
+                            }}
+                            placeholder="+ Add step..."
+                            className="flex-1 text-[10px] border border-gray-200 rounded px-1.5 py-0.5 focus:ring-1 focus:ring-indigo-300 focus:border-indigo-400 outline-none"
+                          />
+                        </div>
+                      </div>
+                      {/* Suggestions */}
                       <div className="pt-1.5 border-t border-gray-100 mt-1.5">
                         <button
                           onClick={async () => {

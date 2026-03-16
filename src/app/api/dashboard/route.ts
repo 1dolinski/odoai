@@ -42,6 +42,7 @@ export async function GET(req: NextRequest) {
       aiStyle: chat.aiStyle || "concise",
       watchSettings: { ...WATCH_DEFAULTS, ...chat.watchSettings },
       guidance: chat.guidance || "",
+      abilities: chat.abilities || "",
       dumps: (chat.dumps || []).sort((a: { createdAt: Date }, b: { createdAt: Date }) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()),
       contextSummary: chat.contextSummary,
       lastSyncAt: chat.lastSyncAt || null,
@@ -133,7 +134,7 @@ export async function PATCH(req: NextRequest) {
   await connectDB();
 
   const body = await req.json();
-  const { token, aiStyle, aiModel, watchSettings, chatTitle, mode, aiFeedEnabled } = body;
+  const { token, aiStyle, aiModel, watchSettings, chatTitle, mode, aiFeedEnabled, abilities } = body;
 
   if (!token) return NextResponse.json({ error: "token required" }, { status: 400 });
 
@@ -159,6 +160,10 @@ export async function PATCH(req: NextRequest) {
 
   if (aiModel && typeof aiModel === "string") {
     chat.aiModel = aiModel.trim();
+  }
+
+  if (typeof abilities === "string") {
+    chat.abilities = abilities;
   }
 
   if (watchSettings && typeof watchSettings === "object") {
@@ -524,6 +529,60 @@ export async function POST(req: NextRequest) {
     } catch {
       return NextResponse.json({ ok: true, suggestions: [] });
     }
+  }
+
+  if (action === "generateSubtasks" && body.taskId) {
+    const task = await Task.findOne({ _id: body.taskId, telegramChatId: chatId });
+    if (!task) return NextResponse.json({ error: "task not found" }, { status: 404 });
+    const chatDoc = await Chat.findOne({ telegramChatId: chatId });
+    const model = chatDoc?.aiModel || undefined;
+    const abilitiesCtx = chatDoc?.abilities ? `\nUser/team abilities & resources: ${chatDoc.abilities}` : "";
+    const response = await aiChat([
+      { role: "system", content: `You break tasks into simple, digestible subtasks (steps to completion). Each step should be concrete and achievable by someone with the described abilities. Return a JSON array of short step strings (3-8 steps). Only return the JSON array, no markdown fences or explanation.${abilitiesCtx}` },
+      { role: "user", content: `Task: "${task.title}"${task.description ? `\nDescription: ${task.description}` : ""}${chatDoc?.contextSummary ? `\nChat context: ${chatDoc.contextSummary}` : ""}${abilitiesCtx}\n\nBreak this into simple, digestible steps:` },
+    ], model);
+    try {
+      const cleaned = response.replace(/```json?\s*/g, "").replace(/```/g, "").trim();
+      const steps: string[] = JSON.parse(cleaned);
+      if (Array.isArray(steps)) {
+        const subtasks = steps.map((s, i) => ({ id: `${Date.now()}-${i}`, title: s, done: false }));
+        task.subtasks = subtasks;
+        await task.save();
+        return NextResponse.json({ ok: true, subtasks });
+      }
+      return NextResponse.json({ ok: true, subtasks: [] });
+    } catch {
+      return NextResponse.json({ ok: true, subtasks: [] });
+    }
+  }
+
+  if (action === "toggleSubtask" && body.taskId && body.subtaskId) {
+    const task = await Task.findOne({ _id: body.taskId, telegramChatId: chatId });
+    if (!task) return NextResponse.json({ error: "task not found" }, { status: 404 });
+    const sub = (task.subtasks || []).find((s: { id: string }) => s.id === body.subtaskId);
+    if (sub) {
+      sub.done = !sub.done;
+      await task.save();
+    }
+    return NextResponse.json({ ok: true, subtasks: task.subtasks });
+  }
+
+  if (action === "addSubtask" && body.taskId && body.title) {
+    const task = await Task.findOne({ _id: body.taskId, telegramChatId: chatId });
+    if (!task) return NextResponse.json({ error: "task not found" }, { status: 404 });
+    if (!task.subtasks) task.subtasks = [];
+    const newSub = { id: `${Date.now()}-m`, title: body.title, done: false };
+    task.subtasks.push(newSub);
+    await task.save();
+    return NextResponse.json({ ok: true, subtasks: task.subtasks });
+  }
+
+  if (action === "removeSubtask" && body.taskId && body.subtaskId) {
+    const task = await Task.findOne({ _id: body.taskId, telegramChatId: chatId });
+    if (!task) return NextResponse.json({ error: "task not found" }, { status: 404 });
+    task.subtasks = (task.subtasks || []).filter((s: { id: string }) => s.id !== body.subtaskId);
+    await task.save();
+    return NextResponse.json({ ok: true, subtasks: task.subtasks });
   }
 
   return NextResponse.json({ error: "unknown action" }, { status: 400 });

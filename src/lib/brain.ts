@@ -178,7 +178,7 @@ Available actions (embed naturally in your response, use MULTIPLE per message):
 COMMUNICATION STYLE: ${aiStyle.toUpperCase()}
 ${aiStyle === "concise" ? "Be brief and direct." : ""}${aiStyle === "detailed" ? "Give thorough explanations." : ""}${aiStyle === "casual" ? "Be friendly and informal." : ""}${aiStyle === "professional" ? "Be formal and structured." : ""}${aiStyle === "technical" ? "Be technical and precise." : ""}
 
-${guidance ? `CHAT GUIDANCE (custom instructions from the admin — follow these closely):\n${guidance}\n` : ""}CORE PRINCIPLES:
+${guidance ? `CHAT GUIDANCE (custom instructions from the admin — follow these closely):\n${guidance}\n` : ""}${chatDoc?.abilities ? `TEAM ABILITIES & RESOURCES (what the team/users can do — tailor task suggestions and subtask breakdowns to these capabilities):\n${chatDoc.abilities}\n\n` : ""}CORE PRINCIPLES:
 - You are an observer first, responder second
 - When you DO respond, be natural and conversational — not robotic
 - Use directives naturally within your response — use as MANY as needed per message, one per item

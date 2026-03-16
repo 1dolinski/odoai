@@ -2,6 +2,12 @@ import mongoose, { Schema, Document } from "mongoose";
 
 export type TaskStatus = "todo" | "upcoming" | "done";
 
+export interface ISubtask {
+  id: string;
+  title: string;
+  done: boolean;
+}
+
 export interface ITask extends Document {
   telegramChatId: string;
   title: string;
@@ -10,6 +16,7 @@ export interface ITask extends Document {
   dueDate?: Date;
   people: string[];
   initiative?: string;
+  subtasks: ISubtask[];
   createdBy: string;
   createdByUsername?: string;
   completedAt?: Date;
@@ -26,6 +33,7 @@ const TaskSchema = new Schema<ITask>(
     dueDate: Date,
     people: { type: [String], default: [] },
     initiative: { type: String, default: "" },
+    subtasks: { type: [{ id: String, title: String, done: { type: Boolean, default: false } }], default: [] },
     createdBy: { type: String, required: true },
     createdByUsername: String,
     completedAt: Date,
