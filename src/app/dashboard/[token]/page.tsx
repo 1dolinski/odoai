@@ -88,6 +88,7 @@ interface DashboardData {
     title: string;
     mode: string;
     aiStyle: string;
+    guidance: string;
     lastSyncAt: string | null;
     watchSettings: WatchSettings;
     contextSummary: string;
@@ -137,6 +138,12 @@ export default function DashboardPage() {
   const [contactForm, setContactForm] = useState({ name: "", role: "", email: "", phone: "", notes: "" });
   const [contactSaving, setContactSaving] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [dumpText, setDumpText] = useState("");
+  const [dumpSending, setDumpSending] = useState(false);
+  const [dumpSent, setDumpSent] = useState(false);
+  const [guidanceText, setGuidanceText] = useState("");
+  const [guidanceSaving, setGuidanceSaving] = useState(false);
+  const [guidanceSaved, setGuidanceSaved] = useState(false);
 
   const fetchData = useCallback(async () => {
     const res = await fetch(`/api/dashboard?token=${token}`);
@@ -150,6 +157,12 @@ export default function DashboardPage() {
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  useEffect(() => {
+    if (data?.chat.guidance !== undefined && guidanceText === "" && !guidanceSaved) {
+      setGuidanceText(data.chat.guidance);
+    }
+  }, [data, guidanceText, guidanceSaved]);
 
   async function setAiStyle(style: AiStyle) {
     setSaving(true);
@@ -203,6 +216,35 @@ export default function DashboardPage() {
     setShowAddContact(false);
     setContactSaving(false);
     fetchData();
+  }
+
+  async function submitDump() {
+    if (!dumpText.trim()) return;
+    setDumpSending(true);
+    setDumpSent(false);
+    await fetch("/api/dashboard", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token, action: "dump", text: dumpText }),
+    });
+    setDumpText("");
+    setDumpSending(false);
+    setDumpSent(true);
+    setTimeout(() => setDumpSent(false), 4000);
+    fetchData();
+  }
+
+  async function saveGuidance() {
+    setGuidanceSaving(true);
+    setGuidanceSaved(false);
+    await fetch("/api/dashboard", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token, action: "saveGuidance", guidance: guidanceText }),
+    });
+    setGuidanceSaving(false);
+    setGuidanceSaved(true);
+    setTimeout(() => setGuidanceSaved(false), 3000);
   }
 
   async function deleteContact(id: string) {
@@ -565,6 +607,61 @@ export default function DashboardPage() {
             ))}
           </div>
         </section>
+
+        {/* Dump Info + Chat Guidance */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-10">
+          <section>
+            <h2 className="text-lg font-semibold mb-2 text-gray-800">Dump Info</h2>
+            <p className="text-sm text-gray-500 mb-3">Paste notes, context, meeting transcripts, links — anything to get the AI up to speed.</p>
+            <div className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm">
+              <textarea
+                value={dumpText}
+                onChange={(e) => setDumpText(e.target.value)}
+                placeholder="Paste information here..."
+                rows={6}
+                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 resize-y mb-3"
+              />
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={submitDump}
+                  disabled={dumpSending || !dumpText.trim()}
+                  className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50 shadow-sm"
+                >
+                  {dumpSending ? "Processing..." : "Submit Dump"}
+                </button>
+                {dumpSent && (
+                  <span className="text-sm text-green-600 font-medium">Processed and indexed into memory</span>
+                )}
+              </div>
+            </div>
+          </section>
+
+          <section>
+            <h2 className="text-lg font-semibold mb-2 text-gray-800">Chat Guidance</h2>
+            <p className="text-sm text-gray-500 mb-3">Custom instructions for how the AI should behave in this chat. It will follow these closely.</p>
+            <div className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm">
+              <textarea
+                value={guidanceText}
+                onChange={(e) => { setGuidanceText(e.target.value); setGuidanceSaved(false); }}
+                placeholder="e.g. Always respond in Spanish. Focus on dev tasks. Don't mention competitor X..."
+                rows={6}
+                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 resize-y mb-3"
+              />
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={saveGuidance}
+                  disabled={guidanceSaving}
+                  className="bg-gray-800 hover:bg-gray-900 text-white px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50 shadow-sm"
+                >
+                  {guidanceSaving ? "Saving..." : "Save Guidance"}
+                </button>
+                {guidanceSaved && (
+                  <span className="text-sm text-green-600 font-medium">Saved and indexed</span>
+                )}
+              </div>
+            </div>
+          </section>
+        </div>
 
         {/* Active Jobs */}
         {data.jobs.length > 0 && (

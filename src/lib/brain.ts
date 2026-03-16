@@ -20,6 +20,7 @@ export async function buildSystemPrompt(chatId: string, userQuery?: string): Pro
   const mode = chatDoc?.mode || "passive";
   const aiStyle = chatDoc?.aiStyle || "concise";
   const contextSummary = chatDoc?.contextSummary || "No prior context yet.";
+  const guidance = chatDoc?.guidance || "";
   const watch = { ...WATCH_DEFAULTS, ...chatDoc?.watchSettings };
 
   const peopleBlock = people.length
@@ -102,7 +103,7 @@ You can take actions using directives embedded in your response:
 COMMUNICATION STYLE: ${aiStyle.toUpperCase()}
 ${aiStyle === "concise" ? "Be brief and direct." : ""}${aiStyle === "detailed" ? "Give thorough explanations." : ""}${aiStyle === "casual" ? "Be friendly and informal." : ""}${aiStyle === "professional" ? "Be formal and structured." : ""}${aiStyle === "technical" ? "Be technical and precise." : ""}
 
-CORE PRINCIPLES:
+${guidance ? `CHAT GUIDANCE (custom instructions from the admin — follow these closely):\n${guidance}\n` : ""}CORE PRINCIPLES:
 - You are an observer first, responder second
 - When you DO respond, be natural and conversational — not robotic
 - Use directives naturally within your response, not as a list of commands

@@ -7,7 +7,8 @@ import Person from "@/models/Person";
 import Job from "@/models/Job";
 import Check from "@/models/Check";
 import Activity from "@/models/Activity";
-import { autoExtract, maybeUpdateContext } from "@/lib/brain";
+import { autoExtract, maybeUpdateContext, deepProcessDump } from "@/lib/brain";
+import { writeKnowledge } from "@/lib/knowledge";
 
 export async function GET(req: NextRequest) {
   await connectDB();
@@ -37,6 +38,7 @@ export async function GET(req: NextRequest) {
       mode: chat.mode,
       aiStyle: chat.aiStyle || "concise",
       watchSettings: { ...WATCH_DEFAULTS, ...chat.watchSettings },
+      guidance: chat.guidance || "",
       contextSummary: chat.contextSummary,
       lastSyncAt: chat.lastSyncAt || null,
       messageCount: chat.messages?.length || 0,
@@ -189,6 +191,22 @@ export async function POST(req: NextRequest) {
   if (action === "deleteContact" && contact?._id) {
     await Person.deleteOne({ _id: contact._id, telegramChatId: chatId, source: "manual" });
     return NextResponse.json({ ok: true });
+  }
+
+  if (action === "dump" && body.text) {
+    const text = (body.text as string).trim();
+    if (!text) return NextResponse.json({ error: "text required" }, { status: 400 });
+    deepProcessDump(chatId, "dashboard", "dashboard", text).catch(console.error);
+    return NextResponse.json({ ok: true });
+  }
+
+  if (action === "saveGuidance") {
+    const guidance = (body.guidance as string || "").trim();
+    await Chat.updateOne({ telegramChatId: chatId }, { $set: { guidance } });
+    if (guidance) {
+      writeKnowledge(chatId, "context", "chat-guidance", `# Chat Guidance\n\n${guidance}`).catch(console.error);
+    }
+    return NextResponse.json({ ok: true, guidance });
   }
 
   return NextResponse.json({ error: "unknown action" }, { status: 400 });
