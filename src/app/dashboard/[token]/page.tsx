@@ -734,6 +734,7 @@ function activityIcon(type: string) {
     style_changed: "🎨",
     mode_changed: "🔄",
     dump: "📦",
+    ai_triggered: "⚡",
   };
   return icons[type] || "•";
 }
@@ -750,6 +751,7 @@ function activityLabel(type: string) {
     style_changed: "style",
     mode_changed: "mode",
     dump: "dump",
+    ai_triggered: "triggered",
   };
   return labels[type] || type;
 }
@@ -766,6 +768,7 @@ function activityBadge(type: string) {
     style_changed: "bg-pink-100 text-pink-700",
     mode_changed: "bg-indigo-100 text-indigo-700",
     dump: "bg-gray-100 text-gray-600",
+    ai_triggered: "bg-orange-100 text-orange-700",
   };
   return badges[type] || "bg-gray-100 text-gray-500";
 }

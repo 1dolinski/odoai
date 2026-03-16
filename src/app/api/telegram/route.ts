@@ -765,6 +765,14 @@ export async function POST(req: NextRequest) {
 
     // If mentioned or in DM — sync up, then respond based on user intent
     if (isMentioned || isPrivate) {
+      const trigger = isPrivate ? "dm" : text.includes(BOT_USERNAME) ? "mention" : "emoji";
+      Activity.create({
+        telegramChatId: String(chatId),
+        type: "ai_triggered",
+        title: `AI triggered via ${trigger}`,
+        detail: cleanText.substring(0, 120),
+        actor: username || userId,
+      }).catch(console.error);
       await Promise.all([
         autoExtract(String(chatId), true),
         maybeUpdateContext(String(chatId)),
@@ -777,6 +785,13 @@ export async function POST(req: NextRequest) {
     // Active mode: maybe proactively suggest something useful
     const suggestion = await maybeProactiveSuggest(String(chatId));
     if (suggestion) {
+      Activity.create({
+        telegramChatId: String(chatId),
+        type: "ai_triggered",
+        title: "AI proactive suggestion",
+        detail: suggestion.substring(0, 120),
+        actor: "odoai",
+      }).catch(console.error);
       await sendMessage(chatId, suggestion, "");
       await Chat.findOneAndUpdate(
         { telegramChatId: String(chatId) },

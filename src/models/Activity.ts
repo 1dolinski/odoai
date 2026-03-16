@@ -10,7 +10,8 @@ export type ActivityType =
   | "check_completed"
   | "style_changed"
   | "mode_changed"
-  | "dump";
+  | "dump"
+  | "ai_triggered";
 
 export interface IActivity extends Document {
   telegramChatId: string;
