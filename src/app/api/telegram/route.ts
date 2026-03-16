@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { connectDB } from "@/lib/mongodb";
-import { sendMessage, sendMessageWithButtons } from "@/lib/telegram";
+import { sendMessage, sendMessageWithButtons, getChatAdmins, reactToMessage } from "@/lib/telegram";
 import { chat as aiChat, chatWithUsage } from "@/lib/openrouter";
 import { webSearch } from "@/lib/search";
 import { qmdSearch, qmdStatus, formatQMDResults, writePeopleSnapshot } from "@/lib/knowledge";
@@ -333,11 +333,43 @@ async function cmdDashboard(chatId: number) {
 
 // ---- Conversational response (mention / DM) ----
 
+function normalize(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9 ]/g, "").replace(/\s+/g, " ").trim();
+}
+
+function wordSet(s: string): Set<string> {
+  return new Set(normalize(s).split(" ").filter(Boolean));
+}
+
+function isSimilarTask(a: string, b: string): boolean {
+  const na = normalize(a);
+  const nb = normalize(b);
+  if (na === nb) return true;
+  if (na.includes(nb) || nb.includes(na)) return true;
+  const wa = wordSet(a);
+  const wb = wordSet(b);
+  const intersection = [...wa].filter((w) => wb.has(w));
+  const union = new Set([...wa, ...wb]);
+  const jaccard = intersection.length / union.size;
+  return jaccard >= 0.6;
+}
+
+async function findSimilarTask(chatId: string, title: string): Promise<{ _id: string; title: string; status: string } | null> {
+  const tasks = await Task.find({ telegramChatId: chatId }).lean();
+  for (const t of tasks) {
+    if (isSimilarTask(title, (t as { title: string }).title)) {
+      return t as { _id: string; title: string; status: string };
+    }
+  }
+  return null;
+}
+
 async function handleConversation(
   chatId: number,
   userId: string,
   username: string | undefined,
-  text: string
+  text: string,
+  opts?: { silent?: boolean; messageId?: number }
 ): Promise<string[]> {
   const cid = String(chatId);
 
@@ -369,13 +401,16 @@ async function handleConversation(
     const parts = m[1].split("|").map((s) => s.trim());
     const title = parts[0];
     const dueDate = parts[1] && /\d{4}-\d{2}-\d{2}/.test(parts[1]) ? new Date(parts[1]) : undefined;
-    const update: Record<string, unknown> = { status: "todo", createdBy: userId, createdByUsername: username };
-    if (dueDate) update.dueDate = dueDate;
-    await Task.findOneAndUpdate(
-      { telegramChatId: cid2, title },
-      { $set: update },
-      { upsert: true }
-    );
+    const existing = await findSimilarTask(cid2, title);
+    if (existing) {
+      const upd: Record<string, unknown> = {};
+      if (dueDate) upd.dueDate = dueDate;
+      if (Object.keys(upd).length) await Task.updateOne({ _id: existing._id }, { $set: upd });
+      continue;
+    }
+    const taskData: Record<string, unknown> = { telegramChatId: cid2, title, status: "todo", createdBy: userId, createdByUsername: username };
+    if (dueDate) taskData.dueDate = dueDate;
+    await Task.create(taskData);
     actions.push(`+ todo: ${title}${dueDate ? ` (due ${parts[1]})` : ""}`);
     Activity.create({ telegramChatId: cid2, type: "task_added", title, detail: dueDate ? `due ${parts[1]}` : undefined, actor: username || userId }).catch(console.error);
   }
@@ -385,13 +420,16 @@ async function handleConversation(
     const parts = m[1].split("|").map((s) => s.trim());
     const title = parts[0];
     const dueDate = parts[1] && /\d{4}-\d{2}-\d{2}/.test(parts[1]) ? new Date(parts[1]) : undefined;
-    const update: Record<string, unknown> = { status: "upcoming", createdBy: userId, createdByUsername: username };
-    if (dueDate) update.dueDate = dueDate;
-    await Task.findOneAndUpdate(
-      { telegramChatId: cid2, title },
-      { $set: update },
-      { upsert: true }
-    );
+    const existing = await findSimilarTask(cid2, title);
+    if (existing) {
+      const upd: Record<string, unknown> = {};
+      if (dueDate) upd.dueDate = dueDate;
+      if (Object.keys(upd).length) await Task.updateOne({ _id: existing._id }, { $set: upd });
+      continue;
+    }
+    const taskData: Record<string, unknown> = { telegramChatId: cid2, title, status: "upcoming", createdBy: userId, createdByUsername: username };
+    if (dueDate) taskData.dueDate = dueDate;
+    await Task.create(taskData);
     actions.push(`+ upcoming: ${title}${dueDate ? ` (due ${parts[1]})` : ""}`);
     Activity.create({ telegramChatId: cid2, type: "task_upcoming", title, detail: dueDate ? `due ${parts[1]}` : undefined, actor: username || userId }).catch(console.error);
   }
@@ -565,11 +603,20 @@ Do NOT schedule for casual chitchat or completed items. Be smart about timing �
     .replace(/\[(?:SEARCH|RECALL|ADD_TODO|ADD_UPCOMING|MARK_DONE|ADD_PERSON|ADD_RELATIONSHIP|SCHEDULE_CHECK|SET_STYLE|SET_CHECK_PACE):\s*.+?\]/gi, "")
     .trim();
 
-  if (actions.length) {
-    cleanResponse += "\n\n" + actions.join("\n");
-  }
+  const hasDate = todoMatches.some((m) => /\d{4}-\d{2}-\d{2}/.test(m[1]))
+    || upcomingMatches.some((m) => /\d{4}-\d{2}-\d{2}/.test(m[1]))
+    || checkMatches.length > 0;
 
-  await sendMessage(chatId, cleanResponse);
+  if (opts?.silent && opts.messageId) {
+    if (actions.length > 0 || hasDate) {
+      await reactToMessage(chatId, opts.messageId, actions.length, hasDate);
+    }
+  } else {
+    if (actions.length) {
+      cleanResponse += "\n\n" + actions.join("\n");
+    }
+    await sendMessage(chatId, cleanResponse);
+  }
 
   await Chat.findOneAndUpdate(
     { telegramChatId: cid2 },
@@ -592,10 +639,40 @@ export async function POST(req: NextRequest) {
     // Handle new members joining the chat
     if (msg.new_chat_members?.length) {
       const chatId = String(msg.chat.id);
+      const botId = await getBotId();
+      const botJoined = msg.new_chat_members.some((m) => m.id === botId);
+
       for (const member of msg.new_chat_members) {
-        if (member.id === (await getBotId())) continue;
+        if (member.id === botId) continue;
         await extractPersonInfo(chatId, String(member.id), member.username, member.first_name, "");
       }
+
+      // When bot joins, also sync all admins/members from Telegram API
+      if (botJoined) {
+        const admins = await getChatAdmins(msg.chat.id);
+        for (const member of admins) {
+          if (member.isBot) continue;
+          const exists = await Person.findOne({
+            telegramChatId: chatId,
+            telegramUserId: String(member.userId),
+          });
+          if (!exists) {
+            await Person.create({
+              telegramChatId: chatId,
+              telegramUserId: String(member.userId),
+              username: member.username || "",
+              firstName: member.firstName || "",
+              role: member.status === "creator" ? "owner" : member.status === "administrator" ? "admin" : "",
+              source: "telegram",
+              intentions: [],
+              relationships: [],
+              messageCount: 0,
+              lastSeen: new Date(),
+            });
+          }
+        }
+      }
+
       const names = msg.new_chat_members
         .filter((m) => m.username !== "odoai_bot")
         .map((m) => `@${m.username || m.first_name}`);
@@ -617,10 +694,9 @@ export async function POST(req: NextRequest) {
           },
           { upsert: true }
         );
-        // Write updated people snapshot to QMD
-        const people = await Person.find({ telegramChatId: chatId }).lean();
-        writePeopleSnapshot(chatId, people).catch(console.error);
       }
+      const people = await Person.find({ telegramChatId: chatId }).lean();
+      writePeopleSnapshot(chatId, people).catch(console.error);
       return NextResponse.json({ ok: true });
     }
 
@@ -731,6 +807,7 @@ export async function POST(req: NextRequest) {
     if (isMentioned || isPrivate) {
       const cid = String(chatId);
       const trigger = isPrivate ? "dm" : text.includes(BOT_USERNAME) ? "mention" : "emoji";
+      const isSilent = trigger === "emoji";
       Activity.create({
         telegramChatId: cid,
         type: "ai_triggered",
@@ -738,10 +815,12 @@ export async function POST(req: NextRequest) {
         detail: cleanText.substring(0, 120),
         actor: username || userId,
       }).catch(console.error);
-      // Sync in background — don't block the response
       autoExtract(cid, true).catch(console.error);
       maybeUpdateContext(cid).catch(console.error);
-      const actions = await handleConversation(chatId, userId, username, cleanText);
+      const actions = await handleConversation(chatId, userId, username, cleanText, {
+        silent: isSilent,
+        messageId: msg.message_id,
+      });
       Chat.updateOne({ telegramChatId: cid }, { $set: { lastReviewedAt: new Date() } }).catch(console.error);
       Activity.create({
         telegramChatId: cid,
@@ -758,7 +837,7 @@ export async function POST(req: NextRequest) {
     // Check mode for non-mentioned messages
     const chatMode = (await Chat.findOne({ telegramChatId: String(chatId) }))?.mode || "passive";
 
-    // Aggressive mode: AI reviews every message and responds
+    // Aggressive mode: AI reviews every message silently — react with emoji only
     if (chatMode === "aggressive") {
       const cid = String(chatId);
       Activity.create({
@@ -769,7 +848,10 @@ export async function POST(req: NextRequest) {
         actor: username || userId,
       }).catch(console.error);
       autoExtract(cid, true).catch(console.error);
-      const actions = await handleConversation(chatId, userId, username, cleanText);
+      const actions = await handleConversation(chatId, userId, username, cleanText, {
+        silent: true,
+        messageId: msg.message_id,
+      });
       Chat.updateOne({ telegramChatId: cid }, { $set: { lastReviewedAt: new Date() } }).catch(console.error);
       Activity.create({
         telegramChatId: cid,

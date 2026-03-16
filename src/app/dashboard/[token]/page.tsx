@@ -151,11 +151,13 @@ export default function DashboardPage() {
   const [guidanceSaved, setGuidanceSaved] = useState(false);
   const [taskFilter, setTaskFilter] = useState<"all" | "todo" | "upcoming" | "done">("all");
   const [showCalendar, setShowCalendar] = useState(false);
+  const [syncingMembers, setSyncingMembers] = useState(false);
   const [personDumpId, setPersonDumpId] = useState<string | null>(null);
   const [personDumpText, setPersonDumpText] = useState("");
   const [personDumpSending, setPersonDumpSending] = useState(false);
   const [showActions, setShowActions] = useState(false);
-  const [actionForm, setActionForm] = useState({ type: "todo" as string, title: "", dueDate: "", personName: "", personRole: "" });
+  const [showWatch, setShowWatch] = useState(false);
+  const [actionForm, setActionForm] = useState({ type: "todo" as string, title: "", dueDate: "", personName: "", personRole: "", statusTaskSearch: "", statusNewStatus: "done" as string, dumpText: "" });
   const [actionSaving, setActionSaving] = useState(false);
   const [actionDone, setActionDone] = useState("");
 
@@ -271,6 +273,18 @@ export default function DashboardPage() {
   }
 
   async function changeTaskStatus(taskId: string, taskTitle: string, newStatus: string) {
+    if (newStatus === "delete") {
+      setData((d) => {
+        if (!d) return d;
+        return { ...d, tasks: d.tasks.filter((t) => t._id !== taskId) };
+      });
+      await fetch("/api/dashboard", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token, action: "deleteTask", taskId }),
+      });
+      return;
+    }
     setData((d) => {
       if (!d) return d;
       return {
@@ -290,7 +304,6 @@ export default function DashboardPage() {
   }
 
   async function runAction() {
-    if (!actionForm.title.trim() && actionForm.type !== "person") return;
     setActionSaving(true);
     setActionDone("");
     if (actionForm.type === "person") {
@@ -301,7 +314,25 @@ export default function DashboardPage() {
         body: JSON.stringify({ token, action: "addContact", contact: { name: actionForm.personName, role: actionForm.personRole } }),
       });
       setActionDone(`Added contact: ${actionForm.personName}`);
+    } else if (actionForm.type === "status") {
+      if (!actionForm.statusTaskSearch.trim()) { setActionSaving(false); return; }
+      const match = data?.tasks.find((t) => t.title.toLowerCase().includes(actionForm.statusTaskSearch.toLowerCase()));
+      if (match) {
+        await changeTaskStatus(match._id, match.title, actionForm.statusNewStatus);
+        setActionDone(`${match.title} → ${actionForm.statusNewStatus}`);
+      } else {
+        setActionDone("No matching task found");
+      }
+    } else if (actionForm.type === "dump") {
+      if (!actionForm.dumpText.trim()) { setActionSaving(false); return; }
+      await fetch("/api/dashboard", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token, action: "dump", text: actionForm.dumpText }),
+      });
+      setActionDone("Dump processed and indexed");
     } else {
+      if (!actionForm.title.trim()) { setActionSaving(false); return; }
       const taskData: Record<string, string> = { title: actionForm.title, status: actionForm.type };
       if (actionForm.dueDate) taskData.dueDate = actionForm.dueDate;
       await fetch("/api/dashboard", {
@@ -311,7 +342,7 @@ export default function DashboardPage() {
       });
       setActionDone(`Added ${actionForm.type}: ${actionForm.title}`);
     }
-    setActionForm({ type: "todo", title: "", dueDate: "", personName: "", personRole: "" });
+    setActionForm((f) => ({ ...f, title: "", dueDate: "", personName: "", personRole: "", statusTaskSearch: "", dumpText: "" }));
     setActionSaving(false);
     fetchData();
     setTimeout(() => setActionDone(""), 3000);
@@ -329,6 +360,18 @@ export default function DashboardPage() {
     setPersonDumpId(null);
     setPersonDumpSending(false);
     fetchData();
+  }
+
+  async function syncMembers() {
+    setSyncingMembers(true);
+    const res = await fetch("/api/dashboard", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token, action: "syncMembers" }),
+    });
+    const result = await res.json();
+    if (result.added > 0) fetchData();
+    setSyncingMembers(false);
   }
 
   async function deleteContact(id: string) {
@@ -426,23 +469,19 @@ export default function DashboardPage() {
             </div>
           </div>
           <div className="flex items-center gap-3">
-            <div className="text-right">
-              <button
-                onClick={syncNow}
-                disabled={syncing}
-                className="flex items-center gap-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 transition-colors px-3 py-2 rounded-lg text-sm font-medium border border-gray-200 disabled:opacity-50"
-              >
-                <svg className={`w-4 h-4 ${syncing ? "animate-spin" : ""}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2" />
-                </svg>
-                {syncing ? "Syncing..." : "Sync"}
-              </button>
+            <button
+              onClick={syncNow}
+              disabled={syncing}
+              className="flex items-center gap-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 transition-colors px-4 py-2.5 rounded-lg text-sm font-medium border border-gray-200 disabled:opacity-50"
+            >
+              <svg className={`w-4 h-4 ${syncing ? "animate-spin" : ""}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2" />
+              </svg>
+              {syncing ? "Syncing..." : "Sync"}
               {data.chat.lastSyncAt && (
-                <div className="text-xs text-gray-400 mt-1">
-                  Last sync {formatRelativeTime(data.chat.lastSyncAt)}
-                </div>
+                <span className="text-xs text-gray-400 ml-1">· {formatRelativeTime(data.chat.lastSyncAt)}</span>
               )}
-            </div>
+            </button>
             <a
               href={`https://t.me/odoai_bot?start=open_${data.chat.telegramChatId}`}
               target="_blank"
@@ -455,15 +494,24 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {/* Quick Actions */}
+        {/* Quick Actions & Watch List */}
         <section className="mb-10">
-          <button
-            onClick={() => setShowActions(!showActions)}
-            className="flex items-center gap-2 text-lg font-semibold text-gray-800 hover:text-gray-600 transition-colors"
-          >
-            <svg className={`w-4 h-4 transition-transform ${showActions ? "rotate-90" : ""}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 18l6-6-6-6" /></svg>
-            Quick Actions
-          </button>
+          <div className="flex items-center gap-6">
+            <button
+              onClick={() => { setShowActions(!showActions); if (!showActions) setShowWatch(false); }}
+              className="flex items-center gap-2 text-lg font-semibold text-gray-800 hover:text-gray-600 transition-colors"
+            >
+              <svg className={`w-4 h-4 transition-transform ${showActions ? "rotate-90" : ""}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 18l6-6-6-6" /></svg>
+              Quick Actions
+            </button>
+            <button
+              onClick={() => { setShowWatch(!showWatch); if (!showWatch) setShowActions(false); }}
+              className="flex items-center gap-2 text-lg font-semibold text-gray-800 hover:text-gray-600 transition-colors"
+            >
+              <svg className={`w-4 h-4 transition-transform ${showWatch ? "rotate-90" : ""}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 18l6-6-6-6" /></svg>
+              Watch List
+            </button>
+          </div>
           {showActions && (
             <div className="mt-4 bg-white border border-gray-200 rounded-xl p-5 shadow-sm">
               <div className="flex gap-1 bg-gray-100 rounded-lg p-1 mb-4 w-fit">
@@ -472,6 +520,8 @@ export default function DashboardPage() {
                   { key: "upcoming", label: "Add Upcoming" },
                   { key: "done", label: "Log Done" },
                   { key: "person", label: "Add Person" },
+                  { key: "status", label: "Change Status" },
+                  { key: "dump", label: "Dump Info" },
                 ] as { key: string; label: string }[]).map((a) => (
                   <button
                     key={a.key}
@@ -495,6 +545,7 @@ export default function DashboardPage() {
                       value={actionForm.personName}
                       onChange={(e) => setActionForm((f) => ({ ...f, personName: e.target.value }))}
                       placeholder="Person name"
+                      onKeyDown={(e) => { if (e.key === "Enter") runAction(); }}
                       className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
                     />
                   </div>
@@ -504,6 +555,7 @@ export default function DashboardPage() {
                       value={actionForm.personRole}
                       onChange={(e) => setActionForm((f) => ({ ...f, personRole: e.target.value }))}
                       placeholder="Role (optional)"
+                      onKeyDown={(e) => { if (e.key === "Enter") runAction(); }}
                       className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
                     />
                   </div>
@@ -513,6 +565,71 @@ export default function DashboardPage() {
                     className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50 shrink-0"
                   >
                     {actionSaving ? "Adding..." : "Add"}
+                  </button>
+                </div>
+              ) : actionForm.type === "status" ? (
+                <div className="flex gap-3 items-end">
+                  <div className="flex-1">
+                    <label className="text-xs text-gray-500 mb-1 block">Search task</label>
+                    <input
+                      value={actionForm.statusTaskSearch}
+                      onChange={(e) => setActionForm((f) => ({ ...f, statusTaskSearch: e.target.value }))}
+                      placeholder="Type to find task..."
+                      onKeyDown={(e) => { if (e.key === "Enter") runAction(); }}
+                      className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
+                    />
+                    {actionForm.statusTaskSearch && data && (
+                      <div className="mt-1 space-y-0.5">
+                        {data.tasks
+                          .filter((t) => t.title.toLowerCase().includes(actionForm.statusTaskSearch.toLowerCase()))
+                          .slice(0, 5)
+                          .map((t) => (
+                            <div key={t._id} className="text-xs text-gray-500 px-1">
+                              <span className={`inline-block w-1.5 h-1.5 rounded-full mr-1 ${t.status === "done" ? "bg-green-400" : t.status === "upcoming" ? "bg-yellow-400" : "bg-blue-400"}`} />
+                              {t.title} <span className="text-gray-400">({t.status})</span>
+                            </div>
+                          ))}
+                      </div>
+                    )}
+                  </div>
+                  <div className="w-36">
+                    <label className="text-xs text-gray-500 mb-1 block">New status</label>
+                    <select
+                      value={actionForm.statusNewStatus}
+                      onChange={(e) => setActionForm((f) => ({ ...f, statusNewStatus: e.target.value }))}
+                      className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
+                    >
+                      <option value="todo">Todo</option>
+                      <option value="upcoming">Upcoming</option>
+                      <option value="done">Done</option>
+                    </select>
+                  </div>
+                  <button
+                    onClick={runAction}
+                    disabled={actionSaving || !actionForm.statusTaskSearch.trim()}
+                    className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50 shrink-0"
+                  >
+                    {actionSaving ? "Updating..." : "Update"}
+                  </button>
+                </div>
+              ) : actionForm.type === "dump" ? (
+                <div className="space-y-3">
+                  <div>
+                    <label className="text-xs text-gray-500 mb-1 block">Dump info</label>
+                    <textarea
+                      value={actionForm.dumpText}
+                      onChange={(e) => setActionForm((f) => ({ ...f, dumpText: e.target.value }))}
+                      placeholder="Paste notes, context, meeting transcripts, links..."
+                      rows={4}
+                      className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 resize-y"
+                    />
+                  </div>
+                  <button
+                    onClick={runAction}
+                    disabled={actionSaving || !actionForm.dumpText.trim()}
+                    className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50"
+                  >
+                    {actionSaving ? "Processing..." : "Submit Dump"}
                   </button>
                 </div>
               ) : (
@@ -551,31 +668,30 @@ export default function DashboardPage() {
               )}
             </div>
           )}
-        </section>
-
-        {/* Watch List */}
-        <section className="mb-10">
-          <h2 className="text-lg font-semibold mb-4 text-gray-800">Watch List</h2>
-          <p className="text-sm text-gray-500 mb-3">Toggle what odoai actively looks for in your conversations.</p>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            {WATCH_ITEMS.map((item) => (
-              <button
-                key={item.key}
-                onClick={() => toggleWatch(item.key)}
-                className={`p-3 rounded-lg border text-left transition-all ${
-                  data.chat.watchSettings[item.key]
-                    ? "border-green-400 bg-green-50 ring-1 ring-green-200"
-                    : "border-gray-200 bg-white hover:border-gray-300"
-                }`}
-              >
-                <div className="flex items-center justify-between mb-1">
-                  <span className="font-medium text-sm text-gray-900">{item.label}</span>
-                  <span className={`w-2 h-2 rounded-full ${data.chat.watchSettings[item.key] ? "bg-green-500" : "bg-gray-300"}`} />
-                </div>
-                <div className="text-xs text-gray-500">{item.desc}</div>
-              </button>
-            ))}
-          </div>
+          {showWatch && (
+            <div className="mt-4 bg-white border border-gray-200 rounded-xl p-5 shadow-sm">
+              <p className="text-sm text-gray-500 mb-3">Toggle what odoai actively looks for in your conversations.</p>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                {WATCH_ITEMS.map((item) => (
+                  <button
+                    key={item.key}
+                    onClick={() => toggleWatch(item.key)}
+                    className={`p-3 rounded-lg border text-left transition-all ${
+                      data.chat.watchSettings[item.key]
+                        ? "border-green-400 bg-green-50 ring-1 ring-green-200"
+                        : "border-gray-200 bg-white hover:border-gray-300"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="font-medium text-sm text-gray-900">{item.label}</span>
+                      <span className={`w-2 h-2 rounded-full ${data.chat.watchSettings[item.key] ? "bg-green-500" : "bg-gray-300"}`} />
+                    </div>
+                    <div className="text-xs text-gray-500">{item.desc}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
         </section>
 
         {/* Task Board */}
@@ -647,6 +763,7 @@ export default function DashboardPage() {
                     <option value="todo">todo</option>
                     <option value="upcoming">upcoming</option>
                     <option value="done">done</option>
+                    <option value="delete" className="text-red-600">🗑 delete</option>
                   </select>
                 </div>
               );
@@ -732,12 +849,21 @@ export default function DashboardPage() {
           <section>
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-semibold text-gray-800">Contacts</h2>
-              <button
-                onClick={() => setShowAddContact(!showAddContact)}
-                className="text-sm text-blue-600 hover:text-blue-700 font-medium"
-              >
-                {showAddContact ? "Cancel" : "+ Add Contact"}
-              </button>
+              <div className="flex gap-3">
+                <button
+                  onClick={syncMembers}
+                  disabled={syncingMembers}
+                  className="text-sm text-gray-500 hover:text-gray-700 font-medium"
+                >
+                  {syncingMembers ? "Syncing..." : "🔄 Sync"}
+                </button>
+                <button
+                  onClick={() => setShowAddContact(!showAddContact)}
+                  className="text-sm text-blue-600 hover:text-blue-700 font-medium"
+                >
+                  {showAddContact ? "Cancel" : "+ Add Contact"}
+                </button>
+              </div>
             </div>
 
             {showAddContact && (

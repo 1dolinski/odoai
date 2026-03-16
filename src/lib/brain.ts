@@ -9,6 +9,22 @@ import Activity from "@/models/Activity";
 const SUMMARIZE_EVERY = 10;
 const EXTRACT_EVERY = 5;
 
+function normalize(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9 ]/g, "").replace(/\s+/g, " ").trim();
+}
+
+function isSimilarTask(a: string, b: string): boolean {
+  const na = normalize(a);
+  const nb = normalize(b);
+  if (na === nb) return true;
+  if (na.includes(nb) || nb.includes(na)) return true;
+  const wa = new Set(na.split(" ").filter(Boolean));
+  const wb = new Set(nb.split(" ").filter(Boolean));
+  const intersection = [...wa].filter((w) => wb.has(w));
+  const union = new Set([...wa, ...wb]);
+  return intersection.length / union.size >= 0.6;
+}
+
 export async function buildSystemPrompt(chatId: string, userQuery?: string): Promise<string> {
   const [chatDoc, people, tasks, activeJobs] = await Promise.all([
     Chat.findOne({ telegramChatId: chatId }),
@@ -94,6 +110,8 @@ You have just been synced — you've caught up on all recent messages. Look at t
 You work ALONGSIDE the team. You are not a command executor — you are a collaborator. If someone says "search for X and add it in", you search and add tasks. If they say "get to work", review recent history and act on anything pending. If they just want to chat, chat.
 
 CRITICAL: Break every message into AS MANY individual actions as needed. A single message can contain multiple tasks, people, relationships, searches — extract ALL of them. "buy stands, book hotel, and check flights" = 3 separate ADD_TODO directives. "met John the designer and Sarah from marketing" = 2 separate ADD_PERSON directives. Never lump multiple items into one action. More granular = better.
+
+DEDUP: NEVER add a task that already exists in ACTIVE TASKS above, even if worded slightly differently. "print stand inserts" and "printing stand inserts" are the SAME task. "make QR code" and "making QR code" are the SAME task. Check the existing list carefully before adding. If a task is essentially the same thing, do NOT emit an ADD_TODO/ADD_UPCOMING directive for it.
 
 Available actions (embed naturally in your response, use MULTIPLE per message):
   [ADD_TODO: desc] or [ADD_TODO: desc | YYYY-MM-DD]
@@ -187,33 +205,31 @@ Rules:
     const cleaned = extraction.replace(/```json?\n?/g, "").replace(/```/g, "").trim();
     const data = JSON.parse(cleaned);
 
-    // Process tasks
+    // Process tasks (with fuzzy dedup)
     if (data.tasks?.length) {
+      const allTasks = await Task.find({ telegramChatId: chatId }).lean();
       for (const t of data.tasks) {
         if (!t.title) continue;
-        const existing = await Task.findOne({
+        const isDupe = allTasks.some((ex) => isSimilarTask(t.title, (ex as { title: string }).title));
+        if (isDupe) continue;
+        const taskData: Record<string, unknown> = {
           telegramChatId: chatId,
-          title: { $regex: new RegExp(`^${t.title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i") },
-        });
-        if (!existing) {
-          const taskData: Record<string, unknown> = {
-            telegramChatId: chatId,
-            title: t.title,
-            status: t.status || "todo",
-            createdBy: "odoai",
-            createdByUsername: "odoai",
-          };
-          if (t.dueDate && /\d{4}-\d{2}-\d{2}/.test(t.dueDate)) {
-            taskData.dueDate = new Date(t.dueDate);
-          }
-          await Task.create(taskData);
-          const type = t.status === "upcoming" ? "task_upcoming" : "task_added";
-          Activity.create({
-            telegramChatId: chatId, type, title: t.title,
-            detail: `inferred${t.assignee ? ` (${t.assignee})` : ""}${t.dueDate ? ` due ${t.dueDate}` : ""}`,
-            actor: "odoai",
-          }).catch(console.error);
+          title: t.title,
+          status: t.status || "todo",
+          createdBy: "odoai",
+          createdByUsername: "odoai",
+        };
+        if (t.dueDate && /\d{4}-\d{2}-\d{2}/.test(t.dueDate)) {
+          taskData.dueDate = new Date(t.dueDate);
         }
+        await Task.create(taskData);
+        allTasks.push(taskData as typeof allTasks[0]);
+        const type = t.status === "upcoming" ? "task_upcoming" : "task_added";
+        Activity.create({
+          telegramChatId: chatId, type, title: t.title,
+          detail: `inferred${t.assignee ? ` (${t.assignee})` : ""}${t.dueDate ? ` due ${t.dueDate}` : ""}`,
+          actor: "odoai",
+        }).catch(console.error);
       }
     }
 

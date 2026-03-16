@@ -45,6 +45,53 @@ export async function sendMessageWithButtons(
   return res.json();
 }
 
+const NUMBER_EMOJIS = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣"];
+const CALENDAR_EMOJI = "📅";
+
+export async function reactToMessage(
+  chatId: number | string,
+  messageId: number,
+  actionCount: number,
+  hasDate: boolean
+) {
+  const emojis: string[] = [];
+  if (actionCount > 0) {
+    emojis.push(NUMBER_EMOJIS[Math.min(actionCount, 5) - 1]);
+  }
+  if (hasDate) emojis.push(CALENDAR_EMOJI);
+  if (!emojis.length) return;
+
+  for (const emoji of emojis) {
+    await fetch(`${BASE}/setMessageReaction`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId,
+        message_id: messageId,
+        reaction: [{ type: "emoji", emoji }],
+      }),
+    }).catch(console.error);
+  }
+}
+
+export async function getChatAdmins(chatId: number | string) {
+  const res = await fetch(`${BASE}/getChatAdministrators`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chat_id: chatId }),
+  });
+  const data = await res.json();
+  if (!data.ok) return [];
+  return (data.result || []).map((m: { user: { id: number; username?: string; first_name: string; last_name?: string; is_bot?: boolean }; status: string }) => ({
+    userId: m.user.id,
+    username: m.user.username,
+    firstName: m.user.first_name,
+    lastName: m.user.last_name,
+    isBot: m.user.is_bot || false,
+    status: m.status,
+  }));
+}
+
 export async function setWebhook(url: string) {
   const res = await fetch(`${BASE}/setWebhook`, {
     method: "POST",

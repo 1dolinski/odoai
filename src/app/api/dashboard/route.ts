@@ -8,7 +8,8 @@ import Job from "@/models/Job";
 import Check from "@/models/Check";
 import Activity from "@/models/Activity";
 import { autoExtract, maybeUpdateContext, deepProcessDump } from "@/lib/brain";
-import { writeKnowledge, writePersonKnowledge } from "@/lib/knowledge";
+import { writeKnowledge, writePersonKnowledge, writePeopleSnapshot } from "@/lib/knowledge";
+import { getChatAdmins } from "@/lib/telegram";
 
 export async function GET(req: NextRequest) {
   await connectDB();
@@ -155,6 +156,39 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, lastSyncAt: updated?.lastSyncAt });
   }
 
+  if (action === "syncMembers") {
+    const admins = await getChatAdmins(chatId);
+    let added = 0;
+    for (const member of admins) {
+      if (member.isBot) continue;
+      const exists = await Person.findOne({
+        telegramChatId: chatId,
+        $or: [
+          { telegramUserId: String(member.userId) },
+          ...(member.username ? [{ username: member.username }] : []),
+        ],
+      });
+      if (!exists) {
+        await Person.create({
+          telegramChatId: chatId,
+          telegramUserId: String(member.userId),
+          username: member.username || "",
+          firstName: member.firstName || "",
+          role: member.status === "creator" ? "owner" : member.status === "administrator" ? "admin" : "",
+          source: "telegram",
+          intentions: [],
+          relationships: [],
+          messageCount: 0,
+          lastSeen: new Date(),
+        });
+        added++;
+      }
+    }
+    const people = await Person.find({ telegramChatId: chatId }).lean();
+    writePeopleSnapshot(chatId, people).catch(console.error);
+    return NextResponse.json({ ok: true, added, total: people.length });
+  }
+
   if (action === "addContact" && contact) {
     const name = (contact.name || "").trim();
     if (!name) return NextResponse.json({ error: "name required" }, { status: 400 });
@@ -231,6 +265,14 @@ export async function POST(req: NextRequest) {
     else update.completedAt = null;
     await Task.updateOne({ _id: body.taskId, telegramChatId: chatId }, { $set: update });
     Activity.create({ telegramChatId: chatId, type: body.status === "done" ? "task_converted" : "task_added", title: body.taskTitle || "task", detail: `→ ${body.status} (dashboard)`, actor: "dashboard" }).catch(console.error);
+    return NextResponse.json({ ok: true });
+  }
+
+  if (action === "deleteTask" && body.taskId) {
+    const task = await Task.findOneAndDelete({ _id: body.taskId, telegramChatId: chatId });
+    if (task) {
+      Activity.create({ telegramChatId: chatId, type: "task_converted", title: task.title, detail: "deleted (dashboard)", actor: "dashboard" }).catch(console.error);
+    }
     return NextResponse.json({ ok: true });
   }
 
