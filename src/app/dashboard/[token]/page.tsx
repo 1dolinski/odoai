@@ -957,7 +957,18 @@ export default function DashboardPage() {
                     <div key={p._id} className="bg-gray-50 border border-gray-200 rounded-lg p-3">
                       <div className="flex items-center justify-between mb-1">
                         <span className="font-medium text-sm text-gray-900">{p.username || p.firstName || "unknown"}</span>
-                        <button onClick={() => deleteContact(p._id)} className="text-[10px] text-red-400 hover:text-red-600">remove</button>
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={async () => {
+                              setData((d) => d ? { ...d, people: d.people.map((pp) => pp._id === p._id ? { ...pp, personType: "member" as const } : pp) } : d);
+                              await fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "updateContact", contact: { _id: p._id, personType: "member" } }) });
+                              fetchData();
+                            }}
+                            className="text-[10px] text-blue-500 hover:text-blue-700 font-medium"
+                            title="Move to chat members"
+                          >→ member</button>
+                          <button onClick={() => deleteContact(p._id)} className="text-[10px] text-red-400 hover:text-red-600">remove</button>
+                        </div>
                       </div>
                       {p.role && <div className="text-xs text-blue-600 mb-0.5">{p.role}</div>}
                       {p.context && <div className="text-xs text-gray-500 mb-0.5">{p.context}</div>}
@@ -1444,17 +1455,15 @@ export default function DashboardPage() {
                         <span className={`font-medium text-sm ${t.status === "done" ? "line-through text-gray-400" : "text-gray-900"}`}>
                           {t.title}
                         </span>
-                        {(t.description || (t.people && t.people.length > 0) || t.initiative || (data.initiatives || []).length > 0) && (
-                          <button
-                            onClick={() => setExpandedTaskId(expandedTaskId === t._id ? null : t._id)}
-                            className={`transition-colors ${expandedTaskId === t._id ? "text-blue-500" : "text-gray-300 hover:text-gray-500"}`}
-                            title="Show details"
-                          >
-                            <svg className="w-3.5 h-3.5" viewBox="0 0 20 20" fill="currentColor">
-                              <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
-                            </svg>
-                          </button>
-                        )}
+                        <button
+                          onClick={() => setExpandedTaskId(expandedTaskId === t._id ? null : t._id)}
+                          className={`transition-colors ${expandedTaskId === t._id ? "text-blue-500" : "text-gray-300 hover:text-gray-500"}`}
+                          title="Assign & details"
+                        >
+                          <svg className="w-3.5 h-3.5" viewBox="0 0 20 20" fill="currentColor">
+                            <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+                          </svg>
+                        </button>
                         {t.people && t.people.length > 0 && (
                           <span className="flex items-center gap-1 ml-1">
                             {t.people.map((p) => (
@@ -1512,14 +1521,39 @@ export default function DashboardPage() {
                   {expandedTaskId === t._id && (
                     <div className="mt-2 ml-0.5 text-xs text-gray-500 bg-white/60 border border-gray-100 rounded-md px-3 py-2 space-y-1.5">
                       {t.description && <p>{t.description}</p>}
-                      {t.people && t.people.length > 0 && (
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          <span className="text-gray-400">People:</span>
-                          {t.people.map((p) => (
-                            <span key={p} className="inline-flex items-center text-[10px] font-medium bg-indigo-50 text-indigo-600 border border-indigo-100 rounded-full px-1.5 py-0.5">{p}</span>
-                          ))}
-                        </div>
-                      )}
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="text-gray-400">Assigned:</span>
+                        {(() => {
+                          const members = data.people.filter((p) => p.personType !== "contact");
+                          const allPeople = data.people;
+                          const currentPeople = t.people || [];
+                          const sortedPeople = [...members, ...allPeople.filter((p) => p.personType === "contact" && currentPeople.includes((p.username || p.firstName || "").toLowerCase()))];
+                          const seen = new Set<string>();
+                          return sortedPeople.filter((p) => { const n = (p.username || p.firstName || ""); if (!n || seen.has(n)) return false; seen.add(n); return true; }).map((p) => {
+                            const name = p.username || p.firstName || "";
+                            const isAssigned = currentPeople.some((cp) => cp.toLowerCase() === name.toLowerCase());
+                            return (
+                              <button
+                                key={p._id}
+                                onClick={() => {
+                                  const updated = isAssigned
+                                    ? currentPeople.filter((cp) => cp.toLowerCase() !== name.toLowerCase())
+                                    : [...currentPeople, name];
+                                  setData((d) => d ? { ...d, tasks: d.tasks.map((task) => task._id === t._id ? { ...task, people: updated } : task) } : d);
+                                  fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "updateTaskPeople", taskId: t._id, people: updated }) });
+                                }}
+                                className={`inline-flex items-center text-[10px] font-medium rounded-full px-1.5 py-0.5 transition-all ${
+                                  isAssigned
+                                    ? "bg-indigo-100 text-indigo-700 border border-indigo-200"
+                                    : "bg-gray-100 text-gray-400 border border-gray-200 hover:bg-gray-200"
+                                }`}
+                              >
+                                {isAssigned ? "✓ " : ""}{name}
+                              </button>
+                            );
+                          });
+                        })()}
+                      </div>
                       <div className="flex items-center gap-1.5">
                         <span className="text-gray-400">Initiative:</span>
                         <select
