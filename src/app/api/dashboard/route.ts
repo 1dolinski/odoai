@@ -12,7 +12,7 @@ import Activity from "@/models/Activity";
 import { autoExtract, maybeUpdateContext, deepProcessDump, generateAiFeed } from "@/lib/brain";
 import { chat as aiChat } from "@/lib/openrouter";
 import { writeKnowledge, writePersonKnowledge, writePeopleSnapshot } from "@/lib/knowledge";
-import { getChatAdmins } from "@/lib/telegram";
+import { getChatAdmins, sendMessage } from "@/lib/telegram";
 
 export async function GET(req: NextRequest) {
   await connectDB();
@@ -468,6 +468,10 @@ export async function POST(req: NextRequest) {
       const entries = items.map((i) => ({ type: i.type, content: i.content, createdAt: new Date() }));
       await Chat.updateOne({ telegramChatId: chatId }, { $push: { aiFeed: { $each: entries } } });
       Activity.create({ telegramChatId: chatId, type: "ai_triggered", title: "AI feed generated", detail: `${items.length} items`, actor: "odoai" }).catch(console.error);
+      const shouts = items.filter((i) => i.type === "shout");
+      for (const s of shouts) {
+        sendMessage(chatId, s.content).catch(console.error);
+      }
     }
     return NextResponse.json({ ok: true, items });
   }

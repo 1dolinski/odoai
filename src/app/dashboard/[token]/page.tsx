@@ -776,6 +776,7 @@ export default function DashboardPage() {
                       checkin: { icon: "📋", color: "text-purple-700", bg: "bg-purple-50 border-purple-200" },
                       insight: { icon: "🔍", color: "text-teal-700", bg: "bg-teal-50 border-teal-200" },
                       reminder: { icon: "⏰", color: "text-red-700", bg: "bg-red-50 border-red-200" },
+                      shout: { icon: "📢", color: "text-green-700", bg: "bg-green-50 border-green-300" },
                     };
                     const cfg = typeConfig[item.type] || { icon: "📌", color: "text-gray-700", bg: "bg-gray-50 border-gray-200" };
                     return (
@@ -785,6 +786,7 @@ export default function DashboardPage() {
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2 mb-0.5">
                               <span className={`text-xs font-semibold uppercase tracking-wide ${cfg.color}`}>{item.type}</span>
+                              {item.type === "shout" && <span className="text-[10px] text-green-500 font-medium">→ posted to group</span>}
                               <span className="text-xs text-gray-400">{formatET(item.createdAt)}</span>
                             </div>
                             <p className="text-sm text-gray-800">{item.content}</p>

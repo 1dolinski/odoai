@@ -595,7 +595,7 @@ export async function generateAiFeed(chatId: string): Promise<{ type: string; co
       role: "system",
       content: `You are an AI assistant reviewing a team's chat, tasks, and people. Generate actionable feed items.
 
-Respond ONLY with valid JSON array. Each item: {"type": "cleanup"|"suggestion"|"checkin"|"insight"|"reminder", "content": "..."}
+Respond ONLY with valid JSON array. Each item: {"type": "cleanup"|"suggestion"|"checkin"|"insight"|"reminder"|"shout", "content": "..."}
 
 Types:
 - cleanup: duplicate tasks, stale todos, things that should be marked done or removed
@@ -603,14 +603,16 @@ Types:
 - checkin: status checks on open tasks, asking if something is done
 - insight: patterns you notice, connections between conversations and tasks
 - reminder: upcoming deadlines, things that need attention soon
+- shout: ONLY for truly high-impact, easy-win ideas worth interrupting the group for. Write these conversationally as if talking to friends: "hey guys, you should think about X because Y — it's pretty easy and could Z". Keep it casual and compelling. Use shout SPARINGLY — max 1 per generation, only if something is genuinely great.
 
 Rules:
 - Generate 2-5 items, whatever is genuinely useful
 - Be specific — reference actual task names, people, dates
 - Don't repeat what's already in recent feed: ${existingFeed || "nothing yet"}
 - If nothing useful to say, return empty array []
-- Keep each item to 1-2 sentences
-- Today is ${new Date().toISOString().split("T")[0]}`,
+- Keep each item to 1-2 sentences (shout can be slightly longer)
+- Today is ${new Date().toISOString().split("T")[0]}
+- shout items get posted directly to the group chat, so make them count — only use for really obvious high-value, low-effort wins`,
     },
     {
       role: "user",
