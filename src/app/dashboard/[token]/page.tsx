@@ -146,6 +146,8 @@ export default function DashboardPage() {
   const [guidanceText, setGuidanceText] = useState("");
   const [guidanceSaving, setGuidanceSaving] = useState(false);
   const [guidanceSaved, setGuidanceSaved] = useState(false);
+  const [taskFilter, setTaskFilter] = useState<"all" | "todo" | "upcoming" | "done">("all");
+  const [showCalendar, setShowCalendar] = useState(false);
 
   const fetchData = useCallback(async () => {
     const res = await fetch(`/api/dashboard?token=${token}`);
@@ -274,8 +276,6 @@ export default function DashboardPage() {
     );
   }
 
-  const [taskFilter, setTaskFilter] = useState<"all" | "todo" | "upcoming" | "done">("all");
-  const [showCalendar, setShowCalendar] = useState(false);
   const filteredTasks = taskFilter === "all" ? data.tasks : data.tasks.filter((t) => t.status === taskFilter);
 
   return (
