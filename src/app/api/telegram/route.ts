@@ -352,7 +352,10 @@ function isSimilarTask(a: string, b: string): boolean {
   const intersection = [...wa].filter((w) => wb.has(w));
   const union = new Set([...wa, ...wb]);
   const jaccard = intersection.length / union.size;
-  return jaccard >= 0.6;
+  if (jaccard >= 0.5) return true;
+  const smaller = Math.min(wa.size, wb.size);
+  if (smaller > 0 && intersection.length / smaller >= 0.75) return true;
+  return false;
 }
 
 async function findSimilarTask(chatId: string, title: string): Promise<{ _id: string; title: string; status: string; description?: string } | null> {

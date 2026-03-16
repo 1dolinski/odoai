@@ -38,7 +38,11 @@ function isSimilarTask(a: string, b: string): boolean {
   const wb = new Set(nb.split(" ").filter(Boolean));
   const intersection = [...wa].filter((w) => wb.has(w));
   const union = new Set([...wa, ...wb]);
-  return intersection.length / union.size >= 0.6;
+  const jaccard = intersection.length / union.size;
+  if (jaccard >= 0.5) return true;
+  const smaller = Math.min(wa.size, wb.size);
+  if (smaller > 0 && intersection.length / smaller >= 0.75) return true;
+  return false;
 }
 
 export async function buildSystemPrompt(chatId: string, userQuery?: string): Promise<string> {
