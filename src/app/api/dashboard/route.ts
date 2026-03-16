@@ -51,29 +51,54 @@ export async function GET(req: NextRequest) {
     },
     tasks,
     initiatives: chat.initiatives || [],
-    people: people.map((p) => ({
-      _id: p._id,
-      username: p.username,
-      firstName: p.firstName,
-      role: p.role && p.role !== "null" ? p.role : "",
-      context: p.context,
-      intentions: p.intentions,
-      relationships: (p.relationships || []).map((r: { name: string; label: string; context: string }) => ({
-        name: r.name,
-        label: r.label,
-        context: r.context,
-      })),
-      email: p.email,
-      phone: p.phone,
-      notes: p.notes,
-      source: p.source || "telegram",
-      personType: p.personType || "member",
-      dumps: p.dumps || [],
-      resources: p.resources || "",
-      access: p.access || "",
-      messageCount: p.messageCount,
-      lastSeen: p.lastSeen,
-    })),
+    people: (() => {
+      const mapped = people.map((p) => ({
+        _id: p._id,
+        username: p.username,
+        firstName: p.firstName,
+        role: p.role && p.role !== "null" ? p.role : "",
+        context: p.context,
+        intentions: p.intentions || [],
+        relationships: (p.relationships || []).map((r: { name: string; label: string; context: string }) => ({
+          name: r.name,
+          label: r.label,
+          context: r.context,
+        })),
+        email: p.email,
+        phone: p.phone,
+        notes: p.notes,
+        source: p.source || "telegram",
+        personType: p.personType || "member",
+        dumps: p.dumps || [],
+        resources: p.resources || "",
+        access: p.access || "",
+        messageCount: p.messageCount || 0,
+        lastSeen: p.lastSeen,
+      }));
+      const seen = new Map<string, typeof mapped[0]>();
+      for (const p of mapped) {
+        const key = (p.username || p.firstName || "").toLowerCase().trim();
+        if (!key) { seen.set(p._id.toString(), p); continue; }
+        const existing = [...seen.values()].find((e) => (e.username || e.firstName || "").toLowerCase().trim() === key);
+        if (existing) {
+          if (p.messageCount > existing.messageCount) existing.messageCount = p.messageCount;
+          if (p.context && !existing.context) existing.context = p.context;
+          if (p.role && !existing.role) existing.role = p.role;
+          if (p.source === "telegram") existing.source = "telegram";
+          existing.intentions = [...new Set([...existing.intentions, ...p.intentions])];
+          existing.relationships = [...existing.relationships, ...p.relationships.filter((r) => !existing.relationships.some((er) => er.name === r.name))];
+          existing.dumps = [...existing.dumps, ...p.dumps];
+          if (p.resources && !existing.resources) existing.resources = p.resources;
+          if (p.access && !existing.access) existing.access = p.access;
+          if (p.email && !existing.email) existing.email = p.email;
+          if (p.phone && !existing.phone) existing.phone = p.phone;
+          if (p.lastSeen && (!existing.lastSeen || new Date(p.lastSeen) > new Date(existing.lastSeen))) existing.lastSeen = p.lastSeen;
+        } else {
+          seen.set(p._id.toString(), p);
+        }
+      }
+      return [...seen.values()];
+    })(),
     jobs,
     checks: checks.map((c) => ({
       _id: c._id,
@@ -203,9 +228,36 @@ export async function POST(req: NextRequest) {
         added++;
       }
     }
+    const allPeople = await Person.find({ telegramChatId: chatId });
+    const nameMap = new Map<string, typeof allPeople[0]>();
+    let merged = 0;
+    for (const p of allPeople) {
+      const key = (p.username || p.firstName || "").toLowerCase().trim();
+      if (!key) continue;
+      const existing = nameMap.get(key);
+      if (existing) {
+        if (p.context && !existing.context) existing.context = p.context;
+        if (p.role && p.role !== "null" && !existing.role) existing.role = p.role;
+        if (p.email && !existing.email) existing.email = p.email;
+        if (p.phone && !existing.phone) existing.phone = p.phone;
+        if (p.resources && !existing.resources) existing.resources = p.resources;
+        if (p.access && !existing.access) existing.access = p.access;
+        if (p.messageCount > (existing.messageCount || 0)) existing.messageCount = p.messageCount;
+        const existingIntentions = new Set((existing.intentions || []).map((i: string) => i.toLowerCase()));
+        for (const i of (p.intentions || [])) { if (!existingIntentions.has(i.toLowerCase())) existing.intentions.push(i); }
+        for (const r of (p.relationships || [])) { if (!existing.relationships.some((er: { name: string }) => er.name === r.name)) existing.relationships.push(r); }
+        for (const d of (p.dumps || [])) existing.dumps.push(d);
+        if (p.source === "telegram" && existing.source !== "telegram") existing.source = "telegram";
+        await existing.save();
+        await Person.deleteOne({ _id: p._id });
+        merged++;
+      } else {
+        nameMap.set(key, p);
+      }
+    }
     const people = await Person.find({ telegramChatId: chatId }).lean();
     writePeopleSnapshot(chatId, people).catch(console.error);
-    return NextResponse.json({ ok: true, added, total: people.length });
+    return NextResponse.json({ ok: true, added, merged, total: people.length });
   }
 
   if (action === "addContact" && contact) {
