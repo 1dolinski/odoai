@@ -197,6 +197,17 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true });
   }
 
+  if (action === "updateTaskStatus" && body.taskId && body.status) {
+    const validStatuses = ["todo", "upcoming", "done"];
+    if (!validStatuses.includes(body.status)) return NextResponse.json({ error: "invalid status" }, { status: 400 });
+    const update: Record<string, unknown> = { status: body.status };
+    if (body.status === "done") update.completedAt = new Date();
+    else update.completedAt = null;
+    await Task.updateOne({ _id: body.taskId, telegramChatId: chatId }, { $set: update });
+    Activity.create({ telegramChatId: chatId, type: body.status === "done" ? "task_converted" : "task_added", title: body.taskTitle || "task", detail: `→ ${body.status} (dashboard)`, actor: "dashboard" }).catch(console.error);
+    return NextResponse.json({ ok: true });
+  }
+
   if (action === "dump" && body.text) {
     const text = (body.text as string).trim();
     if (!text) return NextResponse.json({ error: "text required" }, { status: 400 });

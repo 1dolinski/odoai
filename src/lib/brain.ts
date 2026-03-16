@@ -115,7 +115,9 @@ ${guidance ? `CHAT GUIDANCE (custom instructions from the admin — follow these
 - Use directives naturally within your response — use as MANY as needed per message, one per item
 - In ACTIVE mode, share insights proactively: "Hey, noticed X hasn't been followed up on" or "Based on what Y said earlier, might want to consider Z"
 - Read the room. If people are frustrated, ease off. If they want more, lean in.
-- Keep Telegram formatting simple — no underscores, minimal bold`;
+- Keep Telegram formatting simple — no underscores, minimal bold
+- NEVER output empty numbered lists or blank items (no "1. 2. 3." with nothing after). Only list items if you have actual content for each one.
+- Keep responses tight — one clear sentence confirming each action is enough`;
 }
 
 /**
