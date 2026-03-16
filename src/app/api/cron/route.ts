@@ -30,6 +30,8 @@ export async function GET(req: NextRequest) {
 
   for (const check of dueChecks) {
     try {
+      const chatDoc = await Chat.findOne({ telegramChatId: check.telegramChatId });
+      const model = chatDoc?.aiModel || undefined;
       const systemPrompt = await buildSystemPrompt(check.telegramChatId, check.description);
       const tasks = await Task.find({
         telegramChatId: check.telegramChatId,
@@ -52,7 +54,7 @@ Current tasks:\n${taskList || "None"}${knowledgeContext}
 
 This is a timed check-in you scheduled earlier. Give a brief, relevant nudge or question (1-2 sentences). Be helpful, not nagging.`,
         },
-      ]);
+      ], model);
 
       await sendMessage(Number(check.telegramChatId), `⏰ ${response}`);
       check.status = "done";
@@ -72,6 +74,8 @@ This is a timed check-in you scheduled earlier. Give a brief, relevant nudge or 
 
   for (const job of dueJobs) {
     try {
+      const jobChat = await Chat.findOne({ telegramChatId: job.telegramChatId });
+      const jobModel = jobChat?.aiModel || undefined;
       const systemPrompt = await buildSystemPrompt(job.telegramChatId, job.title);
       const tasks = await Task.find({
         telegramChatId: job.telegramChatId,
@@ -95,7 +99,7 @@ Current tasks:\n${taskList || "None"}${knowledgeContext}
 
 Generate a brief, helpful check-in message. Ask a specific question about progress, flag if something looks blocked, or suggest a next step. Keep it short (2-3 sentences). Be a good collaborator, not annoying.`,
         },
-      ]);
+      ], jobModel);
 
       await sendMessage(Number(job.telegramChatId), `🟢 Check-in: ${job.title}\n\n${checkIn}`);
 

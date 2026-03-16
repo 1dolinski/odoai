@@ -6,8 +6,10 @@ import { useParams } from "next/navigation";
 interface Task {
   _id: string;
   title: string;
+  description?: string;
   status: "todo" | "upcoming" | "done";
   dueDate?: string;
+  people?: string[];
   createdByUsername?: string;
   completedAt?: string;
   createdAt: string;
@@ -98,6 +100,7 @@ interface DashboardData {
     telegramChatId: string;
     title: string;
     mode: string;
+    aiModel: string;
     aiStyle: string;
     guidance: string;
     dumps: DumpEntry[];
@@ -132,6 +135,18 @@ const AI_STYLES: { value: AiStyle; label: string; desc: string }[] = [
   { value: "casual", label: "Casual", desc: "Friendly, informal tone" },
   { value: "professional", label: "Professional", desc: "Formal, business tone" },
   { value: "technical", label: "Technical", desc: "Dev-focused, code-heavy" },
+];
+
+const AI_MODELS: { value: string; label: string; pricing: string }[] = [
+  { value: "moonshotai/kimi-k2.5", label: "Kimi K2.5", pricing: "$0.14/M" },
+  { value: "openai/gpt-4o-mini", label: "GPT-4o Mini", pricing: "$0.15/M" },
+  { value: "openai/gpt-4o", label: "GPT-4o", pricing: "$2.50/M" },
+  { value: "anthropic/claude-sonnet-4", label: "Claude Sonnet 4", pricing: "$3/M" },
+  { value: "google/gemini-2.5-flash", label: "Gemini 2.5 Flash", pricing: "$0.15/M" },
+  { value: "google/gemini-2.5-pro", label: "Gemini 2.5 Pro", pricing: "$1.25/M" },
+  { value: "deepseek/deepseek-chat-v3-0324", label: "DeepSeek V3", pricing: "$0.14/M" },
+  { value: "meta-llama/llama-4-maverick", label: "Llama 4 Maverick", pricing: "$0.20/M" },
+  { value: "x-ai/grok-3-mini", label: "Grok 3 Mini", pricing: "$0.30/M" },
 ];
 
 const WATCH_ITEMS: { key: keyof WatchSettings; label: string; desc: string }[] = [
@@ -175,9 +190,11 @@ export default function DashboardPage() {
   const [showDump, setShowDump] = useState(false);
   const [showGuidance, setShowGuidance] = useState(false);
   const [showWallet, setShowWallet] = useState(false);
+  const [showPeople, setShowPeople] = useState(false);
   const [showFeed, setShowFeed] = useState(false);
   const [feedGenerating, setFeedGenerating] = useState(false);
   const [editingDateId, setEditingDateId] = useState<string | null>(null);
+  const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null);
   const [actionForm, setActionForm] = useState({ type: "todo" as string, title: "", dueDate: "", personName: "", personRole: "", statusTaskSearch: "", statusNewStatus: "done" as string, dumpText: "" });
   const [actionSaving, setActionSaving] = useState(false);
   const [actionDone, setActionDone] = useState("");
@@ -219,6 +236,15 @@ export default function DashboardPage() {
     });
     setData((d) => d ? { ...d, chat: { ...d.chat, aiStyle: style } } : d);
     setSaving(false);
+  }
+
+  async function setAiModel(model: string) {
+    setData((d) => d ? { ...d, chat: { ...d.chat, aiModel: model } } : d);
+    await fetch("/api/dashboard", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token, aiModel: model }),
+    });
   }
 
   async function toggleWatch(key: keyof WatchSettings) {
@@ -539,6 +565,18 @@ export default function DashboardPage() {
                   <option key={s.value} value={s.value}>{s.label}</option>
                 ))}
               </select>
+              <select
+                value={data.chat.aiModel}
+                onChange={(e) => setAiModel(e.target.value)}
+                className="text-xs bg-gray-100 border-0 rounded-md px-2 py-1 text-gray-600 cursor-pointer focus:outline-none focus:ring-2 focus:ring-blue-200 max-w-[160px]"
+              >
+                {AI_MODELS.map((m) => (
+                  <option key={m.value} value={m.value}>{m.label} ({m.pricing})</option>
+                ))}
+                {!AI_MODELS.some((m) => m.value === data.chat.aiModel) && (
+                  <option value={data.chat.aiModel}>{data.chat.aiModel}</option>
+                )}
+              </select>
               <span className="text-gray-500">{data.chat.messageCount} msgs</span>
               {data.chat.lastReviewedAt && (
                 <span className="text-xs text-gray-400">reviewed {formatRelativeTime(data.chat.lastReviewedAt)}</span>
@@ -557,7 +595,7 @@ export default function DashboardPage() {
               {syncing ? "..." : "Sync"}
             </button>
             <button
-              onClick={() => { setShowWallet(!showWallet); setShowFeed(false); setShowContext(false); setShowDump(false); setShowGuidance(false); setShowActions(false); setShowWatch(false); }}
+              onClick={() => { setShowWallet(!showWallet); setShowFeed(false); setShowPeople(false); setShowContext(false); setShowDump(false); setShowGuidance(false); setShowActions(false); setShowWatch(false); }}
               className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium border transition-all ${
                 showWallet ? "bg-gray-900 text-white border-gray-900" : "bg-gray-100 text-gray-600 border-gray-200 hover:border-gray-400"
               }`}
@@ -583,6 +621,7 @@ export default function DashboardPage() {
           <div className="flex flex-wrap items-center gap-2">
             {([
               { key: "feed", label: "AI Feed", state: showFeed, set: setShowFeed },
+              { key: "people", label: `People (${data.people.length})`, state: showPeople, set: setShowPeople },
               { key: "context", label: "Chat Context", state: showContext, set: setShowContext },
               { key: "dump", label: "Add Dump", state: showDump, set: setShowDump },
               { key: "guidance", label: "Guidance", state: showGuidance, set: setShowGuidance },
@@ -593,7 +632,7 @@ export default function DashboardPage() {
                 key={btn.key}
                 onClick={() => {
                   const next = !btn.state;
-                  setShowFeed(false); setShowContext(false); setShowDump(false); setShowGuidance(false); setShowActions(false); setShowWatch(false); setShowWallet(false);
+                  setShowFeed(false); setShowPeople(false); setShowContext(false); setShowDump(false); setShowGuidance(false); setShowActions(false); setShowWatch(false); setShowWallet(false);
                   btn.set(next);
                 }}
                 className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all border ${
@@ -680,6 +719,168 @@ export default function DashboardPage() {
                   })}
                 </div>
               )}
+            </div>
+          )}
+          {showPeople && (
+            <div className="mt-4 bg-white border border-gray-200 rounded-xl p-5 shadow-sm">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="font-semibold text-gray-800">Chat Members</h3>
+                <button
+                  onClick={syncMembers}
+                  disabled={syncingMembers}
+                  className="text-xs text-gray-500 hover:text-gray-700 font-medium"
+                >
+                  {syncingMembers ? "Syncing..." : "Sync from Telegram"}
+                </button>
+              </div>
+              <div className="flex flex-wrap gap-2 mb-5">
+                {data.people.filter((p) => p.personType !== "contact").length === 0 && (
+                  <p className="text-sm text-gray-400 italic">No members yet. Hit Sync to pull from Telegram.</p>
+                )}
+                {data.people.filter((p) => p.personType !== "contact").map((p) => (
+                  <div key={p._id} className="bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 flex items-center gap-2 min-w-[180px]">
+                    <div className="w-7 h-7 rounded-full bg-gray-200 flex items-center justify-center text-xs font-medium text-gray-600">
+                      {(p.username || p.firstName || "?")[0].toUpperCase()}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="font-medium text-xs text-gray-900 truncate">{p.username || p.firstName || "unknown"}</div>
+                      <div className="text-[10px] text-gray-400">
+                        {p.role && <span className="text-blue-600">{p.role}</span>}
+                        {p.role && p.messageCount > 0 && " · "}
+                        {p.messageCount > 0 && `${p.messageCount} msgs`}
+                      </div>
+                    </div>
+                    <button
+                      onClick={async () => {
+                        await fetch("/api/dashboard", {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ token, action: "updateContact", contact: { _id: p._id, personType: "contact" } }),
+                        });
+                        fetchData();
+                      }}
+                      className="text-[10px] text-gray-300 hover:text-blue-600 transition-colors whitespace-nowrap"
+                      title="Move to contacts"
+                    >
+                      → contact
+                    </button>
+                  </div>
+                ))}
+              </div>
+
+              <div className="border-t border-gray-200 pt-4">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="font-semibold text-gray-800">Contacts</h3>
+                  <button
+                    onClick={() => setShowAddContact(!showAddContact)}
+                    className="text-xs text-blue-600 hover:text-blue-700 font-medium"
+                  >
+                    {showAddContact ? "Cancel" : "+ Add Contact"}
+                  </button>
+                </div>
+                <p className="text-[11px] text-gray-400 mb-3">People you work with outside the chat. The AI helps you make thoughtful use of these connections.</p>
+
+                {showAddContact && (
+                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-3">
+                    <div className="grid grid-cols-2 gap-2 mb-2">
+                      <input placeholder="Name *" value={contactForm.name} onChange={(e) => setContactForm((f) => ({ ...f, name: e.target.value }))} className="px-2 py-1.5 border border-gray-200 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-blue-200" />
+                      <input placeholder="Role / title" value={contactForm.role} onChange={(e) => setContactForm((f) => ({ ...f, role: e.target.value }))} className="px-2 py-1.5 border border-gray-200 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-blue-200" />
+                      <input placeholder="Email" value={contactForm.email} onChange={(e) => setContactForm((f) => ({ ...f, email: e.target.value }))} className="px-2 py-1.5 border border-gray-200 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-blue-200" />
+                      <input placeholder="Phone" value={contactForm.phone} onChange={(e) => setContactForm((f) => ({ ...f, phone: e.target.value }))} className="px-2 py-1.5 border border-gray-200 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-blue-200" />
+                    </div>
+                    <input placeholder="Resources / what they bring" value={contactForm.notes} onChange={(e) => setContactForm((f) => ({ ...f, notes: e.target.value }))} className="w-full px-2 py-1.5 border border-gray-200 rounded-lg text-xs mb-2 focus:outline-none focus:ring-2 focus:ring-blue-200" />
+                    <button onClick={addContact} disabled={contactSaving || !contactForm.name.trim()} className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg text-xs font-medium disabled:opacity-50">
+                      {contactSaving ? "Saving..." : "Add Contact"}
+                    </button>
+                  </div>
+                )}
+
+                <div className="space-y-2 max-h-[400px] overflow-y-auto">
+                  {data.people.filter((p) => p.personType === "contact").length === 0 && (
+                    <p className="text-sm text-gray-400 italic">No contacts yet.</p>
+                  )}
+                  {data.people.filter((p) => p.personType === "contact").map((p) => (
+                    <div key={p._id} className="bg-gray-50 border border-gray-200 rounded-lg p-3">
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="font-medium text-sm text-gray-900">{p.username || p.firstName || "unknown"}</span>
+                        <button onClick={() => deleteContact(p._id)} className="text-[10px] text-red-400 hover:text-red-600">remove</button>
+                      </div>
+                      {p.role && <div className="text-xs text-blue-600 mb-0.5">{p.role}</div>}
+                      {p.context && <div className="text-xs text-gray-500 mb-0.5">{p.context}</div>}
+                      {(p.email || p.phone) && (
+                        <div className="flex gap-2 text-[10px] text-gray-400 mb-0.5">
+                          {p.email && <span>📧 {p.email}</span>}
+                          {p.phone && <span>📱 {p.phone}</span>}
+                        </div>
+                      )}
+                      {(p.resources || p.access) && (
+                        <div className="space-y-0.5">
+                          {p.resources && <div className="text-[10px] text-emerald-600">🔑 {p.resources}</div>}
+                          {p.access && <div className="text-[10px] text-amber-600">🔓 {p.access}</div>}
+                        </div>
+                      )}
+                      {p.dumps && p.dumps.length > 0 && (
+                        <div className="mt-1 space-y-1">
+                          {p.dumps.map((d, j) => (
+                            <div key={j} className="text-[10px] bg-white border border-gray-100 rounded px-2 py-1">
+                              <div className="text-gray-600">{d.text}</div>
+                              <div className="text-gray-300 mt-0.5">{formatET(d.createdAt)}</div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {p.intentions.length > 0 && (
+                        <div className="flex flex-wrap gap-1 mt-1">
+                          {p.intentions.map((intent, j) => (
+                            <span key={j} className="text-[10px] bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded-full">{intent}</span>
+                          ))}
+                        </div>
+                      )}
+                      {p.relationships?.length > 0 && (
+                        <div className="mt-1 pt-1 border-t border-gray-100">
+                          {p.relationships.map((r, j) => (
+                            <div key={j} className="flex items-start gap-1 text-[10px]">
+                              <span className="text-gray-400">🔗</span>
+                              <span className="font-medium text-gray-700">{r.name}</span>
+                              {r.label && <span className="text-blue-600">[{r.label}]</span>}
+                              {r.context && <span className="text-gray-500">— {r.context}</span>}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {(() => {
+                        const pName = (p.username || p.firstName || "").toLowerCase();
+                        const personTasks = pName ? data.tasks.filter((t) => t.people?.some((tp) => tp.toLowerCase() === pName)) : [];
+                        return personTasks.length > 0 ? (
+                          <div className="mt-1 pt-1 border-t border-gray-100">
+                            <div className="text-[10px] text-gray-400 mb-0.5">Tasks ({personTasks.length})</div>
+                            {personTasks.map((t) => (
+                              <div key={t._id} className="flex items-center gap-1.5 text-[10px]">
+                                <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${t.status === "done" ? "bg-green-400" : t.status === "upcoming" ? "bg-yellow-400" : "bg-blue-400"}`} />
+                                <span className={t.status === "done" ? "line-through text-gray-400" : "text-gray-700"}>{t.title}</span>
+                                <span className="text-gray-300 ml-auto">{t.status}</span>
+                              </div>
+                            ))}
+                          </div>
+                        ) : null;
+                      })()}
+                      <div className="mt-1 pt-1 border-t border-gray-100">
+                        {personDumpId === p._id ? (
+                          <div className="space-y-1.5">
+                            <textarea autoFocus value={personDumpText} onChange={(e) => setPersonDumpText(e.target.value)} placeholder={`Add info about ${p.username || p.firstName || "this person"}...`} rows={2} className="w-full px-2 py-1 border border-gray-200 rounded-lg text-[10px] focus:outline-none focus:ring-2 focus:ring-blue-200 resize-y" />
+                            <div className="flex gap-1.5">
+                              <button onClick={() => submitPersonDump(p._id)} disabled={personDumpSending || !personDumpText.trim()} className="text-[10px] bg-blue-600 text-white px-2 py-0.5 rounded font-medium disabled:opacity-50">{personDumpSending ? "Saving..." : "Save"}</button>
+                              <button onClick={() => { setPersonDumpId(null); setPersonDumpText(""); }} className="text-[10px] text-gray-400 hover:text-gray-600">Cancel</button>
+                            </div>
+                          </div>
+                        ) : (
+                          <button onClick={() => setPersonDumpId(p._id)} className="text-[10px] text-blue-600 hover:text-blue-700 font-medium">+ Add info</button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
             </div>
           )}
           {showActions && (
@@ -1032,54 +1233,91 @@ export default function DashboardPage() {
               return (
                 <div
                   key={t._id}
-                  className={`flex items-center gap-3 rounded-lg border border-gray-200 border-l-4 p-3 ${statusColors[t.status] || ""}`}
+                  className={`rounded-lg border border-gray-200 border-l-4 p-3 ${statusColors[t.status] || ""}`}
                 >
-                  <div className="flex-1 min-w-0">
-                    <div className={`font-medium text-sm ${t.status === "done" ? "line-through text-gray-400" : "text-gray-900"}`}>
-                      {t.title}
+                  <div className="flex items-center gap-3">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className={`font-medium text-sm ${t.status === "done" ? "line-through text-gray-400" : "text-gray-900"}`}>
+                          {t.title}
+                        </span>
+                        {(t.description || (t.people && t.people.length > 0)) && (
+                          <button
+                            onClick={() => setExpandedTaskId(expandedTaskId === t._id ? null : t._id)}
+                            className={`transition-colors ${expandedTaskId === t._id ? "text-blue-500" : "text-gray-300 hover:text-gray-500"}`}
+                            title="Show details"
+                          >
+                            <svg className="w-3.5 h-3.5" viewBox="0 0 20 20" fill="currentColor">
+                              <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+                            </svg>
+                          </button>
+                        )}
+                        {t.people && t.people.length > 0 && (
+                          <span className="flex items-center gap-1 ml-1">
+                            {t.people.map((p) => (
+                              <span key={p} className="inline-flex items-center text-[10px] font-medium bg-indigo-50 text-indigo-600 border border-indigo-100 rounded-full px-1.5 py-0.5">
+                                {p}
+                              </span>
+                            ))}
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 mt-0.5">
+                        {t.createdByUsername && (
+                          <span className="text-xs text-gray-400">@{t.createdByUsername}</span>
+                        )}
+                        <span className="text-xs text-gray-400">
+                          {t.completedAt
+                            ? `done ${formatRelativeTime(t.completedAt)}`
+                            : formatRelativeTime(t.createdAt)}
+                        </span>
+                        {editingDateId === t._id ? (
+                          <input
+                            type="date"
+                            autoFocus
+                            defaultValue={t.dueDate ? new Date(t.dueDate).toISOString().split("T")[0] : ""}
+                            onBlur={(e) => changeTaskDate(t._id, e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") changeTaskDate(t._id, (e.target as HTMLInputElement).value);
+                              if (e.key === "Escape") setEditingDateId(null);
+                            }}
+                            className="text-xs border border-gray-300 rounded px-1 py-0.5"
+                          />
+                        ) : (
+                          <button
+                            onClick={() => setEditingDateId(t._id)}
+                            className={`text-xs ${t.dueDate ? "text-orange-500 hover:text-orange-600" : "text-gray-300 hover:text-gray-500"}`}
+                          >
+                            {t.dueDate ? `due ${new Date(t.dueDate).toLocaleDateString("en-US", { timeZone: "America/New_York", month: "short", day: "numeric" })}` : "+ date"}
+                          </button>
+                        )}
+                      </div>
                     </div>
-                    <div className="flex items-center gap-2 mt-0.5">
-                      {t.createdByUsername && (
-                        <span className="text-xs text-gray-400">@{t.createdByUsername}</span>
-                      )}
-                      <span className="text-xs text-gray-400">
-                        {t.completedAt
-                          ? `done ${formatRelativeTime(t.completedAt)}`
-                          : formatRelativeTime(t.createdAt)}
-                      </span>
-                      {editingDateId === t._id ? (
-                        <input
-                          type="date"
-                          autoFocus
-                          defaultValue={t.dueDate ? new Date(t.dueDate).toISOString().split("T")[0] : ""}
-                          onBlur={(e) => changeTaskDate(t._id, e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter") changeTaskDate(t._id, (e.target as HTMLInputElement).value);
-                            if (e.key === "Escape") setEditingDateId(null);
-                          }}
-                          className="text-xs border border-gray-300 rounded px-1 py-0.5"
-                        />
-                      ) : (
-                        <button
-                          onClick={() => setEditingDateId(t._id)}
-                          className={`text-xs ${t.dueDate ? "text-orange-500 hover:text-orange-600" : "text-gray-300 hover:text-gray-500"}`}
-                        >
-                          {t.dueDate ? `due ${new Date(t.dueDate).toLocaleDateString("en-US", { timeZone: "America/New_York", month: "short", day: "numeric" })}` : "+ date"}
-                        </button>
-                      )}
-                    </div>
+                    <select
+                      value={t.status}
+                      onChange={(e) => changeTaskStatus(t._id, t.title, e.target.value)}
+                      className={`text-xs px-2 py-1 rounded-full font-medium shrink-0 border-0 cursor-pointer appearance-none pr-5 ${statusBadge[t.status] || ""}`}
+                      style={{ backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23666'/%3E%3C/svg%3E")`, backgroundRepeat: "no-repeat", backgroundPosition: "right 6px center" }}
+                    >
+                      <option value="todo">todo</option>
+                      <option value="upcoming">upcoming</option>
+                      <option value="done">done</option>
+                      <option value="delete" className="text-red-600">🗑 delete</option>
+                    </select>
                   </div>
-                  <select
-                    value={t.status}
-                    onChange={(e) => changeTaskStatus(t._id, t.title, e.target.value)}
-                    className={`text-xs px-2 py-1 rounded-full font-medium shrink-0 border-0 cursor-pointer appearance-none pr-5 ${statusBadge[t.status] || ""}`}
-                    style={{ backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23666'/%3E%3C/svg%3E")`, backgroundRepeat: "no-repeat", backgroundPosition: "right 6px center" }}
-                  >
-                    <option value="todo">todo</option>
-                    <option value="upcoming">upcoming</option>
-                    <option value="done">done</option>
-                    <option value="delete" className="text-red-600">🗑 delete</option>
-                  </select>
+                  {expandedTaskId === t._id && (
+                    <div className="mt-2 ml-0.5 text-xs text-gray-500 bg-white/60 border border-gray-100 rounded-md px-3 py-2 space-y-1.5">
+                      {t.description && <p>{t.description}</p>}
+                      {t.people && t.people.length > 0 && (
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="text-gray-400">People:</span>
+                          {t.people.map((p) => (
+                            <span key={p} className="inline-flex items-center text-[10px] font-medium bg-indigo-50 text-indigo-600 border border-indigo-100 rounded-full px-1.5 py-0.5">{p}</span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -1159,204 +1397,7 @@ export default function DashboardPage() {
           </section>
         )}
 
-        {/* Chat Members */}
-        <section className="mb-10">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-semibold text-gray-800">Chat Members</h2>
-            <button
-              onClick={syncMembers}
-              disabled={syncingMembers}
-              className="text-sm text-gray-500 hover:text-gray-700 font-medium"
-            >
-              {syncingMembers ? "Syncing..." : "🔄 Sync from Telegram"}
-            </button>
-          </div>
-          <div className="flex flex-wrap gap-3">
-            {data.people.filter((p) => p.personType !== "contact").length === 0 && (
-              <p className="text-sm text-gray-400 italic">No members yet. Hit Sync to pull from Telegram.</p>
-            )}
-            {data.people.filter((p) => p.personType !== "contact").map((p) => (
-              <div key={p._id} className="bg-white border border-gray-200 rounded-lg px-4 py-3 shadow-sm flex items-center gap-3 min-w-[200px]">
-                <div className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-sm font-medium text-gray-600">
-                  {(p.username || p.firstName || "?")[0].toUpperCase()}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="font-medium text-sm text-gray-900 truncate">{p.username || p.firstName || "unknown"}</div>
-                  <div className="text-xs text-gray-400">
-                    {p.role && <span className="text-blue-600">{p.role}</span>}
-                    {p.role && p.messageCount > 0 && " · "}
-                    {p.messageCount > 0 && `${p.messageCount} msgs`}
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </section>
-
-        {/* Contacts */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-10">
-          <section>
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lg font-semibold text-gray-800">Contacts</h2>
-              <button
-                onClick={() => setShowAddContact(!showAddContact)}
-                className="text-sm text-blue-600 hover:text-blue-700 font-medium"
-              >
-                {showAddContact ? "Cancel" : "+ Add Contact"}
-              </button>
-            </div>
-            <p className="text-xs text-gray-400 mb-3">People you work with, have access to, or can leverage. The AI will help you make thoughtful use of these connections.</p>
-
-            {showAddContact && (
-              <div className="bg-white border border-blue-200 rounded-lg p-4 mb-4 shadow-sm">
-                <div className="grid grid-cols-2 gap-3 mb-3">
-                  <input
-                    placeholder="Name *"
-                    value={contactForm.name}
-                    onChange={(e) => setContactForm((f) => ({ ...f, name: e.target.value }))}
-                    className="px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
-                  />
-                  <input
-                    placeholder="Role / title"
-                    value={contactForm.role}
-                    onChange={(e) => setContactForm((f) => ({ ...f, role: e.target.value }))}
-                    className="px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
-                  />
-                  <input
-                    placeholder="Email"
-                    value={contactForm.email}
-                    onChange={(e) => setContactForm((f) => ({ ...f, email: e.target.value }))}
-                    className="px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
-                  />
-                  <input
-                    placeholder="Phone"
-                    value={contactForm.phone}
-                    onChange={(e) => setContactForm((f) => ({ ...f, phone: e.target.value }))}
-                    className="px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
-                  />
-                </div>
-                <input
-                  placeholder="Resources / what they bring (e.g. funding, design skills, distribution)"
-                  value={contactForm.notes}
-                  onChange={(e) => setContactForm((f) => ({ ...f, notes: e.target.value }))}
-                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm mb-3 focus:outline-none focus:ring-2 focus:ring-blue-200"
-                />
-                <button
-                  onClick={addContact}
-                  disabled={contactSaving || !contactForm.name.trim()}
-                  className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50 shadow-sm"
-                >
-                  {contactSaving ? "Saving..." : "Add Contact"}
-                </button>
-              </div>
-            )}
-
-            <div className="space-y-3">
-              {data.people.filter((p) => p.personType === "contact").length === 0 && (
-                <p className="text-sm text-gray-400 italic">No contacts yet. Add people you work with outside the chat.</p>
-              )}
-              {data.people.filter((p) => p.personType === "contact").map((p) => (
-                <div key={p._id} className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm">
-                  <div className="flex items-center justify-between mb-2">
-                    <div className="flex items-center gap-2">
-                      <span className="font-medium text-gray-900">
-                        {p.username || p.firstName || "unknown"}
-                      </span>
-                    </div>
-                    <button onClick={() => deleteContact(p._id)} className="text-xs text-red-400 hover:text-red-600">remove</button>
-                  </div>
-                  {p.role && <div className="text-xs text-blue-600 mb-1">{p.role}</div>}
-                  {p.context && <div className="text-sm text-gray-500 mb-1">{p.context}</div>}
-                  {(p.email || p.phone) && (
-                    <div className="flex gap-3 text-xs text-gray-400 mb-1">
-                      {p.email && <span>📧 {p.email}</span>}
-                      {p.phone && <span>📱 {p.phone}</span>}
-                    </div>
-                  )}
-                  {(p.resources || p.access) && (
-                    <div className="mt-1 space-y-0.5">
-                      {p.resources && <div className="text-xs text-emerald-600">🔑 {p.resources}</div>}
-                      {p.access && <div className="text-xs text-amber-600">🔓 {p.access}</div>}
-                    </div>
-                  )}
-                  {p.dumps && p.dumps.length > 0 && (
-                    <div className="mt-1 space-y-1">
-                      {p.dumps.map((d, j) => (
-                        <div key={j} className="text-xs bg-gray-50 border border-gray-100 rounded px-2 py-1.5">
-                          <div className="text-gray-600">{d.text}</div>
-                          <div className="text-gray-300 mt-0.5">{formatET(d.createdAt)} · {d.source}</div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  {p.intentions.length > 0 && (
-                    <div className="flex flex-wrap gap-1.5 mt-2">
-                      {p.intentions.map((intent, j) => (
-                        <span key={j} className="text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full">
-                          {intent}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                  {p.relationships?.length > 0 && (
-                    <div className="mt-2 pt-2 border-t border-gray-100">
-                      <div className="text-xs text-gray-400 mb-1">Connections</div>
-                      <div className="space-y-1">
-                        {p.relationships.map((r, j) => (
-                          <div key={j} className="flex items-start gap-1.5 text-xs">
-                            <span className="text-gray-400 shrink-0">🔗</span>
-                            <div>
-                              <span className="font-medium text-gray-700">{r.name}</span>
-                              {r.label && <span className="text-blue-600 ml-1">[{r.label}]</span>}
-                              {r.context && <span className="text-gray-500 ml-1">— {r.context}</span>}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                  <div className="mt-2 pt-2 border-t border-gray-100">
-                    {personDumpId === p._id ? (
-                      <div className="space-y-2">
-                        <textarea
-                          autoFocus
-                          value={personDumpText}
-                          onChange={(e) => setPersonDumpText(e.target.value)}
-                          placeholder={`Add info about ${p.username || p.firstName || "this person"}...`}
-                          rows={3}
-                          className="w-full px-2 py-1.5 border border-gray-200 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-blue-200 resize-y"
-                        />
-                        <div className="flex gap-2">
-                          <button
-                            onClick={() => submitPersonDump(p._id)}
-                            disabled={personDumpSending || !personDumpText.trim()}
-                            className="text-xs bg-blue-600 text-white px-3 py-1 rounded-md font-medium disabled:opacity-50"
-                          >
-                            {personDumpSending ? "Saving..." : "Save & Index"}
-                          </button>
-                          <button
-                            onClick={() => { setPersonDumpId(null); setPersonDumpText(""); }}
-                            className="text-xs text-gray-400 hover:text-gray-600"
-                          >
-                            Cancel
-                          </button>
-                        </div>
-                      </div>
-                    ) : (
-                      <button
-                        onClick={() => setPersonDumpId(p._id)}
-                        className="text-xs text-blue-600 hover:text-blue-700 font-medium"
-                      >
-                        + Add info about this person
-                      </button>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </section>
-
-        </div>
+        {/* (Chat Members + Contacts moved to toolbar People panel) */}
 
         {/* (Dump + Guidance moved to top toolbar) */}
 

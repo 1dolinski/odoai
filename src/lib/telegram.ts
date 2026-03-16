@@ -45,8 +45,7 @@ export async function sendMessageWithButtons(
   return res.json();
 }
 
-const NUMBER_EMOJIS = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣"];
-const CALENDAR_EMOJI = "📅";
+const ACTION_EMOJIS = ["👍", "👏", "🔥", "🎉", "🏆"];
 
 export async function reactToMessage(
   chatId: number | string,
@@ -54,24 +53,25 @@ export async function reactToMessage(
   actionCount: number,
   hasDate: boolean
 ) {
-  const emojis: string[] = [];
-  if (actionCount > 0) {
-    emojis.push(NUMBER_EMOJIS[Math.min(actionCount, 5) - 1]);
-  }
-  if (hasDate) emojis.push(CALENDAR_EMOJI);
-  if (!emojis.length) return;
+  if (actionCount <= 0 && !hasDate) return;
 
-  for (const emoji of emojis) {
-    await fetch(`${BASE}/setMessageReaction`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: chatId,
-        message_id: messageId,
-        reaction: [{ type: "emoji", emoji }],
-      }),
-    }).catch(console.error);
+  const reaction: { type: string; emoji: string }[] = [];
+  if (actionCount > 0) {
+    reaction.push({ type: "emoji", emoji: ACTION_EMOJIS[Math.min(actionCount, 5) - 1] });
   }
+  if (hasDate && reaction.length === 0) {
+    reaction.push({ type: "emoji", emoji: "⏰" });
+  }
+
+  await fetch(`${BASE}/setMessageReaction`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      chat_id: chatId,
+      message_id: messageId,
+      reaction,
+    }),
+  }).catch(console.error);
 }
 
 export async function getChatAdmins(chatId: number | string) {

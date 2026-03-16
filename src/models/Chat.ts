@@ -41,6 +41,7 @@ export interface IChat extends Document {
   chatTitle?: string;
   mode: ChatMode;
   aiStyle: AiStyle;
+  aiModel: string;
   dashboardToken: string;
   watchSettings: IWatchSettings;
   messages: IMessage[];
@@ -76,6 +77,7 @@ const ChatSchema = new Schema<IChat>(
       enum: ["concise", "detailed", "casual", "professional", "technical"],
       default: "concise",
     },
+    aiModel: { type: String, default: "moonshotai/kimi-k2.5" },
     dashboardToken: { type: String, unique: true, sparse: true },
     watchSettings: {
       deadlines: { type: Boolean, default: true },

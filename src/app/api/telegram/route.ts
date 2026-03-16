@@ -144,6 +144,7 @@ async function cmdOptimize(chatId: number) {
     ? `\n\nRelevant knowledge from memory:\n${formatQMDResults(knowledgeResults)}`
     : "";
 
+  const chatDoc = await Chat.findOne({ telegramChatId: String(chatId) });
   const systemPrompt = await buildSystemPrompt(String(chatId), taskList);
   const response = await aiChat([
     { role: "system", content: systemPrompt },
@@ -151,7 +152,7 @@ async function cmdOptimize(chatId: number) {
       role: "user",
       content: `Here are the current tasks:\n${taskList}${knowledgeContext}\n\nOptimize this plan: priorities, blockers, sequencing, missing steps. Be specific.`,
     },
-  ]);
+  ], chatDoc?.aiModel || undefined);
 
   return sendMessage(chatId, `ðŸ§  *Plan Optimization*\n\n${response}`);
 }
@@ -354,11 +355,11 @@ function isSimilarTask(a: string, b: string): boolean {
   return jaccard >= 0.6;
 }
 
-async function findSimilarTask(chatId: string, title: string): Promise<{ _id: string; title: string; status: string } | null> {
+async function findSimilarTask(chatId: string, title: string): Promise<{ _id: string; title: string; status: string; description?: string } | null> {
   const tasks = await Task.find({ telegramChatId: chatId }).lean();
   for (const t of tasks) {
     if (isSimilarTask(title, (t as { title: string }).title)) {
-      return t as { _id: string; title: string; status: string };
+      return t as { _id: string; title: string; status: string; description?: string };
     }
   }
   return null;
@@ -388,9 +389,10 @@ async function handleConversation(
     { role: "user" as const, content: `@${username || userId}: ${text}` },
   ];
 
-  const result = await chatWithUsage(messages);
+  const model = chatDoc?.aiModel || undefined;
+  const result = await chatWithUsage(messages, model);
   const response = result.content;
-  trackSpend(cid, "openrouter", `chat: ${text.substring(0, 50)}`, result.totalTokens).catch(console.error);
+  trackSpend(cid, "openrouter", `chat (${result.model}): ${text.substring(0, 50)}`, result.totalTokens).catch(console.error);
 
   // Execute action directives
   const actions: string[] = [];
@@ -401,18 +403,31 @@ async function handleConversation(
     const parts = m[1].split("|").map((s) => s.trim());
     const title = parts[0];
     const dueDate = parts[1] && /\d{4}-\d{2}-\d{2}/.test(parts[1]) ? new Date(parts[1]) : undefined;
+    const contextPart = parts.find((p, i) => i > 0 && !/\d{4}-\d{2}-\d{2}/.test(p) && !p.startsWith("@"));
+    const peoplePart = parts.find((p) => p.startsWith("@"));
+    const people = peoplePart ? peoplePart.split(",").map((n) => n.trim().replace(/^@/, "")).filter(Boolean) : [];
     const existing = await findSimilarTask(cid2, title);
     if (existing) {
       const upd: Record<string, unknown> = {};
       if (dueDate) upd.dueDate = dueDate;
-      if (Object.keys(upd).length) await Task.updateOne({ _id: existing._id }, { $set: upd });
+      if (contextPart && !existing.description) upd.description = contextPart;
+      if (people.length) upd.$addToSet = { people: { $each: people } };
+      if (Object.keys(upd).length) {
+        const addToSet = upd.$addToSet;
+        delete upd.$addToSet;
+        const updateOp: Record<string, unknown> = {};
+        if (Object.keys(upd).length) updateOp.$set = upd;
+        if (addToSet) updateOp.$addToSet = addToSet;
+        if (Object.keys(updateOp).length) await Task.updateOne({ _id: existing._id }, updateOp);
+      }
       continue;
     }
-    const taskData: Record<string, unknown> = { telegramChatId: cid2, title, status: "todo", createdBy: userId, createdByUsername: username };
+    const taskData: Record<string, unknown> = { telegramChatId: cid2, title, status: "todo", createdBy: userId, createdByUsername: username, people };
     if (dueDate) taskData.dueDate = dueDate;
+    if (contextPart) taskData.description = contextPart;
     await Task.create(taskData);
-    actions.push(`+ todo: ${title}${dueDate ? ` (due ${parts[1]})` : ""}`);
-    Activity.create({ telegramChatId: cid2, type: "task_added", title, detail: dueDate ? `due ${parts[1]}` : undefined, actor: username || userId }).catch(console.error);
+    actions.push(`+ todo: ${title}${people.length ? ` (${people.join(", ")})` : ""}${dueDate ? ` (due ${parts[1]})` : ""}`);
+    Activity.create({ telegramChatId: cid2, type: "task_added", title, detail: contextPart || (dueDate ? `due ${parts[1]}` : undefined), actor: username || userId }).catch(console.error);
   }
 
   const upcomingMatches = [...response.matchAll(/\[ADD_UPCOMING:\s*(.+?)\]/gi)];
@@ -420,18 +435,31 @@ async function handleConversation(
     const parts = m[1].split("|").map((s) => s.trim());
     const title = parts[0];
     const dueDate = parts[1] && /\d{4}-\d{2}-\d{2}/.test(parts[1]) ? new Date(parts[1]) : undefined;
+    const contextPart = parts.find((p, i) => i > 0 && !/\d{4}-\d{2}-\d{2}/.test(p) && !p.startsWith("@"));
+    const peoplePart = parts.find((p) => p.startsWith("@"));
+    const people = peoplePart ? peoplePart.split(",").map((n) => n.trim().replace(/^@/, "")).filter(Boolean) : [];
     const existing = await findSimilarTask(cid2, title);
     if (existing) {
       const upd: Record<string, unknown> = {};
       if (dueDate) upd.dueDate = dueDate;
-      if (Object.keys(upd).length) await Task.updateOne({ _id: existing._id }, { $set: upd });
+      if (contextPart && !existing.description) upd.description = contextPart;
+      if (people.length) upd.$addToSet = { people: { $each: people } };
+      if (Object.keys(upd).length) {
+        const addToSet = upd.$addToSet;
+        delete upd.$addToSet;
+        const updateOp: Record<string, unknown> = {};
+        if (Object.keys(upd).length) updateOp.$set = upd;
+        if (addToSet) updateOp.$addToSet = addToSet;
+        if (Object.keys(updateOp).length) await Task.updateOne({ _id: existing._id }, updateOp);
+      }
       continue;
     }
-    const taskData: Record<string, unknown> = { telegramChatId: cid2, title, status: "upcoming", createdBy: userId, createdByUsername: username };
+    const taskData: Record<string, unknown> = { telegramChatId: cid2, title, status: "upcoming", createdBy: userId, createdByUsername: username, people };
     if (dueDate) taskData.dueDate = dueDate;
+    if (contextPart) taskData.description = contextPart;
     await Task.create(taskData);
-    actions.push(`+ upcoming: ${title}${dueDate ? ` (due ${parts[1]})` : ""}`);
-    Activity.create({ telegramChatId: cid2, type: "task_upcoming", title, detail: dueDate ? `due ${parts[1]}` : undefined, actor: username || userId }).catch(console.error);
+    actions.push(`+ upcoming: ${title}${people.length ? ` (${people.join(", ")})` : ""}${dueDate ? ` (due ${parts[1]})` : ""}`);
+    Activity.create({ telegramChatId: cid2, type: "task_upcoming", title, detail: contextPart || (dueDate ? `due ${parts[1]}` : undefined), actor: username || userId }).catch(console.error);
   }
 
   const doneMatches = [...response.matchAll(/\[MARK_DONE:\s*(.+?)\]/gi)];
@@ -457,15 +485,18 @@ async function handleConversation(
     const name = parts[0].replace("@", "");
     const role = parts[1] || "";
     const context = parts[2] || "";
+    const existing = await Person.findOne({ telegramChatId: cid2, $or: [{ username: name }, { firstName: name }] });
+    const isExternalPerson = !existing || existing.source === "manual";
+    const personType = isExternalPerson && !existing?.telegramUserId?.match(/^\d+$/) ? "contact" : "member";
     await Person.findOneAndUpdate(
       { telegramChatId: cid2, $or: [{ username: name }, { firstName: name }] },
       {
-        $set: { username: name, firstName: name, role, context, lastSeen: new Date() },
-        $setOnInsert: { telegramUserId: `manual_${name}`, intentions: [], relationships: [], messageCount: 0 },
+        $set: { username: name, firstName: name, role, context, lastSeen: new Date(), ...(isExternalPerson && !existing ? { personType } : {}) },
+        $setOnInsert: { telegramUserId: `manual_${name}`, intentions: [], relationships: [], messageCount: 0, personType },
       },
       { upsert: true }
     );
-    actions.push(`+ person: ${name}${role ? ` (${role})` : ""}`);
+    actions.push(`+ ${personType}: ${name}${role ? ` (${role})` : ""}`);
     Activity.create({ telegramChatId: cid2, type: "person_added", title: name, detail: role || undefined, actor: username || userId }).catch(console.error);
   }
 
@@ -541,7 +572,7 @@ Do NOT schedule for casual chitchat or completed items. Be smart about timing â€
         role: "user",
         content: `User said: "${text}"\nBot responded: "${response.substring(0, 300)}"`,
       },
-    ]);
+    ], chatDocForMode?.aiModel || undefined);
     try {
       const parsed = JSON.parse(shouldSchedule.replace(/```json?\n?/g, "").replace(/```/g, "").trim());
       if (parsed.schedule && parsed.description && parsed.minutes) {

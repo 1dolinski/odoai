@@ -1,5 +1,5 @@
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY!;
-const OPENROUTER_MODEL = (process.env.OPENROUTER_MODEL || "openai/gpt-4o-mini").trim();
+const DEFAULT_MODEL = (process.env.OPENROUTER_MODEL || "moonshotai/kimi-k2.5").trim();
 
 interface Message {
   role: "system" | "user" | "assistant";
@@ -8,17 +8,19 @@ interface Message {
 
 export interface ChatResult {
   content: string;
+  model: string;
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;
 }
 
-export async function chat(messages: Message[]): Promise<string> {
-  const result = await chatWithUsage(messages);
+export async function chat(messages: Message[], model?: string): Promise<string> {
+  const result = await chatWithUsage(messages, model);
   return result.content;
 }
 
-export async function chatWithUsage(messages: Message[]): Promise<ChatResult> {
+export async function chatWithUsage(messages: Message[], model?: string): Promise<ChatResult> {
+  const useModel = (model || DEFAULT_MODEL).trim();
   const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -26,19 +28,20 @@ export async function chatWithUsage(messages: Message[]): Promise<ChatResult> {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: OPENROUTER_MODEL,
+      model: useModel,
       messages,
     }),
   });
 
   if (!res.ok) {
     const err = await res.text();
-    throw new Error(`OpenRouter error: ${err}`);
+    throw new Error(`OpenRouter error (${useModel}): ${err}`);
   }
 
   const data = await res.json();
   return {
     content: data.choices[0].message.content,
+    model: useModel,
     promptTokens: data.usage?.prompt_tokens || 0,
     completionTokens: data.usage?.completion_tokens || 0,
     totalTokens: data.usage?.total_tokens || 0,

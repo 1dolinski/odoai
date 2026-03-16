@@ -37,6 +37,7 @@ export async function GET(req: NextRequest) {
       telegramChatId: chat.telegramChatId,
       title: chat.chatTitle || "Untitled Chat",
       mode: chat.mode,
+      aiModel: chat.aiModel || "moonshotai/kimi-k2.5",
       aiStyle: chat.aiStyle || "concise",
       watchSettings: { ...WATCH_DEFAULTS, ...chat.watchSettings },
       guidance: chat.guidance || "",
@@ -101,7 +102,7 @@ export async function PATCH(req: NextRequest) {
   await connectDB();
 
   const body = await req.json();
-  const { token, aiStyle, watchSettings, chatTitle, mode, aiFeedEnabled } = body;
+  const { token, aiStyle, aiModel, watchSettings, chatTitle, mode, aiFeedEnabled } = body;
 
   if (!token) return NextResponse.json({ error: "token required" }, { status: 400 });
 
@@ -123,6 +124,10 @@ export async function PATCH(req: NextRequest) {
 
   if (typeof aiFeedEnabled === "boolean") {
     chat.aiFeedEnabled = aiFeedEnabled;
+  }
+
+  if (aiModel && typeof aiModel === "string") {
+    chat.aiModel = aiModel.trim();
   }
 
   if (watchSettings && typeof watchSettings === "object") {
@@ -239,8 +244,17 @@ export async function POST(req: NextRequest) {
     if (contact.email !== undefined) update.email = contact.email;
     if (contact.phone !== undefined) update.phone = contact.phone;
     if (contact.notes !== undefined) update.notes = contact.notes;
+    if (contact.resources !== undefined) update.resources = contact.resources;
+    if (contact.access !== undefined) update.access = contact.access;
+    if (contact.personType !== undefined) update.personType = contact.personType;
 
     await Person.updateOne({ _id: contact._id, telegramChatId: chatId }, { $set: update });
+    return NextResponse.json({ ok: true });
+  }
+
+  if (action === "updateTaskPeople" && body.taskId) {
+    const people = Array.isArray(body.people) ? body.people.filter((p: unknown) => typeof p === "string" && p) : [];
+    await Task.updateOne({ _id: body.taskId, telegramChatId: chatId }, { $set: { people } });
     return NextResponse.json({ ok: true });
   }
 

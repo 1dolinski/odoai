@@ -9,6 +9,10 @@ import Activity from "@/models/Activity";
 const SUMMARIZE_EVERY = 10;
 const EXTRACT_EVERY = 5;
 
+function getModel(chatDoc: { aiModel?: string } | null): string | undefined {
+  return chatDoc?.aiModel || undefined;
+}
+
 function normalize(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9 ]/g, "").replace(/\s+/g, " ").trim();
 }
@@ -126,8 +130,8 @@ CRITICAL: Break every message into AS MANY individual actions as needed. A singl
 DEDUP: NEVER add a task that already exists in ACTIVE TASKS above, even if worded slightly differently. "print stand inserts" and "printing stand inserts" are the SAME task. "make QR code" and "making QR code" are the SAME task. Check the existing list carefully before adding. If a task is essentially the same thing, do NOT emit an ADD_TODO/ADD_UPCOMING directive for it.
 
 Available actions (embed naturally in your response, use MULTIPLE per message):
-  [ADD_TODO: desc] or [ADD_TODO: desc | YYYY-MM-DD]
-  [ADD_UPCOMING: desc] or [ADD_UPCOMING: desc | YYYY-MM-DD]
+  [ADD_TODO: desc | YYYY-MM-DD | context | @person1,@person2] — context = 1-sentence explanation (ALWAYS include). Last field = comma-separated names of people involved (members or contacts). Include people whenever a task relates to or involves someone.
+  [ADD_UPCOMING: desc | YYYY-MM-DD | context | @person1,@person2] — same format as ADD_TODO
   [MARK_DONE: desc]
   [ADD_PERSON: name | role | context] — for chat members
   [ADD_CONTACT: name | role | context | resources | access] — for external contacts/connections
@@ -179,6 +183,7 @@ export async function autoExtract(chatId: string, force = false) {
   const peopleNames = existingPeople.map((p) => p.username || p.firstName).filter(Boolean);
   const taskTitles = existingTasks.map((t) => t.title);
 
+  const model = getModel(chatDoc);
   const extraction = await aiChat([
     {
       role: "system",
@@ -212,7 +217,7 @@ Rules:
       role: "user",
       content: `RECENT CONVERSATION:\n${transcript}`,
     },
-  ]);
+  ], model);
 
   try {
     const cleaned = extraction.replace(/```json?\n?/g, "").replace(/```/g, "").trim();
@@ -323,7 +328,7 @@ export async function maybeUpdateContext(chatId: string) {
       role: "user",
       content: `PREVIOUS SUMMARY:\n${oldSummary}\n\nRECENT MESSAGES:\n${transcript}\n\nProduce an updated context summary.`,
     },
-  ]);
+  ], getModel(chatDoc));
 
   await Chat.updateOne(
     { telegramChatId: chatId },
@@ -407,7 +412,7 @@ Be genuinely helpful, not performative. Don't repeat what was just said. Don't b
       role: "user",
       content: `Recent chat:\n${transcript}\n\nOpen tasks: ${tasks.map((t) => t.title).join(", ") || "none"}\nPeople: ${people.map((p) => p.username || p.firstName).join(", ") || "none"}`,
     },
-  ]);
+  ], getModel(chatDoc));
 
   const trimmed = suggestion.trim();
   if (trimmed === "PASS" || trimmed.length < 5) return null;
@@ -420,6 +425,8 @@ export async function deepProcessDump(
   username: string | undefined,
   content: string
 ) {
+  const chatDoc = await Chat.findOne({ telegramChatId: chatId });
+  const model = getModel(chatDoc);
   const systemPrompt = await buildSystemPrompt(chatId);
 
   const analysis = await aiChat([
@@ -439,7 +446,7 @@ Respond ONLY with valid JSON, no markdown fences.
 DUMP CONTENT:
 ${content}`,
     },
-  ]);
+  ], model);
 
   try {
     const cleaned = analysis.replace(/```json?\n?/g, "").replace(/```/g, "").trim();
@@ -568,7 +575,7 @@ Rules:
       role: "user",
       content: `RECENT CHAT:\n${transcript || "no recent messages"}\n\nOPEN TASKS:\n${taskSummary}\n\nDONE TASKS (${doneTasks.length}):\n${doneTasks.slice(-5).map((t) => (t as { title: string }).title).join(", ") || "none"}\n\nPEOPLE: ${peopleSummary}\n\nCONTEXT: ${chatDoc.contextSummary || "none"}`,
     },
-  ]);
+  ], getModel(chatDoc));
 
   try {
     const cleaned = response.replace(/```json?\n?/g, "").replace(/```/g, "").trim();
