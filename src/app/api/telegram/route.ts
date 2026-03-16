@@ -338,7 +338,7 @@ async function handleConversation(
   userId: string,
   username: string | undefined,
   text: string
-) {
+): Promise<string[]> {
   // Build system prompt with RAG from QMD
   const systemPrompt = await buildSystemPrompt(String(chatId), text);
   const chatDoc = await Chat.findOne({ telegramChatId: String(chatId) });
@@ -613,6 +613,8 @@ Do NOT schedule for casual chitchat or completed items. Be smart about timing â€
     { telegramChatId: cid2 },
     { $push: { messages: { role: "assistant", content: cleanResponse } } }
   );
+
+  return actions;
 }
 
 // ---- Main webhook handler ----
@@ -777,7 +779,16 @@ export async function POST(req: NextRequest) {
         autoExtract(String(chatId), true),
         maybeUpdateContext(String(chatId)),
       ]);
-      await handleConversation(chatId, userId, username, cleanText);
+      const actions = await handleConversation(chatId, userId, username, cleanText);
+      if (actions.length) {
+        Activity.create({
+          telegramChatId: String(chatId),
+          type: "ai_result",
+          title: `AI took ${actions.length} action${actions.length > 1 ? "s" : ""}`,
+          detail: actions.join(" Â· "),
+          actor: "odoai",
+        }).catch(console.error);
+      }
       return ok();
     }
 
