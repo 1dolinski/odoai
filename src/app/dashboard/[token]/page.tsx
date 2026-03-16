@@ -2059,7 +2059,29 @@ export default function DashboardPage() {
         {/* Upcoming Checks */}
         {data.checks.length > 0 && (
           <section className="mb-10">
-            <h2 className="text-lg font-semibold mb-4 text-gray-800">Scheduled Checks</h2>
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-semibold text-gray-800">Scheduled Checks</h2>
+              {data.checks.some((c) => c.status === "pending") && (
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={async () => {
+                      setData((d) => d ? { ...d, checks: d.checks.map((c) => c.status === "pending" ? { ...c, status: "skipped" as const } : c) } : d);
+                      await fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "clearAllChecks", status: "skipped" }) });
+                      fetchData();
+                    }}
+                    className="text-xs text-gray-400 hover:text-gray-600 transition-colors"
+                  >Clear all</button>
+                  <button
+                    onClick={async () => {
+                      setData((d) => d ? { ...d, checks: d.checks.map((c) => c.status === "pending" ? { ...c, status: "done" as const } : c) } : d);
+                      await fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "clearAllChecks", status: "done" }) });
+                      fetchData();
+                    }}
+                    className="text-xs text-green-500 hover:text-green-700 transition-colors"
+                  >✓ Done all</button>
+                </div>
+              )}
+            </div>
             <div className="space-y-2">
               {data.checks.map((c) => {
                 const isPending = c.status === "pending";
@@ -2067,42 +2089,74 @@ export default function DashboardPage() {
                 return (
                   <div
                     key={c._id}
-                    className={`flex items-start gap-3 rounded-lg border p-4 ${
+                    className={`rounded-lg border p-4 ${
                       isPending && isFuture
                         ? "border-amber-300 bg-amber-50"
                         : isPending
                           ? "border-orange-300 bg-orange-50"
-                          : "border-gray-200 bg-gray-50"
+                          : c.status === "done"
+                            ? "border-green-200 bg-green-50"
+                            : "border-gray-200 bg-gray-50 opacity-60"
                     }`}
                   >
-                    <span className="text-lg mt-0.5">
-                      {c.status === "done" ? "✅" : isFuture ? "⏳" : "🔔"}
-                    </span>
-                    <div className="flex-1 min-w-0">
-                      <div className="font-medium text-sm text-gray-900">{c.description}</div>
-                      {c.context && (
-                        <div className="text-xs text-gray-500 mt-1 truncate">Context: {c.context}</div>
-                      )}
-                      {c.result && (
-                        <div className="text-xs text-green-700 mt-1">{c.result}</div>
-                      )}
-                    </div>
-                    <div className="text-right shrink-0">
-                      <div className="text-xs text-gray-500">{formatET(c.scheduledFor)}</div>
-                      {c.triggeredByUsername && (
-                        <div className="text-xs text-gray-400">@{c.triggeredByUsername}</div>
-                      )}
-                      <span
-                        className={`text-xs px-1.5 py-0.5 rounded mt-1 inline-block ${
-                          c.status === "pending"
-                            ? "bg-amber-100 text-amber-700"
-                            : c.status === "done"
-                              ? "bg-green-100 text-green-700"
-                              : "bg-gray-100 text-gray-500"
-                        }`}
-                      >
-                        {c.status}
+                    <div className="flex items-start gap-3">
+                      <span className="text-lg mt-0.5">
+                        {c.status === "done" ? "✅" : c.status === "skipped" ? "⏭" : isFuture ? "⏳" : "🔔"}
                       </span>
+                      <div className="flex-1 min-w-0">
+                        <div className={`font-medium text-sm ${c.status !== "pending" ? "text-gray-400 line-through" : "text-gray-900"}`}>{c.description}</div>
+                        {c.context && (
+                          <div className="text-xs text-gray-500 mt-1 truncate">Context: {c.context}</div>
+                        )}
+                        {c.result && (
+                          <div className="text-xs text-green-700 mt-1">{c.result}</div>
+                        )}
+                        {isPending && (
+                          <div className="flex items-center gap-2 mt-2">
+                            <button
+                              onClick={async () => {
+                                setData((d) => d ? { ...d, checks: d.checks.map((ch) => ch._id === c._id ? { ...ch, status: "skipped" as const } : ch) } : d);
+                                fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "clearCheck", checkId: c._id, status: "skipped" }) });
+                              }}
+                              className="text-[10px] text-gray-400 hover:text-gray-600 font-medium"
+                            >✕ Clear</button>
+                            <button
+                              onClick={async () => {
+                                setData((d) => d ? { ...d, checks: d.checks.map((ch) => ch._id === c._id ? { ...ch, status: "done" as const } : ch) } : d);
+                                fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "clearCheck", checkId: c._id, status: "done" }) });
+                              }}
+                              className="text-[10px] text-green-500 hover:text-green-700 font-medium"
+                            >✓ Done</button>
+                            <button
+                              onClick={() => {
+                                const ctx = prompt("Add context (what happened, outcome, notes):");
+                                if (ctx !== null && ctx.trim()) {
+                                  setData((d) => d ? { ...d, checks: d.checks.map((ch) => ch._id === c._id ? { ...ch, status: "done" as const, result: ctx.trim() } : ch) } : d);
+                                  fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "clearCheck", checkId: c._id, status: "done", context: ctx.trim(), result: ctx.trim() }) });
+                                }
+                              }}
+                              className="text-[10px] text-indigo-500 hover:text-indigo-700 font-medium"
+                            >✓ Done + context</button>
+                          </div>
+                        )}
+                      </div>
+                      <div className="text-right shrink-0">
+                        <div className="text-xs text-gray-500">{formatET(c.scheduledFor)}</div>
+                        {c.triggeredByUsername && (
+                          <div className="text-xs text-gray-400">@{c.triggeredByUsername}</div>
+                        )}
+                        <span
+                          className={`text-xs px-1.5 py-0.5 rounded mt-1 inline-block ${
+                            c.status === "pending"
+                              ? "bg-amber-100 text-amber-700"
+                              : c.status === "done"
+                                ? "bg-green-100 text-green-700"
+                                : "bg-gray-100 text-gray-500"
+                          }`}
+                        >
+                          {c.status}
+                        </span>
+                      </div>
                     </div>
                   </div>
                 );

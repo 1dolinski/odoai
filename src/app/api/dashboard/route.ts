@@ -582,6 +582,31 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  if (action === "clearCheck" && body.checkId) {
+    const status = body.status === "done" ? "done" : "skipped";
+    const update: Record<string, unknown> = { status, completedAt: new Date() };
+    if (body.result) update.result = body.result;
+    await Check.updateOne({ _id: body.checkId, telegramChatId: chatId }, { $set: update });
+    if (body.context && typeof body.context === "string" && body.context.trim()) {
+      const check = await Check.findById(body.checkId).lean();
+      if (check) {
+        const desc = (check as { description: string }).description;
+        writeKnowledge(chatId, "context", `check-resolved-${body.checkId}`, `# Check Resolved: ${desc}\n\nStatus: ${status}\nContext: ${body.context.trim()}\nResolved: ${new Date().toISOString().split("T")[0]}`).catch(console.error);
+      }
+    }
+    return NextResponse.json({ ok: true });
+  }
+
+  if (action === "clearAllChecks") {
+    const status = body.status === "done" ? "done" : "skipped";
+    const update: Record<string, unknown> = { status, completedAt: new Date() };
+    if (body.context && typeof body.context === "string" && body.context.trim()) {
+      update.result = body.context.trim();
+    }
+    await Check.updateMany({ telegramChatId: chatId, status: "pending" }, { $set: update });
+    return NextResponse.json({ ok: true });
+  }
+
   if (action === "renameTask" && body.taskId && body.newTitle) {
     const newTitle = (body.newTitle as string).trim();
     if (!newTitle) return NextResponse.json({ error: "title required" }, { status: 400 });
