@@ -1622,12 +1622,14 @@ export default function DashboardPage() {
                   disabled={abilitiesSaving}
                   onClick={async () => {
                     setAbilitiesSaving(true);
+                    setData((d) => d ? { ...d, chat: { ...d.chat, abilities: abilitiesDraft } } : d);
                     await fetch("/api/dashboard", {
                       method: "PATCH",
                       headers: { "Content-Type": "application/json" },
                       body: JSON.stringify({ token, abilities: abilitiesDraft }),
                     });
                     setAbilitiesSaving(false);
+                    await fetchData();
                   }}
                   className="px-4 py-2 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700 disabled:opacity-50 transition-colors"
                 >
