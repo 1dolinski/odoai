@@ -466,12 +466,10 @@ export async function POST(req: NextRequest) {
   }
 
   if (action === "feedItemStatus" && typeof body.feedIndex === "number" && body.status) {
-    const chatDoc = await Chat.findOne({ telegramChatId: chatId });
-    if (chatDoc && chatDoc.aiFeed[body.feedIndex]) {
-      chatDoc.aiFeed[body.feedIndex].status = body.status;
-      chatDoc.markModified("aiFeed");
-      await chatDoc.save();
-    }
+    await Chat.updateOne(
+      { telegramChatId: chatId },
+      { $set: { [`aiFeed.${body.feedIndex}.status`]: body.status } }
+    );
     return NextResponse.json({ ok: true });
   }
 
