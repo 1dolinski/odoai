@@ -286,8 +286,8 @@ Rules:
         const name = (p.name || "").replace("@", "").trim();
         if (!name) continue;
         const updates: Record<string, unknown> = { lastSeen: new Date() };
-        if (p.role) updates.role = p.role;
-        if (p.context) updates.context = p.context;
+        if (p.role && p.role !== "null") updates.role = p.role;
+        if (p.context && p.context !== "null") updates.context = p.context;
 
         if (p.intentions?.length) {
           const existingPerson = await Person.findOne({ telegramChatId: chatId, $or: [{ username: name }, { firstName: name }] });
@@ -509,7 +509,9 @@ ${content}`,
         const id = p.identifier?.replace("@", "") || "";
         if (!id) continue;
         const existingP = await Person.findOne({ telegramChatId: chatId, $or: [{ username: id }, { firstName: id }] });
-        const setFields: Record<string, unknown> = { role: p.role, context: p.context };
+        const setFields: Record<string, unknown> = {};
+        if (p.role && p.role !== "null") setFields.role = p.role;
+        if (p.context && p.context !== "null") setFields.context = p.context;
         if (p.intentions?.length) setFields.intentions = dedupeIntentions(existingP?.intentions || [], p.intentions);
         await Person.findOneAndUpdate(
           { telegramChatId: chatId, $or: [{ username: id }, { firstName: id }] },

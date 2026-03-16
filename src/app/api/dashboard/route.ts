@@ -55,7 +55,7 @@ export async function GET(req: NextRequest) {
       _id: p._id,
       username: p.username,
       firstName: p.firstName,
-      role: p.role,
+      role: p.role && p.role !== "null" ? p.role : "",
       context: p.context,
       intentions: p.intentions,
       relationships: (p.relationships || []).map((r: { name: string; label: string; context: string }) => ({
