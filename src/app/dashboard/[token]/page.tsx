@@ -219,7 +219,13 @@ export default function DashboardPage() {
   });
   const [categoryFilters, setCategoryFilters] = useState<Set<string>>(new Set());
   const [categorizing, setCategorizing] = useState(false);
-  const [taskViewMode, setTaskViewMode] = useState<"list" | "categories">("list");
+  const [taskViewMode, setTaskViewMode] = useState<"list" | "categories">(() => {
+    if (typeof window !== "undefined") {
+      const cached = localStorage.getItem("taskViewMode");
+      if (cached === "list" || cached === "categories") return cached;
+    }
+    return "list";
+  });
   const [expandedCategory, setExpandedCategory] = useState<string | null>(null);
   const [showCalendar, setShowCalendar] = useState(false);
   const [syncingMembers, setSyncingMembers] = useState(false);
@@ -1892,14 +1898,14 @@ export default function DashboardPage() {
                   setCategorizing(false);
                 }}
                 className="text-[10px] text-gray-400 hover:text-gray-600 font-medium transition-colors disabled:opacity-50"
-              >{categorizing ? "..." : "⟳ Categorize"}</button>
+              >{categorizing ? "..." : activeTasks.some((t) => !t.categories || t.categories.length === 0) && allCategories.length > 0 ? "⟳ Re-categorize" : "⟳ Categorize"}</button>
               {allCategories.length > 0 && (
                 <div className="flex gap-0.5 bg-gray-100 rounded-md p-0.5">
-                  <button onClick={() => setTaskViewMode("list")} className={`px-2 py-1 rounded text-[10px] font-medium transition-all ${taskViewMode === "list" ? "bg-white text-gray-900 shadow-sm" : "text-gray-500"}`}>List</button>
+                  <button onClick={() => { setTaskViewMode("list"); localStorage.setItem("taskViewMode", "list"); }} className={`px-2 py-1 rounded text-[10px] font-medium transition-all ${taskViewMode === "list" ? "bg-white text-gray-900 shadow-sm" : "text-gray-500"}`}>List</button>
                   <button
                     disabled={categorizing}
                     onClick={async () => {
-                      if (taskViewMode === "categories") { setTaskViewMode("list"); return; }
+                      if (taskViewMode === "categories") { setTaskViewMode("list"); localStorage.setItem("taskViewMode", "list"); return; }
                       if (allCategories.length === 0) {
                         setCategorizing(true);
                         await fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "categorizeTasks" }) });
@@ -1907,6 +1913,7 @@ export default function DashboardPage() {
                         setCategorizing(false);
                       }
                       setTaskViewMode("categories");
+                      localStorage.setItem("taskViewMode", "categories");
                     }}
                     className={`px-2 py-1 rounded text-[10px] font-medium transition-all ${taskViewMode === "categories" ? "bg-white text-gray-900 shadow-sm" : "text-gray-500"} disabled:opacity-50`}
                   >{categorizing ? "..." : "Categories"}</button>
