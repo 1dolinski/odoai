@@ -2066,7 +2066,7 @@ export default function DashboardPage() {
                   onClick={async () => {
                     const r = await fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "testSocial" }) });
                     const j = await r.json();
-                    alert(JSON.stringify(j.steps, null, 2));
+                    console.log("testSocial result:", JSON.stringify(j.steps, null, 2));
                   }}
                 >Run connection test</button>
               </div>
