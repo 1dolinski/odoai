@@ -965,7 +965,7 @@ export default function DashboardPage() {
               { key: "actions", label: "Quick Actions", state: showActions, set: setShowActions },
               { key: "watch", label: "Watch List", state: showWatch, set: setShowWatch },
               { key: "abilities", label: "Abilities", state: showAbilities, set: setShowAbilities },
-              { key: "dataSources", label: `Data Sources${(() => { const total = (data.availableDataSources || []).reduce((s: number, src: { endpoints: { id: string }[] }) => s + src.endpoints.length, 0); const on = (data.chat.dataSources || []).filter((ds: { enabled: boolean }) => ds.enabled).length; return total ? ` (${on}/${total})` : ""; })()}`, state: showDataSources, set: setShowDataSources },
+              { key: "dataSources", label: `Data Sources${(() => { const availableIds = new Set((data.availableDataSources || []).flatMap((src: { id: string; endpoints: { id: string }[] }) => src.endpoints.map((ep) => `${src.id}/${ep.id}`))); const total = availableIds.size; const on = (data.chat.dataSources || []).filter((ds: { sourceId: string; endpointId: string; enabled: boolean }) => ds.enabled && availableIds.has(`${ds.sourceId}/${ds.endpointId}`)).length; return total ? ` (${on}/${total})` : ""; })()}`, state: showDataSources, set: setShowDataSources },
               { key: "social", label: "Social Query", state: showSocial, set: setShowSocial },
             ] as { key: string; label: string; state: boolean; set: (v: boolean) => void }[]).map((btn) => (
               <button
