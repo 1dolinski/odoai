@@ -946,12 +946,12 @@ Be specific with numbers. Compare across time periods when historical data is av
     }
     try {
       const result = await querySocial(body.platform as Platform, body.endpoint, body.params);
-      if (!result.error && result.data) {
-        await DataSnapshot.create({
+      if (!result.error) {
+        const snap = await DataSnapshot.create({
           telegramChatId: chatId,
           sourceId: `social-${body.platform}`,
           endpointId: body.endpoint,
-          data: { params: body.params, result: result.data, pollStatus: result.pollStatus },
+          data: { params: body.params, result: result.data, pollStatus: result.pollStatus || "pending", jobToken: result.jobToken, cost: result.cost },
           fetchedAt: result.fetchedAt,
         });
         if (result.pollStatus === "finished") {
@@ -963,6 +963,7 @@ Be specific with numbers. Compare across time periods when historical data is av
             { source: `social-${body.platform}`, endpoint: body.endpoint }
           ).catch(console.error);
         }
+        return NextResponse.json({ ok: true, ...result, snapshotId: snap._id, fetchedAt: result.fetchedAt.toISOString() });
       }
       return NextResponse.json({ ok: true, ...result, fetchedAt: result.fetchedAt.toISOString() });
     } catch (err) {
@@ -976,26 +977,64 @@ Be specific with numbers. Compare across time periods when historical data is av
     }
     try {
       const poll = await pollJobResult(body.jobToken, { deadlineMs: body.deadlineMs || 25000 });
-      if (poll.status === "finished" && poll.data && body.platform && body.endpoint) {
-        await DataSnapshot.create({
-          telegramChatId: chatId,
-          sourceId: `social-${body.platform}`,
-          endpointId: body.endpoint,
-          data: { params: body.params || {}, result: poll.data, pollStatus: "finished" },
-          fetchedAt: new Date(),
-        });
-        writeKnowledge(
-          chatId,
-          "context",
-          `social-${body.platform}-${body.endpoint}-${Date.now()}`,
-          `# Social Data: ${body.platform}/${body.endpoint}\nPolled result\n\n${JSON.stringify(poll.data, null, 2).substring(0, 4000)}`,
-          { source: `social-${body.platform}`, endpoint: body.endpoint }
-        ).catch(console.error);
+      if (poll.status === "finished" && poll.data) {
+        if (body.snapshotId) {
+          await DataSnapshot.findByIdAndUpdate(body.snapshotId, {
+            "data.result": poll.data,
+            "data.pollStatus": "finished",
+            fetchedAt: new Date(),
+          });
+        } else if (body.platform && body.endpoint) {
+          await DataSnapshot.create({
+            telegramChatId: chatId,
+            sourceId: `social-${body.platform}`,
+            endpointId: body.endpoint,
+            data: { params: body.params || {}, result: poll.data, pollStatus: "finished" },
+            fetchedAt: new Date(),
+          });
+        }
+        if (body.platform && body.endpoint) {
+          writeKnowledge(
+            chatId,
+            "context",
+            `social-${body.platform}-${body.endpoint}-${Date.now()}`,
+            `# Social Data: ${body.platform}/${body.endpoint}\nPolled result\n\n${JSON.stringify(poll.data, null, 2).substring(0, 4000)}`,
+            { source: `social-${body.platform}`, endpoint: body.endpoint }
+          ).catch(console.error);
+        }
+      } else if (body.snapshotId && poll.status === "timeout") {
+        await DataSnapshot.findByIdAndUpdate(body.snapshotId, { "data.pollStatus": "timeout" });
       }
       return NextResponse.json({ ok: true, ...poll });
     } catch (err) {
       return NextResponse.json({ ok: false, status: "failed", error: String(err), attempts: 0 });
     }
+  }
+
+  if (action === "getPendingJobs") {
+    const pending = await DataSnapshot.find({
+      telegramChatId: chatId,
+      sourceId: /^social-/,
+      "data.jobToken": { $exists: true, $ne: null },
+      "data.pollStatus": { $in: ["pending", "timeout"] },
+    }).sort({ fetchedAt: -1 }).limit(20).lean();
+    return NextResponse.json({
+      ok: true,
+      jobs: pending.map((j) => {
+        const d = j as unknown as { _id: string; sourceId: string; endpointId: string; data: { params?: Record<string, string>; jobToken: string; pollStatus: string; cost?: string }; fetchedAt: Date };
+        return {
+          id: String(d._id),
+          sourceId: d.sourceId,
+          endpointId: d.endpointId,
+          platform: d.sourceId.replace("social-", ""),
+          jobToken: d.data.jobToken,
+          pollStatus: d.data.pollStatus,
+          cost: d.data.cost || "$0.07",
+          params: d.data.params || {},
+          fetchedAt: d.fetchedAt,
+        };
+      }),
+    });
   }
 
   if (action === "getSocialHistory" && body.platform && body.endpoint) {

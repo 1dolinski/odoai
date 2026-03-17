@@ -301,7 +301,7 @@ export default function DashboardPage() {
   const [socialEndpoints, setSocialEndpoints] = useState<{ id: string; path: string; description: string; dependsOn?: string; params: { name: string; required: boolean; description: string; default?: string }[] }[]>([]);
   const [socialParams, setSocialParams] = useState<Record<string, string>>({});
   const [socialLoading, setSocialLoading] = useState(false);
-  const [socialResult, setSocialResult] = useState<{ data: Record<string, unknown> | null; cost: string; error?: string; jobToken?: string; pollStatus?: string } | null>(null);
+  const [socialResult, setSocialResult] = useState<{ data: Record<string, unknown> | null; cost: string; error?: string; jobToken?: string; pollStatus?: string; snapshotId?: string } | null>(null);
   const [pollLoading, setPollLoading] = useState(false);
   const [socialHistory, setSocialHistory] = useState<{ data: Record<string, unknown>; fetchedAt: string }[]>([]);
   const [socialSnapshots, setSocialSnapshots] = useState<{ sourceId: string; endpointId: string; count: number; latest: string; pollStatus?: string; params?: Record<string, string> }[]>([]);
@@ -312,6 +312,8 @@ export default function DashboardPage() {
   const [expandedSnap, setExpandedSnap] = useState<string | null>(null);
   const [expandedSnapData, setExpandedSnapData] = useState<Record<string, { data: Record<string, unknown>; fetchedAt: string }[] | null>>({});
   const [expandedSnapLoading, setExpandedSnapLoading] = useState<string | null>(null);
+  const [pendingJobs, setPendingJobs] = useState<{ id: string; sourceId: string; endpointId: string; platform: string; jobToken: string; pollStatus: string; cost: string; params: Record<string, string>; fetchedAt: string }[]>([]);
+  const [retryingJob, setRetryingJob] = useState<string | null>(null);
   const [abilitiesDraft, setAbilitiesDraft] = useState("");
   const [abilitiesSaving, setAbilitiesSaving] = useState(false);
   const [generatingSubtasks, setGeneratingSubtasks] = useState<string | null>(null);
@@ -384,8 +386,24 @@ export default function DashboardPage() {
     }
   };
 
+  const refreshPendingJobs = () => {
+    if (token) {
+      fetch("/api/dashboard", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token, action: "getPendingJobs" }),
+      })
+        .then((r) => r.json())
+        .then((j) => setPendingJobs(j.jobs || []))
+        .catch(() => {});
+    }
+  };
+
   useEffect(() => {
-    if (showSocial && token) refreshSocialSnapshots();
+    if (showSocial && token) {
+      refreshSocialSnapshots();
+      refreshPendingJobs();
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showSocial, token]);
 
@@ -2400,6 +2418,68 @@ export default function DashboardPage() {
                 </div>
               )}
 
+              {pendingJobs.length > 0 && (
+                <div className="mb-4 border border-amber-200 rounded-lg overflow-hidden bg-amber-50/30">
+                  <div className="bg-amber-50 px-3 py-2 border-b border-amber-200">
+                    <h4 className="text-xs font-semibold text-amber-800">Pending Jobs ({pendingJobs.length})</h4>
+                    <p className="text-[10px] text-amber-600 mt-0.5">Payment completed — waiting for results. Retry is free.</p>
+                  </div>
+                  <div className="divide-y divide-amber-100">
+                    {pendingJobs.map((job) => {
+                      const platformLabel = job.platform.charAt(0).toUpperCase() + job.platform.slice(1);
+                      const handle = job.params?.handle || job.params?.profile_id || job.params?.query || "";
+                      const isRetrying = retryingJob === job.id;
+                      return (
+                        <div key={job.id} className="flex items-center justify-between px-3 py-2.5">
+                          <div className="flex items-center gap-2">
+                            <span className="text-[10px] px-1.5 py-0.5 rounded font-medium bg-amber-100 text-amber-800">
+                              {job.pollStatus === "timeout" ? "⏱ timed out" : "⏳ pending"}
+                            </span>
+                            <span className="text-xs font-medium text-gray-800">{platformLabel}</span>
+                            <span className="text-[11px] text-gray-500">{job.endpointId}</span>
+                            {handle && <span className="text-[10px] text-gray-400 font-mono">@{handle}</span>}
+                            <span className="text-[10px] text-gray-400">{job.cost}</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-[10px] text-gray-400">{timeAgo(job.fetchedAt)}</span>
+                            <button
+                              disabled={isRetrying}
+                              onClick={async () => {
+                                setRetryingJob(job.id);
+                                try {
+                                  const res = await fetch("/api/dashboard", {
+                                    method: "POST",
+                                    headers: { "Content-Type": "application/json" },
+                                    body: JSON.stringify({ token, action: "pollSocialJob", jobToken: job.jobToken, snapshotId: job.id, platform: job.platform, endpoint: job.endpointId, params: job.params, deadlineMs: 25000 }),
+                                  });
+                                  const json = await res.json();
+                                  if (json.status === "finished" && json.data) {
+                                    setSocialResult({ data: json.data as Record<string, unknown>, cost: job.cost, pollStatus: "finished" });
+                                    refreshSocialSnapshots();
+                                    refreshPendingJobs();
+                                  } else {
+                                    refreshPendingJobs();
+                                  }
+                                } catch {}
+                                setRetryingJob(null);
+                              }}
+                              className="px-2.5 py-1 bg-amber-600 text-white text-[10px] font-medium rounded-lg hover:bg-amber-700 disabled:opacity-50 transition-colors flex items-center gap-1"
+                            >
+                              {isRetrying ? (
+                                <>
+                                  <svg className="w-3 h-3 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2" /></svg>
+                                  Polling…
+                                </>
+                              ) : "Retry Poll"}
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
                 <div>
                   <label className="text-xs font-medium text-gray-600 mb-1 block">Platform</label>
@@ -2516,7 +2596,8 @@ export default function DashboardPage() {
                         body: JSON.stringify({ token, action: "querySocial", platform: socialPlatform, endpoint: socialEndpoint, params: socialParams }),
                       });
                       const json = await res.json();
-                      setSocialResult({ data: json.data, cost: json.cost, error: json.error, jobToken: json.jobToken, pollStatus: json.pollStatus });
+                      setSocialResult({ data: json.data, cost: json.cost, error: json.error, jobToken: json.jobToken, pollStatus: json.pollStatus, snapshotId: json.snapshotId });
+                      refreshPendingJobs();
                       const histRes = await fetch("/api/dashboard", {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
@@ -2556,7 +2637,7 @@ export default function DashboardPage() {
                         const res = await fetch("/api/dashboard", {
                           method: "POST",
                           headers: { "Content-Type": "application/json" },
-                          body: JSON.stringify({ token, action: "pollSocialJob", jobToken: socialResult.jobToken, platform: socialPlatform, endpoint: socialEndpoint, params: socialParams, deadlineMs: 25000 }),
+                          body: JSON.stringify({ token, action: "pollSocialJob", jobToken: socialResult.jobToken, snapshotId: socialResult.snapshotId, platform: socialPlatform, endpoint: socialEndpoint, params: socialParams, deadlineMs: 25000 }),
                         });
                         const json = await res.json();
                         if (json.status === "finished" && json.data) {
@@ -2569,6 +2650,7 @@ export default function DashboardPage() {
                           const histJson = await histRes.json();
                           setSocialHistory(histJson.history || []);
                           refreshSocialSnapshots();
+                          refreshPendingJobs();
                         } else if (json.status === "failed") {
                           setSocialResult((prev) => prev ? { ...prev, pollStatus: "failed", error: json.error } : prev);
                         }
