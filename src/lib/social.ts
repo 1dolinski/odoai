@@ -45,6 +45,9 @@ function getPaymentFetch() {
 }
 
 async function callExternal(url: string, opts: { method?: string; body?: Record<string, unknown> } = {}): Promise<unknown> {
+  const proxyUrl = new URL(`${PROXY_URL}/api/x402-proxy`);
+  proxyUrl.searchParams.set("url", url);
+
   const proxyBody = {
     url,
     method: opts.method || "POST",
@@ -52,7 +55,7 @@ async function callExternal(url: string, opts: { method?: string; body?: Record<
   };
 
   const paymentFetch = getPaymentFetch();
-  const res = await paymentFetch(`${PROXY_URL}/api/x402-proxy`, {
+  const res = await paymentFetch(proxyUrl.toString(), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(proxyBody),
@@ -69,7 +72,8 @@ async function callExternal(url: string, opts: { method?: string; body?: Record<
 
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`Proxy ${res.status}: ${text}`);
+    const prHeader = res.headers.get("PAYMENT-REQUIRED") || res.headers.get("payment-required") || "(none)";
+    throw new Error(`Proxy ${res.status}: ${text} [payment-required: ${prHeader}]`);
   }
 
   return res.json();
