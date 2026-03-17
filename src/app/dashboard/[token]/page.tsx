@@ -298,7 +298,7 @@ export default function DashboardPage() {
   const [showSocial, setShowSocial] = useState(false);
   const [socialPlatform, setSocialPlatform] = useState("");
   const [socialEndpoint, setSocialEndpoint] = useState("");
-  const [socialEndpoints, setSocialEndpoints] = useState<{ id: string; path: string; description: string; dependsOn?: string; params: { name: string; required: boolean; description: string }[] }[]>([]);
+  const [socialEndpoints, setSocialEndpoints] = useState<{ id: string; path: string; description: string; dependsOn?: string; params: { name: string; required: boolean; description: string; default?: string }[] }[]>([]);
   const [socialParams, setSocialParams] = useState<Record<string, string>>({});
   const [socialLoading, setSocialLoading] = useState(false);
   const [socialResult, setSocialResult] = useState<{ data: Record<string, unknown> | null; cost: string; error?: string; jobToken?: string; pollStatus?: string } | null>(null);
@@ -2445,7 +2445,7 @@ export default function DashboardPage() {
                       if (ep) {
                         const defaults: Record<string, string> = {};
                         for (const param of ep.params) {
-                          defaults[param.name] = socialParams[param.name] || "";
+                          defaults[param.name] = socialParams[param.name] || param.default || "";
                         }
                         setSocialParams(defaults);
                       }
@@ -2470,19 +2470,34 @@ export default function DashboardPage() {
                       <p className="text-[10px] text-amber-600 bg-amber-50 px-2 py-1 rounded mb-2">Depends on <strong>{ep.dependsOn}</strong> — run that endpoint first for best results.</p>
                     )}
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                      {ep.params.map((param) => (
-                        <div key={param.name}>
-                          <label className="text-[10px] font-medium text-gray-500 mb-0.5 block">
-                            {param.name}{param.required && <span className="text-red-400">*</span>} <span className="font-normal text-gray-400">— {param.description}</span>
-                          </label>
-                          <input
-                            value={socialParams[param.name] || ""}
-                            onChange={(e) => setSocialParams((p) => ({ ...p, [param.name]: e.target.value }))}
-                            placeholder={param.description}
-                            className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-indigo-300 focus:border-indigo-400 outline-none"
-                          />
-                        </div>
-                      ))}
+                      {ep.params.map((param) => {
+                        const enumMatch = param.description.match(/\(([a-z0-9_]+(?:,\s*[a-z0-9_]+)+)\)/i);
+                        const options = enumMatch ? enumMatch[1].split(/,\s*/) : null;
+                        return (
+                          <div key={param.name}>
+                            <label className="text-[10px] font-medium text-gray-500 mb-0.5 block">
+                              {param.name}{param.required && <span className="text-red-400">*</span>} <span className="font-normal text-gray-400">— {param.description}</span>
+                            </label>
+                            {options ? (
+                              <select
+                                value={socialParams[param.name] || ""}
+                                onChange={(e) => setSocialParams((p) => ({ ...p, [param.name]: e.target.value }))}
+                                className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-indigo-300 focus:border-indigo-400 outline-none"
+                              >
+                                {!param.default && <option value="">Select...</option>}
+                                {options.map((o) => <option key={o} value={o}>{o}</option>)}
+                              </select>
+                            ) : (
+                              <input
+                                value={socialParams[param.name] || ""}
+                                onChange={(e) => setSocialParams((p) => ({ ...p, [param.name]: e.target.value }))}
+                                placeholder={param.description}
+                                className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-indigo-300 focus:border-indigo-400 outline-none"
+                              />
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
                 );

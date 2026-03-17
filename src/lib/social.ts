@@ -87,7 +87,7 @@ export interface SocialEndpoint {
   path: string;
   description: string;
   dependsOn?: string;
-  params: { name: string; required: boolean; description: string }[];
+  params: { name: string; required: boolean; description: string; default?: string }[];
 }
 
 export const SOCIAL_PLATFORMS: Record<Platform, { label: string; endpoints: SocialEndpoint[] }> = {
@@ -110,7 +110,7 @@ export const SOCIAL_PLATFORMS: Record<Platform, { label: string; endpoints: Soci
     label: "Instagram",
     endpoints: [
       { id: "profile", path: "/api/instagram/profile", description: "Get user profile", params: [{ name: "handle", required: true, description: "Username (without @)" }] },
-      { id: "posts", path: "/api/instagram/posts", description: "Get user posts", dependsOn: "profile", params: [{ name: "handle", required: true, description: "Username" }, { name: "max_posts", required: false, description: "Max posts" }] },
+      { id: "posts", path: "/api/instagram/posts", description: "Get user posts", dependsOn: "profile", params: [{ name: "handle", required: true, description: "Username" }, { name: "max_page_size", required: false, description: "Results per page" }, { name: "order_by", required: false, description: "Sort order (date_desc, date_asc, id_desc)", default: "date_desc" }, { name: "cursor", required: false, description: "Pagination cursor" }] },
       { id: "post-comments", path: "/api/instagram/post-comments", description: "Get post comments", dependsOn: "posts", params: [{ name: "post_id", required: true, description: "Post ID" }] },
       { id: "comment-replies", path: "/api/instagram/comment-replies", description: "Get replies to a comment", dependsOn: "post-comments", params: [{ name: "comment_id", required: true, description: "Comment ID" }] },
       { id: "followers", path: "/api/instagram/followers", description: "Get followers", dependsOn: "profile", params: [{ name: "handle", required: true, description: "Username" }, { name: "max_followers", required: false, description: "Max followers" }] },
@@ -278,9 +278,14 @@ export async function querySocial(
 
   const url = `${BASE_URL}${ep.path}`;
 
-  const NUMERIC_PARAMS = new Set(["max_posts", "max_posts", "max_comments", "max_followers", "max_results", "max_activities", "max_page_size", "max_profiles"]);
+  const merged: Record<string, string> = { ...params };
+  for (const p of ep.params) {
+    if (p.default && !merged[p.name]) merged[p.name] = p.default;
+  }
+
+  const NUMERIC_PARAMS = new Set(["max_posts", "max_comments", "max_followers", "max_results", "max_activities", "max_page_size", "max_profiles"]);
   const coerced: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(params)) {
+  for (const [k, v] of Object.entries(merged)) {
     if (!v) continue;
     coerced[k] = NUMERIC_PARAMS.has(k) && /^\d+$/.test(v) ? Number(v) : v;
   }
