@@ -508,7 +508,7 @@ Rules:
 - Tags are 1-2 words, lowercase, no special chars
 - Reuse tags across tasks when topics overlap
 - Common patterns: project names, functional areas (logistics, marketing, finance), themes
-- Keep total unique tags under 8-10 for the whole set` },
+- Use EXACTLY 5 unique tags total for the whole set — no more, no less. Pick the 5 most meaningful groupings.` },
       { role: "user", content: `Tasks:\n${taskList.map((t) => `${t.id}: ${t.title}`).join("\n")}` },
     ], "openai/gpt-4o-mini");
     try {
