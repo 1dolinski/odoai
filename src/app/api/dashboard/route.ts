@@ -828,54 +828,23 @@ Be specific with numbers. Compare across time periods when historical data is av
     const pk = process.env.APINOW_PRIVATE_KEY?.trim();
     steps.push({ step: "APINOW_PRIVATE_KEY exists", ok: !!pk, detail: pk ? `length=${pk.length}, starts=0x=${pk.startsWith("0x")}` : "missing" });
     if (pk) {
+      const t0 = Date.now();
       try {
-        const { createClient } = await import("apinow-sdk");
-        let k = pk;
-        if (!k.startsWith("0x")) k = `0x${k}`;
-        const client = createClient({ privateKey: k as `0x${string}` });
-        steps.push({ step: "createClient", ok: true, detail: `wallet=${client.wallet}` });
+        const result = await querySocial("instagram", "profile", { handle: "nike" }, { autoPoll: false });
+        steps.push({ step: "querySocial (trigger only)", ok: !result.error, detail: `pollStatus=${result.pollStatus} jobToken=${result.jobToken ? result.jobToken.substring(0, 30) + "…" : "no"} error=${result.error || "none"} cost=${result.cost}`, ms: Date.now() - t0 });
 
-        const t0 = Date.now();
-        try {
-          const price = await client.discoverPrice("https://stablesocial.dev/api/instagram/profile");
-          steps.push({ step: "discoverPrice", ok: true, detail: JSON.stringify(price), ms: Date.now() - t0 });
-        } catch (e: unknown) {
-          const err = e as Error;
-          steps.push({ step: "discoverPrice", ok: false, detail: `${err.message}${err.cause ? ` | cause: ${JSON.stringify(err.cause)}` : ""}`, ms: Date.now() - t0 });
-        }
-
-        const t1 = Date.now();
-        try {
-          const proxyUrl = "https://www.apinow.fun/api/x402-proxy";
-          const proxyBody = JSON.stringify({ url: "https://stablesocial.dev/api/instagram/profile", method: "POST", body: { handle: "nike" } });
-          const rawRes = await fetch(proxyUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: proxyBody });
-          steps.push({ step: "raw POST to proxy", ok: true, detail: `status=${rawRes.status} headers=${JSON.stringify(Object.fromEntries(rawRes.headers.entries())).substring(0, 300)}`, ms: Date.now() - t1 });
-        } catch (e: unknown) {
-          const err = e as Error;
-          steps.push({ step: "raw POST to proxy", ok: false, detail: `${err.message} | cause: ${err.cause ? JSON.stringify(err.cause, Object.getOwnPropertyNames(err.cause as object)) : "none"} | stack: ${err.stack?.substring(0, 300)}`, ms: Date.now() - t1 });
-        }
-
-        const t1b = Date.now();
-        try {
-          const data = await client.callExternal("https://stablesocial.dev/api/instagram/profile", { method: "POST", body: { handle: "nike" } });
-          steps.push({ step: "callExternal", ok: true, detail: JSON.stringify(data).substring(0, 200), ms: Date.now() - t1b });
-        } catch (e: unknown) {
-          const err = e as Error;
-          const causeStr = err.cause ? JSON.stringify(err.cause, Object.getOwnPropertyNames(err.cause as object)) : "none";
-          steps.push({ step: "callExternal", ok: false, detail: `${err.message} | cause: ${causeStr} | stack: ${err.stack?.substring(0, 500)}`, ms: Date.now() - t1b });
-        }
-
-        const t2 = Date.now();
-        try {
-          const directRes = await fetch("https://stablesocial.dev/api/jobs", { method: "GET" });
-          steps.push({ step: "direct fetch stablesocial", ok: true, detail: `status=${directRes.status}`, ms: Date.now() - t2 });
-        } catch (e: unknown) {
-          const err = e as Error;
-          steps.push({ step: "direct fetch stablesocial", ok: false, detail: `${err.message}${err.cause ? ` | cause: ${JSON.stringify(err.cause)}` : ""}`, ms: Date.now() - t2 });
+        if (result.jobToken) {
+          const t1 = Date.now();
+          try {
+            const poll = await pollJobResult(result.jobToken, { maxAttempts: 5, deadlineMs: 15000 });
+            steps.push({ step: "pollJobResult (SIWX)", ok: poll.status === "finished", detail: `status=${poll.status} attempts=${poll.attempts} error=${poll.error || "none"} data=${poll.data ? JSON.stringify(poll.data).substring(0, 200) : "null"}`, ms: Date.now() - t1 });
+          } catch (e: unknown) {
+            steps.push({ step: "pollJobResult (SIWX)", ok: false, detail: (e as Error).message, ms: Date.now() - t1 });
+          }
         }
       } catch (e: unknown) {
         const err = e as Error;
-        steps.push({ step: "createClient", ok: false, detail: err.message });
+        steps.push({ step: "querySocial (trigger only)", ok: false, detail: `${err.message} | cause: ${err.cause ? JSON.stringify(err.cause, Object.getOwnPropertyNames(err.cause as object)) : "none"}`, ms: Date.now() - t0 });
       }
     }
     return NextResponse.json({ ok: true, steps });

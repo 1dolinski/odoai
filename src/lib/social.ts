@@ -1,12 +1,12 @@
-import { createClient } from "apinow-sdk";
 import { privateKeyToAccount } from "viem/accounts";
+import { x402Client, wrapFetchWithPayment } from "@x402/fetch";
+import { registerExactEvmScheme } from "@x402/evm/exact/client";
 import { createSIWxPayload, encodeSIWxHeader } from "@x402/extensions/sign-in-with-x";
 import { decodePaymentRequiredHeader } from "@x402/core/http";
 
 const BASE_URL = "https://stablesocial.dev";
 const JOBS_URL = `${BASE_URL}/api/jobs`;
-
-let _client: ReturnType<typeof createClient> | null = null;
+const PROXY_URL = "https://www.apinow.fun";
 
 function cleanKey(raw: string): `0x${string}` {
   let k = raw.trim();
@@ -21,15 +21,58 @@ function getPrivateKey(): `0x${string}` {
   return cleanKey(pk);
 }
 
-function getClient() {
-  if (!_client) {
-    _client = createClient({ privateKey: getPrivateKey() });
-  }
-  return _client;
-}
-
 function getSigner() {
   return privateKeyToAccount(getPrivateKey());
+}
+
+let _paymentFetch: ReturnType<typeof wrapFetchWithPayment> | null = null;
+function getPaymentFetch() {
+  if (!_paymentFetch) {
+    const signer = getSigner();
+    const client = new x402Client();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    registerExactEvmScheme(client as any, { signer } as any);
+    const safeRedirectFetch: typeof globalThis.fetch = (input, init) => {
+      if (input instanceof Request) {
+        const req = new Request(input, { redirect: "manual" });
+        return globalThis.fetch(req, init);
+      }
+      return globalThis.fetch(input, { ...init, redirect: "manual" });
+    };
+    _paymentFetch = wrapFetchWithPayment(safeRedirectFetch, client);
+  }
+  return _paymentFetch;
+}
+
+async function callExternal(url: string, opts: { method?: string; body?: Record<string, unknown> } = {}): Promise<unknown> {
+  const proxyBody = {
+    url,
+    method: opts.method || "POST",
+    body: opts.body,
+  };
+
+  const paymentFetch = getPaymentFetch();
+  const res = await paymentFetch(`${PROXY_URL}/api/x402-proxy`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(proxyBody),
+  });
+
+  if (res.status >= 300 && res.status < 400) {
+    const location = res.headers.get("location");
+    if (location) {
+      const redirect = await globalThis.fetch(location, { redirect: "manual" });
+      if (!redirect.ok) throw new Error(`Redirect ${redirect.status}: ${await redirect.text()}`);
+      return redirect.json();
+    }
+  }
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Proxy ${res.status}: ${text}`);
+  }
+
+  return res.json();
 }
 
 export function isConfigured(): boolean {
@@ -236,10 +279,9 @@ export async function querySocial(
   const url = `${BASE_URL}${ep.path}`;
 
   try {
-    const apinow = getClient();
-    const data = await apinow.callExternal(url, {
+    const data = await callExternal(url, {
       method: "POST",
-      body: params,
+      body: params as Record<string, unknown>,
     });
 
     const parsed = typeof data === "string" ? JSON.parse(data) : data;
@@ -279,7 +321,7 @@ export async function querySocial(
       pollStatus: "finished",
     };
   } catch (err) {
-    _client = null;
+    _paymentFetch = null;
     const e = err as Error;
     const detail = e.cause ? `${e.message} | cause: ${JSON.stringify(e.cause)}` : String(err);
     return {
@@ -293,10 +335,11 @@ export async function querySocial(
 export async function discoverPrice(platform: Platform, endpointId: string): Promise<{ totalPrice: string; upstreamPrice: string; proxyFee: string } | null> {
   const ep = SOCIAL_PLATFORMS[platform]?.endpoints.find((e) => e.id === endpointId);
   if (!ep) return null;
-  const apinow = getClient();
   try {
-    const price = await apinow.discoverPrice(`${BASE_URL}${ep.path}`);
-    return price as { totalPrice: string; upstreamPrice: string; proxyFee: string };
+    const params = new URLSearchParams({ url: `${BASE_URL}${ep.path}` });
+    const res = await fetch(`${PROXY_URL}/api/x402-proxy?${params}`);
+    if (!res.ok) return null;
+    return res.json();
   } catch {
     return null;
   }
