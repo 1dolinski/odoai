@@ -270,6 +270,9 @@ export default function DashboardPage() {
   const [generatingSubtasks, setGeneratingSubtasks] = useState<string | null>(null);
   const [newSubtaskText, setNewSubtaskText] = useState<Record<string, string>>({});
   const [feedGenerating, setFeedGenerating] = useState(false);
+  const [askAIInput, setAskAIInput] = useState("");
+  const [askAILoading, setAskAILoading] = useState(false);
+  const [askAIResult, setAskAIResult] = useState<{ answer: string; suggestions: { title: string; type: string; detail: string }[]; sourcesUsed: number } | null>(null);
   const [feedQuestion, setFeedQuestion] = useState<{ index: number; text: string } | null>(null);
   const [feedQuestionLoading, setFeedQuestionLoading] = useState(false);
   const [feedAnswers, setFeedAnswers] = useState<Record<number, string>>({});
@@ -937,6 +940,114 @@ export default function DashboardPage() {
                   </button>
                 </div>
               </div>
+              <div className="mb-4">
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={askAIInput}
+                    onChange={(e) => setAskAIInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && askAIInput.trim() && !askAILoading) {
+                        e.preventDefault();
+                        (async () => {
+                          setAskAILoading(true);
+                          setAskAIResult(null);
+                          try {
+                            const res = await fetch("/api/dashboard", {
+                              method: "POST",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({ token, action: "askAI", question: askAIInput.trim() }),
+                            });
+                            const json = await res.json();
+                            if (json.ok) setAskAIResult({ answer: json.answer, suggestions: json.suggestions || [], sourcesUsed: json.sourcesUsed || 0 });
+                            else setAskAIResult({ answer: json.error || "Failed", suggestions: [], sourcesUsed: 0 });
+                          } catch (err) {
+                            setAskAIResult({ answer: String(err), suggestions: [], sourcesUsed: 0 });
+                          }
+                          setAskAILoading(false);
+                        })();
+                      }
+                    }}
+                    placeholder="Ask AI about your data, social posts, trends, strategy…"
+                    className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-300 focus:border-indigo-400 outline-none"
+                    disabled={askAILoading}
+                  />
+                  <button
+                    disabled={askAILoading || !askAIInput.trim()}
+                    onClick={async () => {
+                      setAskAILoading(true);
+                      setAskAIResult(null);
+                      try {
+                        const res = await fetch("/api/dashboard", {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ token, action: "askAI", question: askAIInput.trim() }),
+                        });
+                        const json = await res.json();
+                        if (json.ok) setAskAIResult({ answer: json.answer, suggestions: json.suggestions || [], sourcesUsed: json.sourcesUsed || 0 });
+                        else setAskAIResult({ answer: json.error || "Failed", suggestions: [], sourcesUsed: 0 });
+                      } catch (err) {
+                        setAskAIResult({ answer: String(err), suggestions: [], sourcesUsed: 0 });
+                      }
+                      setAskAILoading(false);
+                    }}
+                    className="px-4 py-2 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700 disabled:opacity-50 transition-colors font-medium flex items-center gap-1.5 whitespace-nowrap"
+                  >
+                    {askAILoading ? (
+                      <>
+                        <svg className="w-3.5 h-3.5 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2" /></svg>
+                        Thinking…
+                      </>
+                    ) : "Ask AI"}
+                  </button>
+                </div>
+
+                {askAIResult && (
+                  <div className="mt-3 space-y-3">
+                    <div className="bg-indigo-50 border border-indigo-100 rounded-lg p-3">
+                      <div className="flex items-center justify-between mb-1.5">
+                        <span className="text-[10px] font-medium text-indigo-600">AI Answer</span>
+                        <span className="text-[10px] text-indigo-400">{askAIResult.sourcesUsed} sources used</span>
+                      </div>
+                      <div className="text-sm text-gray-800 whitespace-pre-wrap leading-relaxed">{askAIResult.answer}</div>
+                    </div>
+
+                    {askAIResult.suggestions.length > 0 && (
+                      <div>
+                        <h4 className="text-xs font-semibold text-gray-600 mb-2">Suggestions</h4>
+                        <div className="space-y-1.5">
+                          {askAIResult.suggestions.map((s, i) => (
+                            <div key={i} className="flex items-start gap-2 bg-gray-50 rounded-lg p-2.5 border border-gray-100">
+                              <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium shrink-0 mt-0.5 ${
+                                s.type === "todo" ? "bg-blue-50 text-blue-700" : s.type === "insight" ? "bg-purple-50 text-purple-700" : "bg-green-50 text-green-700"
+                              }`}>{s.type}</span>
+                              <div className="flex-1 min-w-0">
+                                <p className="text-xs font-medium text-gray-800">{s.title}</p>
+                                {s.detail && <p className="text-[11px] text-gray-500 mt-0.5">{s.detail}</p>}
+                              </div>
+                              <button
+                                className="text-[10px] px-2 py-1 bg-white border border-gray-200 rounded text-gray-600 hover:bg-indigo-50 hover:text-indigo-700 hover:border-indigo-200 transition-colors shrink-0"
+                                onClick={async () => {
+                                  await fetch("/api/dashboard", {
+                                    method: "POST",
+                                    headers: { "Content-Type": "application/json" },
+                                    body: JSON.stringify({ token, action: "addTask", task: { title: s.title, description: s.detail, status: "todo" } }),
+                                  });
+                                  setAskAIResult((prev) => prev ? { ...prev, suggestions: prev.suggestions.map((x, j) => j === i ? { ...x, type: "added" } : x) } : prev);
+                                }}
+                                disabled={s.type === "added"}
+                              >
+                                {s.type === "added" ? "Added ✓" : "+ Todo"}
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
               {data.chat.aiFeed.length === 0 ? (
                 <div className="text-center py-8 text-gray-400 text-sm">
                   No feed items yet. Click &quot;Generate Now&quot; or enable auto-generation for active/aggressive mode.

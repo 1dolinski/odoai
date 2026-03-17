@@ -11,7 +11,7 @@ import Check from "@/models/Check";
 import Activity from "@/models/Activity";
 import { autoExtract, maybeUpdateContext, deepProcessDump, generateAiFeed } from "@/lib/brain";
 import { chat as aiChat } from "@/lib/openrouter";
-import { writeKnowledge, writePersonKnowledge, writePeopleSnapshot } from "@/lib/knowledge";
+import { writeKnowledge, writePersonKnowledge, writePeopleSnapshot, qmdSearch, formatQMDResults } from "@/lib/knowledge";
 import { getChatAdmins, sendMessage } from "@/lib/telegram";
 import { getAvailableSources, fetchEnabledEndpoints, formatDataForAI, persistSnapshots, getSnapshotHistory, DATA_SOURCE_REGISTRY, fetchEndpoint } from "@/lib/dataSources";
 import { getAllPlatforms, getEndpointsForPlatform, querySocial, pollJobResult, isConfigured as isSocialConfigured, type Platform } from "@/lib/social";
@@ -465,6 +465,78 @@ export async function POST(req: NextRequest) {
       { role: "user", content: `Feed item (${body.feedType}): "${body.feedContent}"\n\nQuestion: ${body.question}${chatDoc?.contextSummary ? `\n\nChat context: ${chatDoc.contextSummary}` : ""}` },
     ], "openai/gpt-4o-mini");
     return NextResponse.json({ ok: true, answer: response });
+  }
+
+  if (action === "askAI" && body.question) {
+    const chatDoc = await Chat.findOne({ telegramChatId: chatId });
+    if (!chatDoc) return NextResponse.json({ error: "chat not found" }, { status: 404 });
+
+    const question = (body.question as string).trim();
+
+    const qmdResults = await qmdSearch(question, 10);
+    const qmdContext = formatQMDResults(qmdResults);
+
+    const socialSnaps = await DataSnapshot.find({
+      telegramChatId: chatId,
+      sourceId: /^social-/,
+      "data.pollStatus": "finished",
+    }).sort({ fetchedAt: -1 }).limit(5).lean();
+
+    const socialContext = socialSnaps.length
+      ? socialSnaps.map((s) => {
+          const d = s as { sourceId: string; endpointId: string; data: { params?: Record<string, string>; result?: unknown }; fetchedAt: Date };
+          return `### ${d.sourceId}/${d.endpointId} (${new Date(d.fetchedAt).toLocaleDateString()})\n${JSON.stringify(d.data?.result || d.data, null, 2).substring(0, 1500)}`;
+        }).join("\n\n")
+      : "";
+
+    const dsSnaps = await DataSnapshot.find({
+      telegramChatId: chatId,
+      sourceId: { $not: /^social-/ },
+    }).sort({ fetchedAt: -1 }).limit(5).lean();
+
+    const dsContext = dsSnaps.length
+      ? dsSnaps.map((s) => {
+          const d = s as { sourceId: string; endpointId: string; data: unknown; fetchedAt: Date };
+          return `### ${d.sourceId}/${d.endpointId} (${new Date(d.fetchedAt).toLocaleDateString()})\n${JSON.stringify(d.data, null, 2).substring(0, 1500)}`;
+        }).join("\n\n")
+      : "";
+
+    const tasks = await Task.find({ telegramChatId: chatId, status: { $in: ["open", "in-progress"] } }).lean();
+    const taskContext = tasks.length
+      ? tasks.map((t) => `- [${(t as { status: string }).status}] ${(t as { title: string }).title}`).join("\n")
+      : "";
+
+    const systemPrompt = `You are odoai, an AI business strategist. You have deep knowledge about this team and their data.
+
+Answer the user's question using ALL the context below. Be specific — reference actual numbers, handles, dates. If you can derive insights, trends, or action items, do so.
+
+After your answer, generate 1-5 actionable suggestions as a JSON array under a --- separator. Each suggestion: { "title": "short action item", "type": "todo"|"suggestion"|"insight", "detail": "1-2 sentence explanation" }
+
+## Knowledge Base (QMD)
+${qmdContext}
+${socialContext ? `\n## Social Media Data\n${socialContext}` : ""}
+${dsContext ? `\n## Business Data Sources\n${dsContext}` : ""}
+${taskContext ? `\n## Current Tasks\n${taskContext}` : ""}
+${chatDoc.contextSummary ? `\n## Team Context\n${chatDoc.contextSummary}` : ""}`;
+
+    const response = await aiChat([
+      { role: "system", content: systemPrompt },
+      { role: "user", content: question },
+    ], "openai/gpt-4o");
+
+    let answer = response;
+    let suggestions: { title: string; type: string; detail: string }[] = [];
+    const sepIdx = response.indexOf("---");
+    if (sepIdx !== -1) {
+      answer = response.substring(0, sepIdx).trim();
+      const jsonPart = response.substring(sepIdx + 3).trim();
+      const jsonMatch = jsonPart.match(/\[[\s\S]*\]/);
+      if (jsonMatch) {
+        try { suggestions = JSON.parse(jsonMatch[0]); } catch { /* ignore */ }
+      }
+    }
+
+    return NextResponse.json({ ok: true, answer, suggestions, sourcesUsed: qmdResults.length + socialSnaps.length + dsSnaps.length });
   }
 
   if (action === "generateFeed") {
