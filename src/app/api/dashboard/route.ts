@@ -846,11 +846,23 @@ Be specific with numbers. Compare across time periods when historical data is av
 
         const t1 = Date.now();
         try {
-          const data = await client.callExternal("https://stablesocial.dev/api/instagram/profile", { method: "POST", body: { handle: "nike" } });
-          steps.push({ step: "callExternal", ok: true, detail: JSON.stringify(data).substring(0, 200), ms: Date.now() - t1 });
+          const proxyUrl = "https://www.apinow.fun/api/x402-proxy";
+          const proxyBody = JSON.stringify({ url: "https://stablesocial.dev/api/instagram/profile", method: "POST", body: { handle: "nike" } });
+          const rawRes = await fetch(proxyUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: proxyBody });
+          steps.push({ step: "raw POST to proxy", ok: true, detail: `status=${rawRes.status} headers=${JSON.stringify(Object.fromEntries(rawRes.headers.entries())).substring(0, 300)}`, ms: Date.now() - t1 });
         } catch (e: unknown) {
           const err = e as Error;
-          steps.push({ step: "callExternal", ok: false, detail: `${err.message}${err.cause ? ` | cause: ${JSON.stringify(err.cause)}` : ""}`, ms: Date.now() - t1 });
+          steps.push({ step: "raw POST to proxy", ok: false, detail: `${err.message} | cause: ${err.cause ? JSON.stringify(err.cause, Object.getOwnPropertyNames(err.cause as object)) : "none"} | stack: ${err.stack?.substring(0, 300)}`, ms: Date.now() - t1 });
+        }
+
+        const t1b = Date.now();
+        try {
+          const data = await client.callExternal("https://stablesocial.dev/api/instagram/profile", { method: "POST", body: { handle: "nike" } });
+          steps.push({ step: "callExternal", ok: true, detail: JSON.stringify(data).substring(0, 200), ms: Date.now() - t1b });
+        } catch (e: unknown) {
+          const err = e as Error;
+          const causeStr = err.cause ? JSON.stringify(err.cause, Object.getOwnPropertyNames(err.cause as object)) : "none";
+          steps.push({ step: "callExternal", ok: false, detail: `${err.message} | cause: ${causeStr} | stack: ${err.stack?.substring(0, 500)}`, ms: Date.now() - t1b });
         }
 
         const t2 = Date.now();
