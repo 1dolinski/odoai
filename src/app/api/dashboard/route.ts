@@ -862,15 +862,14 @@ Be specific with numbers. Compare across time periods when historical data is av
     try {
       const result = await querySocial(body.platform as Platform, body.endpoint, body.params);
       if (!result.error && result.data) {
-        const gotData = result.pollStatus === "finished" && !result.jobToken?.startsWith("eyJ");
         await DataSnapshot.create({
           telegramChatId: chatId,
           sourceId: `social-${body.platform}`,
           endpointId: body.endpoint,
-          data: { params: body.params, result: result.data, jobToken: result.jobToken, pollStatus: result.pollStatus },
+          data: { params: body.params, result: result.data, pollStatus: result.pollStatus },
           fetchedAt: result.fetchedAt,
         });
-        if (gotData || result.pollStatus === "finished") {
+        if (result.pollStatus === "finished") {
           writeKnowledge(
             chatId,
             "context",
