@@ -2061,6 +2061,14 @@ export default function DashboardPage() {
                   )}
                 </div>
                 <p className="text-xs text-gray-500 mt-0.5">Pull social media data via apinow proxy. $0.07/request ($0.06 upstream + $0.01 proxy, USDC on Base).</p>
+                <button
+                  className="mt-1 text-[10px] text-indigo-500 underline hover:text-indigo-700"
+                  onClick={async () => {
+                    const r = await fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "testSocial" }) });
+                    const j = await r.json();
+                    alert(JSON.stringify(j.steps, null, 2));
+                  }}
+                >Run connection test</button>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">

@@ -2,6 +2,9 @@
   "functions": {
     "src/app/api/telegram/route.ts": {
       "maxDuration": 120
+    },
+    "src/app/api/dashboard/route.ts": {
+      "maxDuration": 60
     }
   },
   "crons": [

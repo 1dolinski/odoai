@@ -280,10 +280,12 @@ export async function querySocial(
     };
   } catch (err) {
     _client = null;
+    const e = err as Error;
+    const detail = e.cause ? `${e.message} | cause: ${JSON.stringify(e.cause)}` : String(err);
     return {
       platform, endpoint: endpointId, params,
       data: null, cost: "$0.00", fetchedAt: new Date(),
-      error: String(err),
+      error: detail,
     };
   }
 }

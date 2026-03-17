@@ -823,6 +823,52 @@ Be specific with numbers. Compare across time periods when historical data is av
     return NextResponse.json({ ok: true, insights: analysis });
   }
 
+  if (action === "testSocial") {
+    const steps: { step: string; ok: boolean; detail?: string; ms?: number }[] = [];
+    const pk = process.env.APINOW_PRIVATE_KEY?.trim();
+    steps.push({ step: "APINOW_PRIVATE_KEY exists", ok: !!pk, detail: pk ? `length=${pk.length}, starts=0x=${pk.startsWith("0x")}` : "missing" });
+    if (pk) {
+      try {
+        const { createClient } = await import("apinow-sdk");
+        let k = pk;
+        if (!k.startsWith("0x")) k = `0x${k}`;
+        const client = createClient({ privateKey: k as `0x${string}` });
+        steps.push({ step: "createClient", ok: true, detail: `wallet=${client.wallet}` });
+
+        const t0 = Date.now();
+        try {
+          const price = await client.discoverPrice("https://stablesocial.dev/api/instagram/profile");
+          steps.push({ step: "discoverPrice", ok: true, detail: JSON.stringify(price), ms: Date.now() - t0 });
+        } catch (e: unknown) {
+          const err = e as Error;
+          steps.push({ step: "discoverPrice", ok: false, detail: `${err.message}${err.cause ? ` | cause: ${JSON.stringify(err.cause)}` : ""}`, ms: Date.now() - t0 });
+        }
+
+        const t1 = Date.now();
+        try {
+          const data = await client.callExternal("https://stablesocial.dev/api/instagram/profile", { method: "POST", body: { handle: "nike" } });
+          steps.push({ step: "callExternal", ok: true, detail: JSON.stringify(data).substring(0, 200), ms: Date.now() - t1 });
+        } catch (e: unknown) {
+          const err = e as Error;
+          steps.push({ step: "callExternal", ok: false, detail: `${err.message}${err.cause ? ` | cause: ${JSON.stringify(err.cause)}` : ""}`, ms: Date.now() - t1 });
+        }
+
+        const t2 = Date.now();
+        try {
+          const directRes = await fetch("https://stablesocial.dev/api/jobs", { method: "GET" });
+          steps.push({ step: "direct fetch stablesocial", ok: true, detail: `status=${directRes.status}`, ms: Date.now() - t2 });
+        } catch (e: unknown) {
+          const err = e as Error;
+          steps.push({ step: "direct fetch stablesocial", ok: false, detail: `${err.message}${err.cause ? ` | cause: ${JSON.stringify(err.cause)}` : ""}`, ms: Date.now() - t2 });
+        }
+      } catch (e: unknown) {
+        const err = e as Error;
+        steps.push({ step: "createClient", ok: false, detail: err.message });
+      }
+    }
+    return NextResponse.json({ ok: true, steps });
+  }
+
   if (action === "getSocialEndpoints" && body.platform) {
     const endpoints = getEndpointsForPlatform(body.platform as Platform);
     return NextResponse.json({ ok: true, endpoints });
