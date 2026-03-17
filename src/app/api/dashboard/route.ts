@@ -807,13 +807,15 @@ Rules:
     const initiatives = (chatDoc?.initiatives || []).filter((i: { status: string }) => i.status === "active");
 
     const taskList = tasks.map((t) => {
-      let line = `ID:${t._id} | "${t.title}" | status:${t.status} | momentum:${t.momentum || "new"} | effort:${t.effort || "?"} | impact:${t.impact || "?"} | created:${new Date(t.createdAt).toISOString().split("T")[0]}`;
+      let line = `ID:${t._id} | "${t.title}" | status:${t.status} | momentum:${t.momentum || "new"} | effort:${t.effort || "?"} | impact:${t.impact || "?"} | exec:${t.executionType || "?"} | created:${new Date(t.createdAt).toISOString().split("T")[0]}`;
       if (t.dueDate) line += ` | due:${new Date(t.dueDate).toISOString().split("T")[0]}`;
       if (t.people?.length) line += ` | assigned:${t.people.join(",")}`;
       if (t.initiative) {
         const ini = initiatives.find((i: { id: string }) => i.id === t.initiative);
         if (ini) line += ` | initiative:${(ini as { name: string }).name}`;
       }
+      if (t.costEstimate) line += ` | cost:${t.costEstimate}`;
+      if (t.revenueEstimate) line += ` | revenue:${t.revenueEstimate}`;
       if (t.blockedBy) line += ` | blockedBy:${t.blockedBy}`;
       if (t.waitingOn) line += ` | waitingOn:${t.waitingOn}`;
       if (t.subtasks?.length) {
@@ -886,21 +888,32 @@ Rules:
 OUTPUT (valid JSON only):
 
 {
-  "narrative": "6-10 sentence priority narrative covering all dimensions below",
+  "narrative": "multi-paragraph priority narrative covering all dimensions below",
   "leveragePlay": "The leverage play paragraph",
   "tasks": [
-    { "id": "taskId", "priorityScore": 85, "momentum": "in-motion", "effort": "low", "impact": "high", "priorityReason": "..." },
+    { "id": "taskId", "priorityScore": 85, "momentum": "in-motion", "effort": "low", "impact": "high", "executionType": "human", "costEstimate": "$50/mo or 2hrs/week", "revenueEstimate": "$2k/mo potential", "priorityReason": "..." },
     ...
   ]
 }
+
+FOR EACH TASK, assign:
+- priorityScore: 1-100 (100 = do this first)
+- momentum: "new" | "in-motion" | "stalled" | "blocked"
+- effort: "low" | "medium" | "high"
+- impact: "low" | "medium" | "high"
+- executionType: "automated" (runs itself — crons, bots, scripts, CI/CD, scheduled jobs) | "human" (needs someone's time and attention) | "hybrid" (automated process but needs human setup, review, or maintenance)
+- costEstimate: what it costs to execute — be specific. "$0" for free automated tasks, "2hrs/week" for human time, "$200/mo + 1hr setup" for tools/subscriptions. Use real numbers when data is available.
+- revenueEstimate: what value or revenue this could generate — "$0" for pure ops/maintenance, "saves 5hrs/week" for efficiency, "$5k/mo" for revenue-generating tasks. Be honest — not everything makes money, and that's fine. Flag things that are cost centers vs revenue drivers.
+- priorityReason: 1 sentence explaining ranking
 
 THE NARRATIVE must cover these dimensions (use headers with **bold** markdown):
 - **What's Moving**: Tasks with real momentum — protect these, switching away has a cost
 - **What's Being Discussed**: Themes from recent conversation that aren't yet tasks, or that signal shifting priorities
 - **What's Blocked/Waiting**: Name what's stuck and what would unblock it
 - **Acknowledgement**: Call out what was recently completed and who did it — momentum compounds when recognized
-- **Delegation & Resources**: Who owns what? What's automated? Where's capacity free? Where are we stretched thin?
-- **Funding & Spend**: Are we burning efficiently? Any cost signals that should affect priority?
+- **Delegation & Resources**: Who owns what? What's automated vs human? Where's capacity free? Where are we stretched thin?
+- **Cost vs Revenue**: Map out the economics — which tasks are cost centers (necessary but no revenue), which are revenue drivers, which are investments? Are we spending human hours on things that could be automated?
+- **Automation Opportunities**: Flag any human tasks that COULD be automated and what that would save. Flag hybrid tasks where the human component could be reduced.
 - **Metrics & Signals**: Any data from connected sources that changes what we should focus on?
 - **Sharp Opportunities**: Time-sensitive or unusually high-leverage items — be specific about WHY now
 - **Defer List**: Name 2-3 things that should explicitly be put on ice and why (switching cost, low return, wrong timing)
@@ -926,6 +939,11 @@ SCORING RULES for each task:
 - Disconnected "nice to have" ideas = rank low
 - If recent conversation signals a pivot in priority, reflect that in scores
 - If metrics/data show something working or failing, factor it in
+- ECONOMICS MATTER: tasks with clear revenue potential get boosted over pure cost centers
+- Automated tasks that run themselves cost nearly nothing — don't deprioritize them but don't count them as consuming resources either
+- Human-heavy tasks compete for the scarcest resource (people's time) — rank by ROI on that time
+- Hybrid tasks where automation could reduce human involvement = flag as optimization opportunities
+- When two tasks have similar impact, prefer the one with better cost:revenue ratio
 
 Today is ${new Date().toISOString().split("T")[0]}.` },
       { role: "user", content: `ACTIVE TASKS:\n${taskList}
@@ -960,12 +978,15 @@ CONTEXT SUMMARY:\n${chatDoc?.contextSummary || "none"}` },
       const leveragePlay = result.leveragePlay || "";
       const taskUpdates = result.tasks || [];
 
-      const ops = taskUpdates.map((t: { id: string; priorityScore: number; momentum: string; effort: string; impact: string; priorityReason: string }) =>
+      const ops = taskUpdates.map((t: { id: string; priorityScore: number; momentum: string; effort: string; impact: string; executionType?: string; costEstimate?: string; revenueEstimate?: string; priorityReason: string }) =>
         Task.updateOne({ _id: t.id, telegramChatId: chatId }, { $set: {
           priorityScore: t.priorityScore || 0,
           momentum: t.momentum || "new",
           effort: t.effort || "medium",
           impact: t.impact || "medium",
+          executionType: t.executionType || "human",
+          costEstimate: t.costEstimate || "",
+          revenueEstimate: t.revenueEstimate || "",
           priorityReason: t.priorityReason || "",
         }})
       );
@@ -985,6 +1006,9 @@ CONTEXT SUMMARY:\n${chatDoc?.contextSummary || "none"}` },
     if (body.momentum) update.momentum = body.momentum;
     if (body.effort) update.effort = body.effort;
     if (body.impact) update.impact = body.impact;
+    if (body.executionType) update.executionType = body.executionType;
+    if (body.costEstimate !== undefined) update.costEstimate = body.costEstimate;
+    if (body.revenueEstimate !== undefined) update.revenueEstimate = body.revenueEstimate;
     if (body.blockedBy !== undefined) update.blockedBy = body.blockedBy;
     if (body.waitingOn !== undefined) update.waitingOn = body.waitingOn;
     await Task.updateOne({ _id: body.taskId, telegramChatId: chatId }, { $set: update });

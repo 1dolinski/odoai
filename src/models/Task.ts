@@ -4,6 +4,7 @@ export type TaskStatus = "todo" | "upcoming" | "done";
 export type Momentum = "new" | "in-motion" | "stalled" | "blocked";
 export type EffortLevel = "low" | "medium" | "high";
 export type ImpactLevel = "low" | "medium" | "high";
+export type ExecutionType = "automated" | "human" | "hybrid";
 
 export interface ISubtask {
   id: string;
@@ -34,6 +35,9 @@ export interface ITask extends Document {
   momentum: Momentum;
   effort: EffortLevel;
   impact: ImpactLevel;
+  executionType: ExecutionType;
+  costEstimate: string;
+  revenueEstimate: string;
   blockedBy: string;
   waitingOn: string;
   priorityScore: number;
@@ -60,6 +64,9 @@ const TaskSchema = new Schema<ITask>(
     momentum: { type: String, enum: ["new", "in-motion", "stalled", "blocked"], default: "new" },
     effort: { type: String, enum: ["low", "medium", "high"], default: "medium" },
     impact: { type: String, enum: ["low", "medium", "high"], default: "medium" },
+    executionType: { type: String, enum: ["automated", "human", "hybrid"], default: "human" },
+    costEstimate: { type: String, default: "" },
+    revenueEstimate: { type: String, default: "" },
     blockedBy: { type: String, default: "" },
     waitingOn: { type: String, default: "" },
     priorityScore: { type: Number, default: 0 },

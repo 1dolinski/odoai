@@ -32,6 +32,9 @@ interface Task {
   momentum?: "new" | "in-motion" | "stalled" | "blocked";
   effort?: "low" | "medium" | "high";
   impact?: "low" | "medium" | "high";
+  executionType?: "automated" | "human" | "hybrid";
+  costEstimate?: string;
+  revenueEstimate?: string;
   blockedBy?: string;
   waitingOn?: string;
   priorityScore?: number;
@@ -3162,6 +3165,10 @@ export default function DashboardPage() {
               )}
               {(() => {
                 const ranked = [...activeTasks].filter((t) => t.status !== "done").sort((a, b) => (b.priorityScore ?? 0) - (a.priorityScore ?? 0));
+                const autoCount = ranked.filter((t) => t.executionType === "automated").length;
+                const humanCount = ranked.filter((t) => t.executionType === "human").length;
+                const hybridCount = ranked.filter((t) => t.executionType === "hybrid").length;
+                const hasCostData = ranked.some((t) => t.costEstimate || t.revenueEstimate);
                 const inMotion = ranked.filter((t) => t.momentum === "in-motion");
                 const blocked = ranked.filter((t) => t.momentum === "blocked" || t.blockedBy || t.waitingOn);
                 const newIdeas = ranked.filter((t) => t.momentum === "new" && !t.blockedBy && !t.waitingOn);
@@ -3182,6 +3189,12 @@ export default function DashboardPage() {
                   medium: "text-yellow-600",
                   high: "text-red-600",
                 };
+                const execColors: Record<string, string> = {
+                  automated: "bg-cyan-100 text-cyan-700 border-cyan-200",
+                  human: "bg-orange-100 text-orange-700 border-orange-200",
+                  hybrid: "bg-violet-100 text-violet-700 border-violet-200",
+                };
+                const execIcons: Record<string, string> = { automated: "⚡", human: "👤", hybrid: "🔄" };
                 const renderPriorityTask = (t: typeof ranked[0]) => (
                   <div key={t._id} className="flex items-start gap-3 bg-white border border-gray-200 rounded-lg p-3 hover:shadow-sm transition-shadow">
                     <div className="shrink-0 w-10 text-center">
@@ -3194,11 +3207,23 @@ export default function DashboardPage() {
                       <div className="flex items-center gap-1.5 flex-wrap">
                         <span className="font-medium text-sm text-gray-900">{t.title}</span>
                         <span className={`text-[9px] font-medium rounded-full px-1.5 py-0.5 border ${momentumColors[t.momentum || "new"]}`}>{t.momentum || "new"}</span>
+                        {t.executionType && (
+                          <span className={`text-[9px] font-medium rounded-full px-1.5 py-0.5 border ${execColors[t.executionType]}`}>
+                            {execIcons[t.executionType]} {t.executionType}
+                          </span>
+                        )}
                         {t.impact && <span className={`text-[9px] font-medium rounded px-1 py-0.5 ${impactColors[t.impact]}`}>impact: {t.impact}</span>}
                         {t.effort && <span className={`text-[9px] font-medium ${effortColors[t.effort]}`}>effort: {t.effort}</span>}
                       </div>
                       {t.priorityReason && <p className="text-xs text-gray-500 mt-0.5">{t.priorityReason}</p>}
                       <div className="flex items-center gap-2 mt-1 flex-wrap">
+                        {(t.costEstimate || t.revenueEstimate) && (
+                          <span className="text-[10px] font-medium">
+                            {t.costEstimate && <span className="text-red-500">cost: {t.costEstimate}</span>}
+                            {t.costEstimate && t.revenueEstimate && <span className="text-gray-300 mx-1">→</span>}
+                            {t.revenueEstimate && <span className="text-green-600">rev: {t.revenueEstimate}</span>}
+                          </span>
+                        )}
                         {(t.blockedBy || t.waitingOn) && (
                           <span className="text-[10px] text-red-500 font-medium">
                             {t.blockedBy ? `blocked: ${t.blockedBy}` : `waiting: ${t.waitingOn}`}
@@ -3214,7 +3239,7 @@ export default function DashboardPage() {
                         )}
                         {t.initiative && (() => { const ini = (data.initiatives || []).find((i) => i.id === t.initiative); return ini ? <span className="text-[10px] text-purple-500">{ini.name}</span> : null; })()}
                       </div>
-                      <div className="flex items-center gap-1 mt-1.5">
+                      <div className="flex items-center gap-1 mt-1.5 flex-wrap">
                         {(["in-motion", "new", "stalled", "blocked"] as const).map((m) => (
                           <button
                             key={m}
@@ -3224,6 +3249,17 @@ export default function DashboardPage() {
                             }}
                             className={`text-[9px] px-1.5 py-0.5 rounded-full border transition-all ${t.momentum === m ? momentumColors[m] : "text-gray-300 border-gray-200 hover:border-gray-300"}`}
                           >{m}</button>
+                        ))}
+                        <span className="text-gray-200 mx-0.5">|</span>
+                        {(["automated", "hybrid", "human"] as const).map((ex) => (
+                          <button
+                            key={`e-${ex}`}
+                            onClick={() => {
+                              setData((d) => d ? { ...d, tasks: d.tasks.map((task) => task._id === t._id ? { ...task, executionType: ex } : task) } : d);
+                              fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "updateTaskPriority", taskId: t._id, executionType: ex }) });
+                            }}
+                            className={`text-[9px] px-1.5 py-0.5 rounded-full border transition-all ${t.executionType === ex ? execColors[ex] : "text-gray-300 border-gray-200 hover:border-gray-300"}`}
+                          >{execIcons[ex]}{ex[0].toUpperCase()}</button>
                         ))}
                         <span className="text-gray-200 mx-0.5">|</span>
                         {(["low", "medium", "high"] as const).map((imp) => (
@@ -3251,6 +3287,21 @@ export default function DashboardPage() {
                 );
                 return (
                   <div className="space-y-4">
+                    {ranked.length > 0 && (autoCount > 0 || humanCount > 0 || hasCostData) && (
+                      <div className="flex flex-wrap items-center gap-3 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
+                        <span className="text-[10px] text-gray-400 font-semibold uppercase tracking-wide">Execution mix:</span>
+                        {humanCount > 0 && <span className="text-[10px] font-medium text-orange-600 bg-orange-50 border border-orange-200 rounded-full px-2 py-0.5">👤 {humanCount} human</span>}
+                        {hybridCount > 0 && <span className="text-[10px] font-medium text-violet-600 bg-violet-50 border border-violet-200 rounded-full px-2 py-0.5">🔄 {hybridCount} hybrid</span>}
+                        {autoCount > 0 && <span className="text-[10px] font-medium text-cyan-600 bg-cyan-50 border border-cyan-200 rounded-full px-2 py-0.5">⚡ {autoCount} automated</span>}
+                        {hasCostData && (
+                          <>
+                            <span className="text-gray-200">|</span>
+                            <span className="text-[10px] text-gray-500">{ranked.filter((t) => t.costEstimate).length} with cost data</span>
+                            <span className="text-[10px] text-gray-500">{ranked.filter((t) => t.revenueEstimate).length} with revenue est.</span>
+                          </>
+                        )}
+                      </div>
+                    )}
                     {inMotion.length > 0 && (
                       <div>
                         <div className="flex items-center gap-2 mb-2">
