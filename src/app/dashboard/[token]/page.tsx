@@ -678,7 +678,8 @@ export default function DashboardPage() {
   })) as (Task & { _isCheck?: boolean; _checkId?: string; _checkResult?: string })[];
 
   const allTasks = [...data.tasks.map((t) => ({ ...t, _isCheck: false, _checkId: "", _checkResult: "" })), ...checkTasks];
-  const allCategories = [...new Set(allTasks.flatMap((t) => t.categories || []))].sort();
+  const activeTasks = allTasks.filter((t) => t.status === "todo" || t.status === "upcoming");
+  const allCategories = [...new Set(activeTasks.flatMap((t) => t.categories || []))].sort().slice(0, 5);
   const statusFiltered = taskFilters.size === 3 ? allTasks : allTasks.filter((t) => taskFilters.has(t.status));
   const filteredTasks = categoryFilters.size === 0 ? statusFiltered : statusFiltered.filter((t) => (t.categories || []).some((c) => categoryFilters.has(c)));
 
@@ -1917,7 +1918,7 @@ export default function DashboardPage() {
             <div>
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 mb-4">
                 {allCategories.map((cat) => {
-                  const catTasks = allTasks.filter((t) => (t.categories || []).includes(cat));
+                  const catTasks = activeTasks.filter((t) => (t.categories || []).includes(cat));
                   const todo = catTasks.filter((t) => t.status === "todo").length;
                   const upcoming = catTasks.filter((t) => t.status === "upcoming").length;
                   const done = catTasks.filter((t) => t.status === "done").length;
@@ -1965,7 +1966,7 @@ export default function DashboardPage() {
                 <div className="mb-4">
                   <div className="flex items-center gap-2 mb-3">
                     <h3 className="text-sm font-semibold text-gray-800 capitalize">{expandedCategory}</h3>
-                    <span className="text-xs text-gray-400">{allTasks.filter((t) => (t.categories || []).includes(expandedCategory)).length} tasks</span>
+                    <span className="text-xs text-gray-400">{activeTasks.filter((t) => (t.categories || []).includes(expandedCategory)).length} tasks</span>
                     <button onClick={() => setExpandedCategory(null)} className="ml-auto text-xs text-gray-400 hover:text-gray-600">✕ close</button>
                   </div>
                 </div>
@@ -2006,7 +2007,7 @@ export default function DashboardPage() {
           )}
           <div className="space-y-2">
             {(taskViewMode === "categories" && expandedCategory
-              ? allTasks.filter((t) => (t.categories || []).includes(expandedCategory))
+              ? activeTasks.filter((t) => (t.categories || []).includes(expandedCategory))
               : filteredTasks
             ).map((t) => {
               const statusColors: Record<string, string> = {
@@ -2343,7 +2344,7 @@ export default function DashboardPage() {
                 </div>
               );
             })}
-            {(taskViewMode === "categories" && expandedCategory ? allTasks.filter((t) => (t.categories || []).includes(expandedCategory)) : filteredTasks).length === 0 && (
+            {(taskViewMode === "categories" && expandedCategory ? activeTasks.filter((t) => (t.categories || []).includes(expandedCategory)) : filteredTasks).length === 0 && (
               <p className="text-sm text-gray-400 italic py-4 text-center">No items</p>
             )}
           </div>

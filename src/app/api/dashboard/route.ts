@@ -496,9 +496,9 @@ export async function POST(req: NextRequest) {
   }
 
   if (action === "categorizeTasks") {
-    const tasks = await Task.find({ telegramChatId: chatId }).lean();
+    const tasks = await Task.find({ telegramChatId: chatId, status: { $in: ["todo", "upcoming"] } }).lean();
     if (!tasks.length) return NextResponse.json({ ok: true, categories: {} });
-    const taskList = tasks.map((t) => ({ id: String((t as { _id: unknown })._id), title: (t as { title: string }).title, existing: (t as { categories?: string[] }).categories || [] }));
+    const taskList = tasks.map((t) => ({ id: String((t as { _id: unknown })._id), title: (t as { title: string }).title }));
     const response = await aiChat([
       { role: "system", content: `You categorize tasks into short, lowercase topic tags. Each task can have 1-3 tags. Use consistent naming — merge similar concepts (e.g. "motogp" not "moto gp", "payments" not "payment"). Prefer broad categories that group multiple tasks.
 
