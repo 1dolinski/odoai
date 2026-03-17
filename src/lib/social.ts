@@ -278,10 +278,17 @@ export async function querySocial(
 
   const url = `${BASE_URL}${ep.path}`;
 
+  const NUMERIC_PARAMS = new Set(["max_posts", "max_posts", "max_comments", "max_followers", "max_results", "max_activities", "max_page_size", "max_profiles"]);
+  const coerced: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(params)) {
+    if (!v) continue;
+    coerced[k] = NUMERIC_PARAMS.has(k) && /^\d+$/.test(v) ? Number(v) : v;
+  }
+
   try {
     const data = await callExternal(url, {
       method: "POST",
-      body: params as Record<string, unknown>,
+      body: coerced,
     });
 
     const parsed = typeof data === "string" ? JSON.parse(data) : data;
