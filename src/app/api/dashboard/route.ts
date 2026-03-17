@@ -463,7 +463,8 @@ export async function POST(req: NextRequest) {
         Activity.create({ telegramChatId: chatId, type: "ai_triggered", title: "AI feed generated", detail: `${items.length} items`, actor: "odoai" }).catch(console.error);
         const shouts = items.filter((i) => i.type === "shout");
         for (const s of shouts) {
-          sendMessage(chatId, s.content).catch(console.error);
+          const result = await sendMessage(chatId, `📢 ${s.content}`, "");
+          if (!result.ok) console.error("Shout send failed:", JSON.stringify(result), "chatId:", chatId);
         }
       }
       return NextResponse.json({ ok: true, items });

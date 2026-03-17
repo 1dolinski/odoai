@@ -2,17 +2,15 @@ const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN!;
 const BASE = `https://api.telegram.org/bot${BOT_TOKEN}`;
 
 export async function sendMessage(chatId: number | string, text: string, parseMode: string = "Markdown") {
+  const payload: Record<string, unknown> = { chat_id: chatId, text };
+  if (parseMode) payload.parse_mode = parseMode;
   let res = await fetch(`${BASE}/sendMessage`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      chat_id: chatId,
-      text,
-      parse_mode: parseMode,
-    }),
+    body: JSON.stringify(payload),
   });
   let data = await res.json();
-  if (!data.ok && parseMode === "Markdown") {
+  if (!data.ok && parseMode) {
     res = await fetch(`${BASE}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -20,7 +18,7 @@ export async function sendMessage(chatId: number | string, text: string, parseMo
     });
     data = await res.json();
   }
-  if (!data.ok) console.error("sendMessage failed:", data);
+  if (!data.ok) console.error("sendMessage failed:", JSON.stringify(data), "chatId:", chatId, "text:", text.substring(0, 80));
   return data;
 }
 
