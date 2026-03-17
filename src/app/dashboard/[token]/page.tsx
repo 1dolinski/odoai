@@ -1020,31 +1020,35 @@ export default function DashboardPage() {
                   </button>
                 </div>
               </div>
-              {(socialSnapshots.length > 0 || dsSnapCounts.length > 0) && (
-                <div className="flex flex-wrap gap-1.5 mb-3">
-                  {socialSnapshots.filter((s) => s.pollStatus === "finished").map((s) => {
-                    const platform = s.sourceId.replace("social-", "");
-                    const label = platform.charAt(0).toUpperCase() + platform.slice(1);
-                    const handle = s.params?.handle || s.params?.profile_id || s.params?.query || "";
-                    const ago = timeAgo(s.latest);
-                    const isStale = Date.now() - new Date(s.latest).getTime() > 24 * 60 * 60 * 1000;
-                    return (
-                      <span key={`${s.sourceId}-${s.endpointId}`} className={`inline-flex items-center gap-1 text-[10px] px-2 py-1 rounded-full font-medium ${isStale ? "bg-amber-50 text-amber-700 border border-amber-200" : "bg-green-50 text-green-700 border border-green-200"}`}>
-                        {label} {s.endpointId}{handle ? ` @${handle}` : ""} — {ago}
-                      </span>
-                    );
-                  })}
-                  {dsSnapCounts.map((d) => {
-                    const ago = timeAgo(d.latest);
-                    const isStale = Date.now() - new Date(d.latest).getTime() > 24 * 60 * 60 * 1000;
-                    return (
-                      <span key={`${d.sourceId}-${d.endpointId}`} className={`inline-flex items-center gap-1 text-[10px] px-2 py-1 rounded-full font-medium ${isStale ? "bg-amber-50 text-amber-700 border border-amber-200" : "bg-blue-50 text-blue-700 border border-blue-200"}`}>
-                        {d.sourceId}/{d.endpointId} — {ago}
-                      </span>
-                    );
-                  })}
-                </div>
-              )}
+              {(() => {
+                const socialKeys = new Set(socialSnapshots.filter((s) => s.pollStatus === "finished").map((s) => `${s.sourceId}/${s.endpointId}`));
+                const dsBadges = dsSnapCounts.filter((d) => !d.sourceId.startsWith("social-") && !socialKeys.has(`${d.sourceId}/${d.endpointId}`));
+                const finishedSocial = socialSnapshots.filter((s) => s.pollStatus === "finished");
+                if (!finishedSocial.length && !dsBadges.length) return null;
+                return (
+                  <div className="flex flex-wrap gap-1.5 mb-3">
+                    {finishedSocial.map((s) => {
+                      const platform = s.sourceId.replace("social-", "");
+                      const label = platform.charAt(0).toUpperCase() + platform.slice(1);
+                      const handle = s.params?.handle || s.params?.profile_id || s.params?.query || "";
+                      const isStale = Date.now() - new Date(s.latest).getTime() > 24 * 60 * 60 * 1000;
+                      return (
+                        <span key={`${s.sourceId}-${s.endpointId}`} className={`inline-flex items-center gap-1 text-[10px] px-2 py-1 rounded-full font-medium ${isStale ? "bg-amber-50 text-amber-700 border border-amber-200" : "bg-green-50 text-green-700 border border-green-200"}`}>
+                          {label} {s.endpointId}{handle ? ` @${handle}` : ""} — {timeAgo(s.latest)}
+                        </span>
+                      );
+                    })}
+                    {dsBadges.map((d) => {
+                      const isStale = Date.now() - new Date(d.latest).getTime() > 24 * 60 * 60 * 1000;
+                      return (
+                        <span key={`${d.sourceId}-${d.endpointId}`} className={`inline-flex items-center gap-1 text-[10px] px-2 py-1 rounded-full font-medium ${isStale ? "bg-amber-50 text-amber-700 border border-amber-200" : "bg-blue-50 text-blue-700 border border-blue-200"}`}>
+                          {d.sourceId}/{d.endpointId} — {timeAgo(d.latest)}
+                        </span>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
               <div className="mb-4">
                 <div className="flex gap-2">
                   <input
