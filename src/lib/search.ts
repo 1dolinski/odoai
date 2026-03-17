@@ -4,9 +4,10 @@ let _client: ReturnType<typeof createClient> | null = null;
 
 function getClient() {
   if (!_client) {
-    const pk = process.env.APINOW_PRIVATE_KEY;
-    if (!pk || !pk.startsWith("0x")) throw new Error("APINOW_PRIVATE_KEY not configured");
-    _client = createClient({ privateKey: pk as `0x${string}` });
+    const pk = process.env.APINOW_PRIVATE_KEY?.trim();
+    if (!pk) throw new Error("APINOW_PRIVATE_KEY not configured");
+    const key = pk.startsWith("0x") ? pk : `0x${pk}`;
+    _client = createClient({ privateKey: key as `0x${string}` });
   }
   return _client;
 }

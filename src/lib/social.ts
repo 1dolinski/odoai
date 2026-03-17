@@ -4,18 +4,25 @@ const BASE_URL = "https://stablesocial.dev";
 
 let _client: ReturnType<typeof createClient> | null = null;
 
+function cleanKey(raw: string): `0x${string}` {
+  let k = raw.trim();
+  if (!k.startsWith("0x")) k = `0x${k}`;
+  if (k.length !== 66) throw new Error(`APINOW_PRIVATE_KEY wrong length: got ${k.length} chars, expected 66 (0x + 64 hex)`);
+  return k as `0x${string}`;
+}
+
 function getClient() {
   if (!_client) {
     const pk = process.env.APINOW_PRIVATE_KEY;
-    if (!pk || !pk.startsWith("0x")) throw new Error("APINOW_PRIVATE_KEY not configured — set it in Vercel env vars");
-    _client = createClient({ privateKey: pk as `0x${string}` });
+    if (!pk) throw new Error("APINOW_PRIVATE_KEY not configured — set it in Vercel env vars");
+    _client = createClient({ privateKey: cleanKey(pk) });
   }
   return _client;
 }
 
 export function isConfigured(): boolean {
-  const pk = process.env.APINOW_PRIVATE_KEY;
-  return !!pk && pk.startsWith("0x");
+  const pk = process.env.APINOW_PRIVATE_KEY?.trim();
+  return !!pk && pk.length >= 64;
 }
 
 export type Platform = "tiktok" | "instagram" | "facebook" | "reddit";
@@ -123,10 +130,10 @@ export async function querySocial(
     return { platform, endpoint: endpointId, params, data: null, cost: "$0.00", fetchedAt: new Date(), error: `Unknown endpoint: ${endpointId}` };
   }
 
-  const apinow = getClient();
   const url = `${BASE_URL}${ep.path}`;
 
   try {
+    const apinow = getClient();
     const data = await apinow.callExternal(url, {
       method: "POST",
       body: params,
@@ -141,6 +148,7 @@ export async function querySocial(
       fetchedAt: new Date(),
     };
   } catch (err) {
+    _client = null;
     return {
       platform,
       endpoint: endpointId,
