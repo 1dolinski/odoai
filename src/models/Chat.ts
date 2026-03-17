@@ -95,6 +95,7 @@ export interface IChat extends Document {
   menu: IMenuItem[];
   dataSources: IChatDataSourceEndpoint[];
   priorityNarrative: string;
+  leveragePlay: string;
   lastPrioritizedAt: Date;
   messagesSinceSummary: number;
   createdAt: Date;
@@ -148,6 +149,7 @@ const ChatSchema = new Schema<IChat>(
     menu: { type: [{ id: String, name: String, description: { type: String, default: "" }, price: { type: String, default: "" }, category: { type: String, default: "general" }, aiSuggestions: { type: String, default: "" }, targetBuyers: { type: String, default: "" }, createdAt: { type: Date, default: Date.now } }], default: [] },
     dataSources: { type: [{ sourceId: String, endpointId: String, enabled: { type: Boolean, default: true }, lastFetchAt: Date }], default: [] },
     priorityNarrative: { type: String, default: "" },
+    leveragePlay: { type: String, default: "" },
     lastPrioritizedAt: { type: Date },
     messagesSinceSummary: { type: Number, default: 0 },
   },

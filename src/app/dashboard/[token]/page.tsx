@@ -150,6 +150,7 @@ interface DashboardData {
     watchSettings: WatchSettings;
     contextSummary: string;
     priorityNarrative: string;
+    leveragePlay: string;
     lastPrioritizedAt: string | null;
     messageCount: number;
     dataSources: { sourceId: string; endpointId: string; enabled: boolean; lastFetchAt?: string }[];
@@ -3126,6 +3127,18 @@ export default function DashboardPage() {
                     </div>
                   </div>
                   <div className="text-sm text-amber-800 leading-relaxed whitespace-pre-line [&>p]:mb-2" dangerouslySetInnerHTML={{ __html: data.chat.priorityNarrative.replace(/\*\*(.+?)\*\*/g, '<strong class="text-amber-900">$1</strong>') }} />
+                </div>
+              )}
+              {data.chat.leveragePlay && (
+                <div className="bg-gradient-to-r from-violet-50 via-purple-50 to-fuchsia-50 border border-purple-200 rounded-xl p-4 mb-4 relative overflow-hidden">
+                  <div className="absolute top-0 right-0 w-24 h-24 bg-purple-100/50 rounded-full -translate-y-8 translate-x-8" />
+                  <div className="relative">
+                    <div className="flex items-center gap-2 mb-2">
+                      <span className="text-xs font-bold uppercase tracking-widest text-purple-600">Leverage Play</span>
+                      <span className="text-[10px] text-purple-400 font-medium bg-purple-100 rounded-full px-2 py-0.5">high-conviction unlock</span>
+                    </div>
+                    <div className="text-sm text-purple-900 leading-relaxed" dangerouslySetInnerHTML={{ __html: data.chat.leveragePlay.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>') }} />
+                  </div>
                 </div>
               )}
               {!data.chat.priorityNarrative && !prioritizing && (

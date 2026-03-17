@@ -55,6 +55,7 @@ export async function GET(req: NextRequest) {
       aiFeedEnabled: chat.aiFeedEnabled ?? false,
       aiFeed: (chat.aiFeed || []).map((f: { _id?: unknown; type: string; content: string; status?: string; createdAt: Date }) => ({ _id: String(f._id || ""), type: f.type, content: f.content, status: f.status || "new", createdAt: f.createdAt })).sort((a: { createdAt: Date }, b: { createdAt: Date }) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()),
       priorityNarrative: chat.priorityNarrative || "",
+      leveragePlay: chat.leveragePlay || "",
       lastPrioritizedAt: chat.lastPrioritizedAt || null,
       messageCount: chat.messages?.length || 0,
       dataSources: chat.dataSources || [],
@@ -886,6 +887,7 @@ OUTPUT (valid JSON only):
 
 {
   "narrative": "6-10 sentence priority narrative covering all dimensions below",
+  "leveragePlay": "The leverage play paragraph",
   "tasks": [
     { "id": "taskId", "priorityScore": 85, "momentum": "in-motion", "effort": "low", "impact": "high", "priorityReason": "..." },
     ...
@@ -902,6 +904,15 @@ THE NARRATIVE must cover these dimensions (use headers with **bold** markdown):
 - **Metrics & Signals**: Any data from connected sources that changes what we should focus on?
 - **Sharp Opportunities**: Time-sensitive or unusually high-leverage items — be specific about WHY now
 - **Defer List**: Name 2-3 things that should explicitly be put on ice and why (switching cost, low return, wrong timing)
+
+THE LEVERAGE PLAY (leveragePlay field) — This is the single highest-leverage unlock you can identify from everything you see. Write it as a pitch:
+- Start with what the team is ALREADY doing well (evidence from completed tasks, active work, abilities, metrics)
+- Identify the ONE resource, tool, hire, partnership, channel, or capability that would create a disproportionate multiplier on existing efforts
+- Be SPECIFIC — not "hire more people" but "a dedicated content editor would turn your 3 raw videos/week into 15 pieces of cross-platform content, based on the social query data showing your short-form gets 4x engagement"
+- Show the math or logic: here's what you have now → here's what changes → here's the almost-certain outcome
+- Make it feel inevitable, not speculative — ground it in their actual data, momentum, and patterns
+- 3-5 sentences. This is the slide deck closer, the investor pitch, the "we're leaving money on the table" moment
+- If metrics/data sources show a clear signal, USE the numbers
 
 SCORING RULES for each task:
 - Tasks IN MOTION get a momentum boost — switching cost penalty for abandoning
@@ -946,6 +957,7 @@ CONTEXT SUMMARY:\n${chatDoc?.contextSummary || "none"}` },
       const cleaned = response.replace(/```json?\n?/g, "").replace(/```/g, "").trim();
       const result = JSON.parse(cleaned);
       const narrative = result.narrative || "";
+      const leveragePlay = result.leveragePlay || "";
       const taskUpdates = result.tasks || [];
 
       const ops = taskUpdates.map((t: { id: string; priorityScore: number; momentum: string; effort: string; impact: string; priorityReason: string }) =>
@@ -959,10 +971,10 @@ CONTEXT SUMMARY:\n${chatDoc?.contextSummary || "none"}` },
       );
       await Promise.all([
         ...ops,
-        Chat.updateOne({ telegramChatId: chatId }, { $set: { priorityNarrative: narrative, lastPrioritizedAt: new Date() } }),
+        Chat.updateOne({ telegramChatId: chatId }, { $set: { priorityNarrative: narrative, leveragePlay, lastPrioritizedAt: new Date() } }),
       ]);
 
-      return NextResponse.json({ ok: true, narrative, tasks: taskUpdates });
+      return NextResponse.json({ ok: true, narrative, leveragePlay, tasks: taskUpdates });
     } catch {
       return NextResponse.json({ ok: false, error: "Failed to parse priorities" });
     }
