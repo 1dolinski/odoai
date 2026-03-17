@@ -1894,7 +1894,20 @@ export default function DashboardPage() {
               {allCategories.length > 0 && (
                 <div className="flex gap-0.5 bg-gray-100 rounded-md p-0.5">
                   <button onClick={() => setTaskViewMode("list")} className={`px-2 py-1 rounded text-[10px] font-medium transition-all ${taskViewMode === "list" ? "bg-white text-gray-900 shadow-sm" : "text-gray-500"}`}>List</button>
-                  <button onClick={() => setTaskViewMode("categories")} className={`px-2 py-1 rounded text-[10px] font-medium transition-all ${taskViewMode === "categories" ? "bg-white text-gray-900 shadow-sm" : "text-gray-500"}`}>Categories</button>
+                  <button
+                    disabled={categorizing}
+                    onClick={async () => {
+                      if (taskViewMode === "categories") { setTaskViewMode("list"); return; }
+                      if (allCategories.length === 0) {
+                        setCategorizing(true);
+                        await fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "categorizeTasks" }) });
+                        await fetchData();
+                        setCategorizing(false);
+                      }
+                      setTaskViewMode("categories");
+                    }}
+                    className={`px-2 py-1 rounded text-[10px] font-medium transition-all ${taskViewMode === "categories" ? "bg-white text-gray-900 shadow-sm" : "text-gray-500"} disabled:opacity-50`}
+                  >{categorizing ? "..." : "Categories"}</button>
                 </div>
               )}
             </div>
