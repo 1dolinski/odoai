@@ -278,7 +278,7 @@ export default function DashboardPage() {
 
   const visibleFeedIndices = data ? data.chat.aiFeed.map((f, i) => ({ i, status: f.status })).filter((x) => x.status !== "seen" && x.status !== "actioned").map((x) => x.i) : [];
 
-  const feedAction = useCallback(async (action: "seen" | "todo" | "ask" | "done") => {
+  const feedAction = useCallback(async (action: "seen" | "todo" | "ask" | "done" | "doneCtx") => {
     if (!data || focusedFeedIdx < 0) return;
     const pos = focusedFeedIndices();
     if (pos === -1) return;
@@ -300,6 +300,9 @@ export default function DashboardPage() {
     } else if (action === "ask") {
       setFeedQuestion((prev) => prev?.index === i ? null : { index: i, text: "" });
     } else if (action === "done") {
+      setData((d) => d ? { ...d, chat: { ...d.chat, aiFeed: d.chat.aiFeed.map((f, fi) => fi === i ? { ...f, status: "actioned" } : f) } } : d);
+      fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "feedItemStatus", feedIndex: i, status: "actioned" }) });
+    } else if (action === "doneCtx") {
       const ctx = prompt("What happened? Add context:");
       if (ctx !== null && ctx.trim()) {
         setData((d) => d ? { ...d, chat: { ...d.chat, aiFeed: d.chat.aiFeed.map((f, fi) => fi === i ? { ...f, status: "actioned" } : f) } } : d);
@@ -335,6 +338,8 @@ export default function DashboardPage() {
         feedAction("ask");
       } else if (e.key === "d" || e.key === "D") {
         feedAction("done");
+      } else if (e.key === "c" || e.key === "C") {
+        feedAction("doneCtx");
       }
     }
     window.addEventListener("keydown", handleFeedKeys);
@@ -876,6 +881,7 @@ export default function DashboardPage() {
                       <span><kbd className="px-1 py-0.5 bg-gray-100 rounded text-[9px] font-mono">T</kbd> todo</span>
                       <span><kbd className="px-1 py-0.5 bg-gray-100 rounded text-[9px] font-mono">A</kbd> ask</span>
                       <span><kbd className="px-1 py-0.5 bg-gray-100 rounded text-[9px] font-mono">D</kbd> done</span>
+                      <span><kbd className="px-1 py-0.5 bg-gray-100 rounded text-[9px] font-mono">C</kbd> done+ctx</span>
                     </div>
                   )}
                   {data.chat.aiFeed.map((item, i) => {
