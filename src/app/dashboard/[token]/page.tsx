@@ -138,7 +138,8 @@ interface DashboardData {
     lastReviewedAt: string | null;
     aiFeedEnabled: boolean;
     aiFeed: { _id: string; type: string; content: string; status?: string; createdAt: string }[];
-    aiQuestions: { id: string; category: string; question: string; answer: string; answeredAt: string | null; createdAt: string }[];
+    aiQuestions: { id: string; category: string; question: string; answer: string; skipped: boolean; answeredAt: string | null; createdAt: string }[];
+    menu: { id: string; name: string; description: string; price: string; category: string; aiSuggestions: string; targetBuyers: string; createdAt: string }[];
     watchSettings: WatchSettings;
     contextSummary: string;
     messageCount: number;
@@ -302,6 +303,15 @@ export default function DashboardPage() {
   const [aiQDrafts, setAiQDrafts] = useState<Record<string, string>>({});
   const [aiQSaving, setAiQSaving] = useState<string | null>(null);
   const [aiQFilter, setAiQFilter] = useState<string>("all");
+  const [aiQShowCompleted, setAiQShowCompleted] = useState(false);
+  const [showMenu, setShowMenu] = useState(false);
+  const [menuForm, setMenuForm] = useState({ name: "", description: "", price: "", category: "general" });
+  const [menuAdding, setMenuAdding] = useState(false);
+  const [menuEditing, setMenuEditing] = useState<string | null>(null);
+  const [menuEditDraft, setMenuEditDraft] = useState<{ name: string; description: string; price: string; category: string }>({ name: "", description: "", price: "", category: "" });
+  const [menuAiLoading, setMenuAiLoading] = useState<string | null>(null);
+  const [menuAudit, setMenuAudit] = useState<string | null>(null);
+  const [menuAuditing, setMenuAuditing] = useState(false);
   const [socialPlatform, setSocialPlatform] = useState("");
   const [socialEndpoint, setSocialEndpoint] = useState("");
   const [socialEndpoints, setSocialEndpoints] = useState<{ id: string; path: string; description: string; dependsOn?: string; params: { name: string; required: boolean; description: string; default?: string }[] }[]>([]);
@@ -955,7 +965,8 @@ export default function DashboardPage() {
         <section className="mb-10">
           <div className="flex flex-wrap items-center gap-2">
             {([
-              { key: "aiQuestions", label: `AI Questions${data.chat.aiQuestions?.length ? ` (${data.chat.aiQuestions.filter((q) => !q.answer).length}/${data.chat.aiQuestions.length})` : ""}`, state: showAiQuestions, set: setShowAiQuestions },
+              { key: "aiQuestions", label: `AI Questions${data.chat.aiQuestions?.length ? ` (${data.chat.aiQuestions.filter((q) => !q.answer && !q.skipped).length})` : ""}`, state: showAiQuestions, set: setShowAiQuestions },
+              { key: "menu", label: `Menu${data.chat.menu?.length ? ` (${data.chat.menu.length})` : ""}`, state: showMenu, set: setShowMenu },
               { key: "feed", label: "AI Feed", state: showFeed, set: setShowFeed },
               { key: "people", label: `People (${data.people.length})`, state: showPeople, set: setShowPeople },
               { key: "initiatives", label: `Initiatives (${(data.initiatives || []).filter((i) => i.status === "active").length})`, state: showInitiatives, set: setShowInitiatives },
@@ -972,189 +983,296 @@ export default function DashboardPage() {
                 key={btn.key}
                 onClick={() => {
                   const next = !btn.state;
-                  setShowFeed(false); setShowPeople(false); setShowInitiatives(false); setShowContext(false); setShowDump(false); setShowGuidance(false); setShowActions(false); setShowWatch(false); setShowWallet(false); setShowAbilities(false); setShowDataSources(false); setShowSocial(false); setShowAiQuestions(false);
+                  setShowFeed(false); setShowPeople(false); setShowInitiatives(false); setShowContext(false); setShowDump(false); setShowGuidance(false); setShowActions(false); setShowWatch(false); setShowWallet(false); setShowAbilities(false); setShowDataSources(false); setShowSocial(false); setShowAiQuestions(false); setShowMenu(false);
                   btn.set(next);
                 }}
                 className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all border ${
                   btn.state
-                    ? btn.key === "aiQuestions" ? "bg-indigo-600 text-white border-indigo-600 shadow-sm" : "bg-gray-900 text-white border-gray-900"
-                    : btn.key === "aiQuestions" ? "bg-indigo-50 text-indigo-700 border-indigo-200 hover:border-indigo-400 hover:bg-indigo-100" : "bg-white text-gray-600 border-gray-200 hover:border-gray-400"
+                    ? btn.key === "aiQuestions" ? "bg-indigo-600 text-white border-indigo-600 shadow-sm" : btn.key === "menu" ? "bg-emerald-600 text-white border-emerald-600 shadow-sm" : "bg-gray-900 text-white border-gray-900"
+                    : btn.key === "aiQuestions" ? "bg-indigo-50 text-indigo-700 border-indigo-200 hover:border-indigo-400 hover:bg-indigo-100" : btn.key === "menu" ? "bg-emerald-50 text-emerald-700 border-emerald-200 hover:border-emerald-400 hover:bg-emerald-100" : "bg-white text-gray-600 border-gray-200 hover:border-gray-400"
                 }`}
               >
-                {btn.key === "aiQuestions" && <span className="mr-1">✦</span>}{btn.label}
+                {btn.key === "aiQuestions" && <span className="mr-1">✦</span>}{btn.key === "menu" && <span className="mr-1">☰</span>}{btn.label}
               </button>
             ))}
           </div>
-          {showAiQuestions && (
+          {showAiQuestions && (() => {
+            const allQ = data.chat.aiQuestions || [];
+            const activeQ = allQ.filter((q) => !q.answer && !q.skipped);
+            const completedQ = allQ.filter((q) => q.answer || q.skipped);
+            const catBadge = (cat: string) => ({
+              strategy: "bg-purple-100 text-purple-700", abilities: "bg-blue-100 text-blue-700", sales: "bg-emerald-100 text-emerald-700",
+              brand: "bg-orange-100 text-orange-700", content: "bg-pink-100 text-pink-700", faq: "bg-yellow-100 text-yellow-700", general: "bg-gray-100 text-gray-700",
+            }[cat] || "bg-gray-100 text-gray-700");
+            return (
             <div className="mt-4 bg-white border border-gray-200 rounded-xl p-3 sm:p-5 shadow-sm">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4">
                 <div>
                   <h3 className="font-semibold text-gray-800">AI Questions</h3>
-                  <p className="text-xs text-gray-500 mt-0.5">AI-generated questions to understand your team better — fill in answers to improve strategy, sales, and partnership recommendations</p>
+                  <p className="text-xs text-gray-500 mt-0.5">Fill in answers to help AI give better strategy, sales, and partnership advice</p>
                 </div>
                 <div className="flex items-center gap-2">
-                  {(data.chat.aiQuestions || []).length > 0 && (
-                    <button
-                      onClick={async () => {
-                        if (!confirm("Clear all AI questions?")) return;
-                        await fetch("/api/dashboard", {
-                          method: "POST",
-                          headers: { "Content-Type": "application/json" },
-                          body: JSON.stringify({ token, action: "clearAiQuestions" }),
-                        });
-                        setData((d) => d ? { ...d, chat: { ...d.chat, aiQuestions: [] } } : d);
-                        setAiQDrafts({});
-                      }}
-                      className="text-xs text-gray-400 hover:text-red-500 transition-colors"
-                    >
-                      Clear All
-                    </button>
+                  {allQ.length > 0 && (
+                    <button onClick={async () => { if (!confirm("Clear all AI questions?")) return; await fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "clearAiQuestions" }) }); setData((d) => d ? { ...d, chat: { ...d.chat, aiQuestions: [] } } : d); setAiQDrafts({}); }} className="text-xs text-gray-400 hover:text-red-500 transition-colors">Clear All</button>
                   )}
                   <button
-                    onClick={async () => {
-                      setAiQGenerating(true);
-                      try {
-                        const res = await fetch("/api/dashboard", {
-                          method: "POST",
-                          headers: { "Content-Type": "application/json" },
-                          body: JSON.stringify({ token, action: "generateAiQuestions" }),
-                        });
-                        const json = await res.json();
-                        if (json.ok && json.questions?.length) {
-                          fetchData();
-                        }
-                      } catch {}
-                      setAiQGenerating(false);
-                    }}
+                    onClick={async () => { setAiQGenerating(true); try { const res = await fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "generateAiQuestions" }) }); const json = await res.json(); if (json.ok && json.questions?.length) fetchData(); } catch {} setAiQGenerating(false); }}
                     disabled={aiQGenerating}
                     className="bg-gray-800 hover:bg-gray-900 text-white px-3 py-1.5 rounded-lg text-xs font-medium disabled:opacity-50 shadow-sm flex items-center gap-1.5"
                   >
-                    {aiQGenerating ? (
-                      <>
-                        <svg className="w-3 h-3 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2" /></svg>
-                        Generating…
-                      </>
-                    ) : "Generate Questions"}
+                    {aiQGenerating ? (<><svg className="w-3 h-3 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2" /></svg>Generating…</>) : "Generate Questions"}
                   </button>
                 </div>
               </div>
 
-              {(data.chat.aiQuestions || []).length > 0 && (
-                <>
-                  <div className="flex flex-wrap gap-1.5 mb-3">
-                    {["all", ...Array.from(new Set((data.chat.aiQuestions || []).map((q) => q.category)))].map((cat) => {
-                      const count = cat === "all" ? data.chat.aiQuestions.length : data.chat.aiQuestions.filter((q) => q.category === cat).length;
-                      const unanswered = cat === "all" ? data.chat.aiQuestions.filter((q) => !q.answer).length : data.chat.aiQuestions.filter((q) => q.category === cat && !q.answer).length;
-                      return (
+              {activeQ.length > 0 && (
+                <div className="space-y-3">
+                  {activeQ.filter((q) => aiQFilter === "all" || q.category === aiQFilter).map((q) => (
+                    <div key={q.id} className="rounded-lg border border-gray-200 bg-gray-50 p-3 transition-all">
+                      <div className="flex items-start justify-between gap-2 mb-2">
+                        <div className="flex-1">
+                          <span className={`inline-block text-[10px] font-semibold px-1.5 py-0.5 rounded mr-2 ${catBadge(q.category)}`}>{q.category}</span>
+                          <span className="text-sm font-medium text-gray-800">{q.question}</span>
+                        </div>
                         <button
-                          key={cat}
-                          onClick={() => setAiQFilter(cat)}
-                          className={`text-xs px-2.5 py-1 rounded-full font-medium transition-all border ${
-                            aiQFilter === cat
-                              ? "bg-gray-900 text-white border-gray-900"
-                              : "bg-white text-gray-500 border-gray-200 hover:border-gray-400"
-                          }`}
-                        >
-                          {cat === "all" ? "All" : cat.charAt(0).toUpperCase() + cat.slice(1)} ({unanswered}/{count})
-                        </button>
-                      );
-                    })}
-                  </div>
+                          onClick={async () => {
+                            await fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "skipAiQuestion", questionId: q.id }) });
+                            setData((d) => d ? { ...d, chat: { ...d.chat, aiQuestions: d.chat.aiQuestions.map((x) => x.id === q.id ? { ...x, skipped: true } : x) } } : d);
+                          }}
+                          className="text-[10px] text-gray-400 hover:text-gray-600 whitespace-nowrap transition-colors"
+                        >Skip</button>
+                      </div>
+                      <div className="mt-1.5">
+                        <textarea
+                          value={aiQDrafts[q.id] ?? ""}
+                          onChange={(e) => setAiQDrafts((d) => ({ ...d, [q.id]: e.target.value }))}
+                          placeholder="Type your answer…"
+                          rows={2}
+                          className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-300 focus:border-indigo-400 outline-none resize-y"
+                        />
+                        <div className="flex justify-end gap-2 mt-1.5">
+                          <button
+                            disabled={aiQSaving === q.id || !(aiQDrafts[q.id] ?? "").trim()}
+                            onClick={async () => {
+                              const answer = (aiQDrafts[q.id] ?? "").trim();
+                              setAiQSaving(q.id);
+                              try { await fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "answerAiQuestion", questionId: q.id, answer }) }); setData((d) => d ? { ...d, chat: { ...d.chat, aiQuestions: d.chat.aiQuestions.map((x) => x.id === q.id ? { ...x, answer, answeredAt: new Date().toISOString() } : x) } } : d); setAiQDrafts((d) => { const n = { ...d }; delete n[q.id]; return n; }); } catch {}
+                              setAiQSaving(null);
+                            }}
+                            className="bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1 rounded-lg text-xs font-medium disabled:opacity-50 transition-colors"
+                          >{aiQSaving === q.id ? "Saving…" : "Save"}</button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
 
-                  <div className="space-y-3">
-                    {(data.chat.aiQuestions || [])
-                      .filter((q) => aiQFilter === "all" || q.category === aiQFilter)
-                      .map((q) => (
-                        <div key={q.id} className={`rounded-lg border p-3 transition-all ${q.answer ? "bg-green-50 border-green-200" : "bg-gray-50 border-gray-200"}`}>
-                          <div className="flex items-start justify-between gap-2 mb-2">
+              {activeQ.length === 0 && allQ.length > 0 && (
+                <div className="text-center py-6 text-gray-400">
+                  <p className="text-sm">All caught up! Generate more questions to keep improving.</p>
+                </div>
+              )}
+
+              {allQ.length === 0 && !aiQGenerating && (
+                <div className="text-center py-8 text-gray-400">
+                  <svg className="w-10 h-10 mx-auto mb-2 text-gray-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M9.879 7.519c1.171-1.025 3.071-1.025 4.242 0 1.172 1.025 1.172 2.687 0 3.712-.203.179-.43.326-.67.442-.745.361-1.45.999-1.45 1.827v.75M12 18h.01" strokeLinecap="round" strokeLinejoin="round" /></svg>
+                  <p className="text-sm">No questions yet — click &ldquo;Generate Questions&rdquo; to get started</p>
+                  <p className="text-xs mt-1">AI will look at everything it knows and ask questions to help with attention, sales, and brand partnerships</p>
+                </div>
+              )}
+
+              {completedQ.length > 0 && (
+                <div className="mt-4 border-t border-gray-100 pt-3">
+                  <button onClick={() => setAiQShowCompleted(!aiQShowCompleted)} className="flex items-center gap-2 text-xs font-medium text-gray-500 hover:text-gray-700 transition-colors w-full">
+                    <svg className={`w-3 h-3 transition-transform ${aiQShowCompleted ? "rotate-90" : ""}`} viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z" clipRule="evenodd" /></svg>
+                    Completed ({completedQ.filter((q) => q.answer).length} answered, {completedQ.filter((q) => q.skipped && !q.answer).length} skipped)
+                  </button>
+                  {aiQShowCompleted && (
+                    <div className="space-y-2 mt-3">
+                      {completedQ.map((q) => (
+                        <div key={q.id} className={`rounded-lg border p-3 ${q.answer ? "bg-green-50 border-green-200" : "bg-gray-50 border-gray-100"}`}>
+                          <div className="flex items-start justify-between gap-2">
                             <div className="flex-1">
-                              <span className={`inline-block text-[10px] font-semibold px-1.5 py-0.5 rounded mr-2 ${
-                                {
-                                  strategy: "bg-purple-100 text-purple-700",
-                                  abilities: "bg-blue-100 text-blue-700",
-                                  sales: "bg-emerald-100 text-emerald-700",
-                                  brand: "bg-orange-100 text-orange-700",
-                                  content: "bg-pink-100 text-pink-700",
-                                  faq: "bg-yellow-100 text-yellow-700",
-                                  general: "bg-gray-100 text-gray-700",
-                                }[q.category] || "bg-gray-100 text-gray-700"
-                              }`}>
-                                {q.category}
-                              </span>
-                              <span className="text-sm font-medium text-gray-800">{q.question}</span>
+                              <span className={`inline-block text-[10px] font-semibold px-1.5 py-0.5 rounded mr-2 ${catBadge(q.category)}`}>{q.category}</span>
+                              <span className="text-sm text-gray-700">{q.question}</span>
                             </div>
-                            {q.answer && (
-                              <span className="text-[10px] text-green-600 font-medium whitespace-nowrap flex items-center gap-1">
-                                <svg className="w-3 h-3" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" /></svg>
-                                Answered
-                              </span>
-                            )}
+                            <div className="flex items-center gap-2">
+                              {q.skipped && !q.answer && (
+                                <button onClick={async () => { await fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "unskipAiQuestion", questionId: q.id }) }); setData((d) => d ? { ...d, chat: { ...d.chat, aiQuestions: d.chat.aiQuestions.map((x) => x.id === q.id ? { ...x, skipped: false } : x) } } : d); }} className="text-[10px] text-indigo-500 hover:text-indigo-700 transition-colors">Unskip</button>
+                              )}
+                              {q.skipped && !q.answer && <span className="text-[10px] text-gray-400">Skipped</span>}
+                              {q.answer && <span className="text-[10px] text-green-600 flex items-center gap-1"><svg className="w-3 h-3" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" /></svg></span>}
+                            </div>
                           </div>
                           {q.answer && !aiQDrafts[q.id] && (
-                            <div className="mt-1.5 text-sm text-gray-700 bg-white rounded p-2 border border-green-100 cursor-pointer hover:border-green-300 transition-colors" onClick={() => setAiQDrafts((d) => ({ ...d, [q.id]: q.answer }))}>
-                              {q.answer}
-                            </div>
+                            <div className="mt-1.5 text-sm text-gray-600 bg-white rounded p-2 border border-green-100 cursor-pointer hover:border-green-300 transition-colors" onClick={() => setAiQDrafts((d) => ({ ...d, [q.id]: q.answer }))}>{q.answer}</div>
                           )}
-                          {(!q.answer || aiQDrafts[q.id] !== undefined) && (
+                          {aiQDrafts[q.id] !== undefined && (
                             <div className="mt-1.5">
-                              <textarea
-                                value={aiQDrafts[q.id] ?? q.answer ?? ""}
-                                onChange={(e) => setAiQDrafts((d) => ({ ...d, [q.id]: e.target.value }))}
-                                placeholder="Type your answer…"
-                                rows={2}
-                                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-300 focus:border-indigo-400 outline-none resize-y"
-                              />
+                              <textarea value={aiQDrafts[q.id]} onChange={(e) => setAiQDrafts((d) => ({ ...d, [q.id]: e.target.value }))} rows={2} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-300 focus:border-indigo-400 outline-none resize-y" />
                               <div className="flex justify-end gap-2 mt-1.5">
-                                {aiQDrafts[q.id] !== undefined && (
-                                  <button
-                                    onClick={() => setAiQDrafts((d) => { const n = { ...d }; delete n[q.id]; return n; })}
-                                    className="text-xs text-gray-400 hover:text-gray-600"
-                                  >
-                                    Cancel
-                                  </button>
-                                )}
-                                <button
-                                  disabled={aiQSaving === q.id || !(aiQDrafts[q.id] ?? "").trim()}
-                                  onClick={async () => {
-                                    const answer = (aiQDrafts[q.id] ?? "").trim();
-                                    setAiQSaving(q.id);
-                                    try {
-                                      await fetch("/api/dashboard", {
-                                        method: "POST",
-                                        headers: { "Content-Type": "application/json" },
-                                        body: JSON.stringify({ token, action: "answerAiQuestion", questionId: q.id, answer }),
-                                      });
-                                      setData((d) => d ? {
-                                        ...d,
-                                        chat: {
-                                          ...d.chat,
-                                          aiQuestions: d.chat.aiQuestions.map((existing) =>
-                                            existing.id === q.id ? { ...existing, answer, answeredAt: new Date().toISOString() } : existing
-                                          ),
-                                        },
-                                      } : d);
-                                      setAiQDrafts((d) => { const n = { ...d }; delete n[q.id]; return n; });
-                                    } catch {}
-                                    setAiQSaving(null);
-                                  }}
-                                  className="bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1 rounded-lg text-xs font-medium disabled:opacity-50 transition-colors"
-                                >
-                                  {aiQSaving === q.id ? "Saving…" : "Save"}
-                                </button>
+                                <button onClick={() => setAiQDrafts((d) => { const n = { ...d }; delete n[q.id]; return n; })} className="text-xs text-gray-400 hover:text-gray-600">Cancel</button>
+                                <button disabled={aiQSaving === q.id || !(aiQDrafts[q.id] ?? "").trim()} onClick={async () => { const answer = (aiQDrafts[q.id] ?? "").trim(); setAiQSaving(q.id); try { await fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "answerAiQuestion", questionId: q.id, answer }) }); setData((d) => d ? { ...d, chat: { ...d.chat, aiQuestions: d.chat.aiQuestions.map((x) => x.id === q.id ? { ...x, answer, answeredAt: new Date().toISOString(), skipped: false } : x) } } : d); setAiQDrafts((d) => { const n = { ...d }; delete n[q.id]; return n; }); } catch {} setAiQSaving(null); }} className="bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1 rounded-lg text-xs font-medium disabled:opacity-50 transition-colors">{aiQSaving === q.id ? "Saving…" : "Save"}</button>
                               </div>
                             </div>
                           )}
                         </div>
                       ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+            );
+          })()}
+
+          {showMenu && (
+            <div className="mt-4 bg-white border border-gray-200 rounded-xl p-3 sm:p-5 shadow-sm">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4">
+                <div>
+                  <h3 className="font-semibold text-gray-800">Menu</h3>
+                  <p className="text-xs text-gray-500 mt-0.5">Your products and services — AI helps optimize each item for maximum impact</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  {(data.chat.menu || []).length > 0 && (
+                    <button
+                      onClick={async () => {
+                        setMenuAuditing(true);
+                        setMenuAudit(null);
+                        try {
+                          const res = await fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "aiMenuAudit" }) });
+                          const json = await res.json();
+                          if (json.ok) setMenuAudit(json.audit);
+                        } catch {}
+                        setMenuAuditing(false);
+                      }}
+                      disabled={menuAuditing}
+                      className="bg-gray-800 hover:bg-gray-900 text-white px-3 py-1.5 rounded-lg text-xs font-medium disabled:opacity-50 shadow-sm flex items-center gap-1.5"
+                    >
+                      {menuAuditing ? (<><svg className="w-3 h-3 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2" /></svg>Auditing…</>) : "AI Menu Audit"}
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {menuAudit && (
+                <div className="mb-4 bg-indigo-50 border border-indigo-100 rounded-lg p-3">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-[10px] font-medium text-indigo-600">AI Menu Audit</span>
+                    <button onClick={() => setMenuAudit(null)} className="text-[10px] text-indigo-400 hover:text-indigo-600">Dismiss</button>
                   </div>
-                </>
+                  <div className="text-sm text-gray-800 whitespace-pre-wrap leading-relaxed">{menuAudit}</div>
+                </div>
               )}
 
-              {(data.chat.aiQuestions || []).length === 0 && !aiQGenerating && (
-                <div className="text-center py-8 text-gray-400">
-                  <svg className="w-10 h-10 mx-auto mb-2 text-gray-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M9.879 7.519c1.171-1.025 3.071-1.025 4.242 0 1.172 1.025 1.172 2.687 0 3.712-.203.179-.43.326-.67.442-.745.361-1.45.999-1.45 1.827v.75M12 18h.01" strokeLinecap="round" strokeLinejoin="round" /></svg>
-                  <p className="text-sm">No questions yet — click &ldquo;Generate Questions&rdquo; to get started</p>
-                  <p className="text-xs mt-1">AI will look at everything it knows about your team and ask questions to help with attention, sales, and brand partnerships</p>
+              <div className="mb-4 bg-gray-50 rounded-lg border border-gray-200 p-3">
+                <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
+                  <input type="text" value={menuForm.name} onChange={(e) => setMenuForm((f) => ({ ...f, name: e.target.value }))} placeholder="Item name" className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-300 focus:border-emerald-400 outline-none" />
+                  <input type="text" value={menuForm.description} onChange={(e) => setMenuForm((f) => ({ ...f, description: e.target.value }))} placeholder="Description" className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-300 focus:border-emerald-400 outline-none" />
+                  <input type="text" value={menuForm.price} onChange={(e) => setMenuForm((f) => ({ ...f, price: e.target.value }))} placeholder="Price" className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-300 focus:border-emerald-400 outline-none" />
+                  <div className="flex gap-2">
+                    <select value={menuForm.category} onChange={(e) => setMenuForm((f) => ({ ...f, category: e.target.value }))} className="flex-1 border border-gray-200 rounded-lg px-2 py-2 text-sm focus:ring-2 focus:ring-emerald-300 outline-none bg-white">
+                      <option value="general">General</option>
+                      <option value="product">Product</option>
+                      <option value="service">Service</option>
+                      <option value="package">Package</option>
+                      <option value="addon">Add-on</option>
+                    </select>
+                    <button
+                      disabled={menuAdding || !menuForm.name.trim()}
+                      onClick={async () => {
+                        setMenuAdding(true);
+                        try {
+                          const res = await fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "addMenuItem", item: menuForm }) });
+                          const json = await res.json();
+                          if (json.ok) { setData((d) => d ? { ...d, chat: { ...d.chat, menu: [...d.chat.menu, json.item] } } : d); setMenuForm({ name: "", description: "", price: "", category: "general" }); }
+                        } catch {}
+                        setMenuAdding(false);
+                      }}
+                      className="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 transition-colors whitespace-nowrap"
+                    >{menuAdding ? "Adding…" : "Add"}</button>
+                  </div>
+                </div>
+              </div>
+
+              {(data.chat.menu || []).length > 0 ? (
+                <div className="space-y-3">
+                  {data.chat.menu.map((item) => (
+                    <div key={item.id} className="rounded-lg border border-gray-200 bg-white p-3">
+                      {menuEditing === item.id ? (
+                        <div className="space-y-2">
+                          <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
+                            <input type="text" value={menuEditDraft.name} onChange={(e) => setMenuEditDraft((d) => ({ ...d, name: e.target.value }))} className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-emerald-300 outline-none" />
+                            <input type="text" value={menuEditDraft.description} onChange={(e) => setMenuEditDraft((d) => ({ ...d, description: e.target.value }))} placeholder="Description" className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-emerald-300 outline-none" />
+                            <input type="text" value={menuEditDraft.price} onChange={(e) => setMenuEditDraft((d) => ({ ...d, price: e.target.value }))} placeholder="Price" className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-emerald-300 outline-none" />
+                            <select value={menuEditDraft.category} onChange={(e) => setMenuEditDraft((d) => ({ ...d, category: e.target.value }))} className="border border-gray-200 rounded-lg px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-300 outline-none bg-white">
+                              <option value="general">General</option><option value="product">Product</option><option value="service">Service</option><option value="package">Package</option><option value="addon">Add-on</option>
+                            </select>
+                          </div>
+                          <div className="flex justify-end gap-2">
+                            <button onClick={() => setMenuEditing(null)} className="text-xs text-gray-400 hover:text-gray-600">Cancel</button>
+                            <button onClick={async () => {
+                              await fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "updateMenuItem", itemId: item.id, ...menuEditDraft }) });
+                              setData((d) => d ? { ...d, chat: { ...d.chat, menu: d.chat.menu.map((m) => m.id === item.id ? { ...m, ...menuEditDraft } : m) } } : d);
+                              setMenuEditing(null);
+                            }} className="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1 rounded-lg text-xs font-medium transition-colors">Save</button>
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="flex-1">
+                              <div className="flex items-center gap-2">
+                                <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${{ product: "bg-blue-100 text-blue-700", service: "bg-purple-100 text-purple-700", package: "bg-amber-100 text-amber-700", addon: "bg-teal-100 text-teal-700", general: "bg-gray-100 text-gray-600" }[item.category] || "bg-gray-100 text-gray-600"}`}>{item.category}</span>
+                                <span className="text-sm font-semibold text-gray-800">{item.name}</span>
+                                {item.price && <span className="text-sm font-medium text-emerald-600">{item.price}</span>}
+                              </div>
+                              {item.description && <p className="text-xs text-gray-500 mt-1">{item.description}</p>}
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                              <button onClick={() => { setMenuEditing(item.id); setMenuEditDraft({ name: item.name, description: item.description, price: item.price, category: item.category }); }} className="text-[10px] text-gray-400 hover:text-gray-600 transition-colors">Edit</button>
+                              <button
+                                disabled={menuAiLoading === item.id}
+                                onClick={async () => {
+                                  setMenuAiLoading(item.id);
+                                  try {
+                                    const res = await fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "aiMenuSuggestions", itemId: item.id }) });
+                                    const json = await res.json();
+                                    if (json.ok) setData((d) => d ? { ...d, chat: { ...d.chat, menu: d.chat.menu.map((m) => m.id === item.id ? { ...m, aiSuggestions: json.suggestions, targetBuyers: json.targetBuyers } : m) } } : d);
+                                  } catch {}
+                                  setMenuAiLoading(null);
+                                }}
+                                className="text-[10px] text-indigo-500 hover:text-indigo-700 transition-colors flex items-center gap-0.5"
+                              >{menuAiLoading === item.id ? <><svg className="w-2.5 h-2.5 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2" /></svg></> : "AI Suggest"}</button>
+                              <button onClick={async () => { if (!confirm(`Delete "${item.name}"?`)) return; await fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "deleteMenuItem", itemId: item.id }) }); setData((d) => d ? { ...d, chat: { ...d.chat, menu: d.chat.menu.filter((m) => m.id !== item.id) } } : d); }} className="text-[10px] text-gray-400 hover:text-red-500 transition-colors">Delete</button>
+                            </div>
+                          </div>
+                          {(item.aiSuggestions || item.targetBuyers) && (
+                            <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2">
+                              {item.aiSuggestions && (
+                                <div className="bg-indigo-50 border border-indigo-100 rounded-lg p-2.5">
+                                  <span className="text-[10px] font-medium text-indigo-600 block mb-1">Improvement Ideas</span>
+                                  <div className="text-xs text-gray-700 whitespace-pre-wrap leading-relaxed">{item.aiSuggestions}</div>
+                                </div>
+                              )}
+                              {item.targetBuyers && (
+                                <div className="bg-emerald-50 border border-emerald-100 rounded-lg p-2.5">
+                                  <span className="text-[10px] font-medium text-emerald-600 block mb-1">Who to Sell To</span>
+                                  <div className="text-xs text-gray-700 whitespace-pre-wrap leading-relaxed">{item.targetBuyers}</div>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-center py-6 text-gray-400">
+                  <p className="text-sm">No menu items yet — add your products and services above</p>
+                  <p className="text-xs mt-1">AI will help you optimize each item and find the right buyers</p>
                 </div>
               )}
             </div>

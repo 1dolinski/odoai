@@ -56,7 +56,19 @@ export interface IAiQuestion {
   category: string;
   question: string;
   answer: string;
+  skipped?: boolean;
   answeredAt?: Date;
+  createdAt: Date;
+}
+
+export interface IMenuItem {
+  id: string;
+  name: string;
+  description: string;
+  price: string;
+  category: string;
+  aiSuggestions?: string;
+  targetBuyers?: string;
   createdAt: Date;
 }
 
@@ -80,6 +92,7 @@ export interface IChat extends Document {
   aiFeedEnabled: boolean;
   aiFeed: { type: string; content: string; status: string; createdAt: Date }[];
   aiQuestions: IAiQuestion[];
+  menu: IMenuItem[];
   dataSources: IChatDataSourceEndpoint[];
   messagesSinceSummary: number;
   createdAt: Date;
@@ -129,7 +142,8 @@ const ChatSchema = new Schema<IChat>(
     lastReviewedAt: { type: Date },
     aiFeedEnabled: { type: Boolean, default: false },
     aiFeed: [{ type: { type: String }, content: String, status: { type: String, enum: ["new", "seen", "actioned"], default: "new" }, createdAt: { type: Date, default: Date.now } }],
-    aiQuestions: { type: [{ id: String, category: String, question: String, answer: { type: String, default: "" }, answeredAt: Date, createdAt: { type: Date, default: Date.now } }], default: [] },
+    aiQuestions: { type: [{ id: String, category: String, question: String, answer: { type: String, default: "" }, skipped: { type: Boolean, default: false }, answeredAt: Date, createdAt: { type: Date, default: Date.now } }], default: [] },
+    menu: { type: [{ id: String, name: String, description: { type: String, default: "" }, price: { type: String, default: "" }, category: { type: String, default: "general" }, aiSuggestions: { type: String, default: "" }, targetBuyers: { type: String, default: "" }, createdAt: { type: Date, default: Date.now } }], default: [] },
     dataSources: { type: [{ sourceId: String, endpointId: String, enabled: { type: Boolean, default: true }, lastFetchAt: Date }], default: [] },
     messagesSinceSummary: { type: Number, default: 0 },
   },

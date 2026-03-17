@@ -56,13 +56,24 @@ export async function GET(req: NextRequest) {
       aiFeed: (chat.aiFeed || []).map((f: { _id?: unknown; type: string; content: string; status?: string; createdAt: Date }) => ({ _id: String(f._id || ""), type: f.type, content: f.content, status: f.status || "new", createdAt: f.createdAt })).sort((a: { createdAt: Date }, b: { createdAt: Date }) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()),
       messageCount: chat.messages?.length || 0,
       dataSources: chat.dataSources || [],
-      aiQuestions: (chat.aiQuestions || []).map((q: { id: string; category: string; question: string; answer: string; answeredAt?: Date; createdAt: Date }) => ({
+      aiQuestions: (chat.aiQuestions || []).map((q: { id: string; category: string; question: string; answer: string; skipped?: boolean; answeredAt?: Date; createdAt: Date }) => ({
         id: q.id,
         category: q.category,
         question: q.question,
         answer: q.answer || "",
+        skipped: q.skipped || false,
         answeredAt: q.answeredAt || null,
         createdAt: q.createdAt,
+      })),
+      menu: (chat.menu || []).map((m: { id: string; name: string; description: string; price: string; category: string; aiSuggestions?: string; targetBuyers?: string; createdAt: Date }) => ({
+        id: m.id,
+        name: m.name,
+        description: m.description || "",
+        price: m.price || "",
+        category: m.category || "general",
+        aiSuggestions: m.aiSuggestions || "",
+        targetBuyers: m.targetBuyers || "",
+        createdAt: m.createdAt,
       })),
     },
     tasks,
@@ -605,6 +616,128 @@ ${chatDoc.contextSummary ? `\n## Team Context\n${chatDoc.contextSummary}` : ""}`
   if (action === "clearAiQuestions") {
     await Chat.updateOne({ telegramChatId: chatId }, { $set: { aiQuestions: [] } });
     return NextResponse.json({ ok: true });
+  }
+
+  if (action === "skipAiQuestion" && body.questionId) {
+    await Chat.updateOne(
+      { telegramChatId: chatId, "aiQuestions.id": body.questionId },
+      { $set: { "aiQuestions.$.skipped": true } }
+    );
+    return NextResponse.json({ ok: true });
+  }
+
+  if (action === "unskipAiQuestion" && body.questionId) {
+    await Chat.updateOne(
+      { telegramChatId: chatId, "aiQuestions.id": body.questionId },
+      { $set: { "aiQuestions.$.skipped": false } }
+    );
+    return NextResponse.json({ ok: true });
+  }
+
+  if (action === "addMenuItem") {
+    const item = body.item;
+    if (!item?.name) return NextResponse.json({ error: "name required" }, { status: 400 });
+    const id = `menu-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const entry = { id, name: item.name, description: item.description || "", price: item.price || "", category: item.category || "general", aiSuggestions: "", targetBuyers: "", createdAt: new Date() };
+    await Chat.updateOne({ telegramChatId: chatId }, { $push: { menu: entry } });
+    writeKnowledge(chatId, "context", `menu-item-${id}`, `# Menu Item: ${item.name}\n\nDescription: ${item.description || "N/A"}\nPrice: ${item.price || "N/A"}\nCategory: ${item.category || "general"}`).catch(console.error);
+    return NextResponse.json({ ok: true, item: entry });
+  }
+
+  if (action === "updateMenuItem" && body.itemId) {
+    const updates: Record<string, unknown> = {};
+    if (body.name !== undefined) updates["menu.$.name"] = body.name;
+    if (body.description !== undefined) updates["menu.$.description"] = body.description;
+    if (body.price !== undefined) updates["menu.$.price"] = body.price;
+    if (body.category !== undefined) updates["menu.$.category"] = body.category;
+    if (body.aiSuggestions !== undefined) updates["menu.$.aiSuggestions"] = body.aiSuggestions;
+    if (body.targetBuyers !== undefined) updates["menu.$.targetBuyers"] = body.targetBuyers;
+    if (Object.keys(updates).length) {
+      await Chat.updateOne({ telegramChatId: chatId, "menu.id": body.itemId }, { $set: updates });
+    }
+    return NextResponse.json({ ok: true });
+  }
+
+  if (action === "deleteMenuItem" && body.itemId) {
+    await Chat.updateOne({ telegramChatId: chatId }, { $pull: { menu: { id: body.itemId } } });
+    return NextResponse.json({ ok: true });
+  }
+
+  if (action === "aiMenuSuggestions" && body.itemId) {
+    const chatDoc = await Chat.findOne({ telegramChatId: chatId });
+    if (!chatDoc) return NextResponse.json({ error: "chat not found" }, { status: 404 });
+    const menuItem = (chatDoc.menu || []).find((m: { id: string }) => m.id === body.itemId);
+    if (!menuItem) return NextResponse.json({ error: "item not found" }, { status: 404 });
+
+    const allItems = (chatDoc.menu || []).map((m: { name: string; description: string; price: string; category: string }) => `- ${m.name}: ${m.description || "no description"} (${m.price || "no price"}) [${m.category}]`).join("\n");
+    const qaContext = (chatDoc.aiQuestions || []).filter((q: { answer: string }) => q.answer).map((q: { question: string; answer: string }) => `Q: ${q.question}\nA: ${q.answer}`).join("\n\n");
+
+    let qmdContext = "";
+    try {
+      const results = await qmdSearch(`${menuItem.name} ${menuItem.description}`, 5);
+      if (results.length) qmdContext = results.map((r) => `- ${r.title}: ${r.snippet?.substring(0, 150) || ""}`).join("\n");
+    } catch {}
+
+    const response = await aiChat([
+      {
+        role: "system",
+        content: `You are a strategic business advisor. Analyze this menu item and provide two things:
+
+1. IMPROVEMENT SUGGESTIONS: How to make this offering better — naming, description, pricing, positioning, bundling, upsells, presentation
+2. TARGET BUYERS: Who specifically should this be sold to — demographics, company types, roles, use cases, channels to reach them
+
+Be specific, actionable, and reference the team's context when relevant. Keep each section to 2-4 bullet points.
+
+Respond as JSON: {"suggestions": "markdown string with improvement ideas", "targetBuyers": "markdown string with target buyer profiles"}`,
+      },
+      {
+        role: "user",
+        content: `MENU ITEM:\nName: ${menuItem.name}\nDescription: ${menuItem.description || "none"}\nPrice: ${menuItem.price || "not set"}\nCategory: ${menuItem.category}\n\nFULL MENU:\n${allItems}\n${qaContext ? `\nTEAM Q&A:\n${qaContext}` : ""}${chatDoc.contextSummary ? `\n\nTEAM CONTEXT:\n${chatDoc.contextSummary}` : ""}${chatDoc.abilities ? `\n\nTEAM ABILITIES:\n${chatDoc.abilities}` : ""}${qmdContext ? `\n\nKNOWLEDGE BASE:\n${qmdContext}` : ""}`,
+      },
+    ], "openai/gpt-4o-mini");
+
+    try {
+      const cleaned = response.replace(/```json?\n?/g, "").replace(/```/g, "").trim();
+      const parsed = JSON.parse(cleaned);
+      await Chat.updateOne(
+        { telegramChatId: chatId, "menu.id": body.itemId },
+        { $set: { "menu.$.aiSuggestions": parsed.suggestions || "", "menu.$.targetBuyers": parsed.targetBuyers || "" } }
+      );
+      return NextResponse.json({ ok: true, suggestions: parsed.suggestions || "", targetBuyers: parsed.targetBuyers || "" });
+    } catch {
+      return NextResponse.json({ ok: false, error: "Failed to parse AI response" });
+    }
+  }
+
+  if (action === "aiMenuAudit") {
+    const chatDoc = await Chat.findOne({ telegramChatId: chatId });
+    if (!chatDoc) return NextResponse.json({ error: "chat not found" }, { status: 404 });
+    const menuItems = chatDoc.menu || [];
+    if (!menuItems.length) return NextResponse.json({ ok: true, audit: "No menu items to audit. Add some items first." });
+
+    const allItems = menuItems.map((m: { name: string; description: string; price: string; category: string }) => `- ${m.name}: ${m.description || "no description"} (${m.price || "no price"}) [${m.category}]`).join("\n");
+    const qaContext = (chatDoc.aiQuestions || []).filter((q: { answer: string }) => q.answer).map((q: { question: string; answer: string }) => `Q: ${q.question}\nA: ${q.answer}`).join("\n\n");
+
+    const response = await aiChat([
+      {
+        role: "system",
+        content: `You are a business strategist auditing a product/service menu. Analyze the ENTIRE menu and provide:
+
+1. OVERALL ASSESSMENT: Is the menu strong? Are there gaps?
+2. MISSING ITEMS: What products/services should they add based on their abilities and market?
+3. PRICING STRATEGY: Are prices competitive? Suggestions for tiers, bundles, packages
+4. POSITIONING: How to frame the menu for maximum impact with potential partners and customers
+5. QUICK WINS: 2-3 easiest changes that would make the biggest difference
+
+Be specific and actionable. Reference their actual items and context.`,
+      },
+      {
+        role: "user",
+        content: `MENU:\n${allItems}\n${qaContext ? `\nTEAM Q&A:\n${qaContext}` : ""}${chatDoc.contextSummary ? `\n\nTEAM CONTEXT:\n${chatDoc.contextSummary}` : ""}${chatDoc.abilities ? `\n\nTEAM ABILITIES:\n${chatDoc.abilities}` : ""}`,
+      },
+    ], "openai/gpt-4o-mini");
+
+    return NextResponse.json({ ok: true, audit: response });
   }
 
   if (action === "feedItemStatus" && body.status) {
