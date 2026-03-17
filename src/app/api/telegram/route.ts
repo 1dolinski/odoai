@@ -896,7 +896,7 @@ export async function POST(req: NextRequest) {
       if (actions.length > 0) {
         reactToMessage(chatId, msg.message_id, actions.length, false).catch(console.error);
       } else {
-        reactWithEmoji(chatId, msg.message_id, "👌").catch(console.error);
+        reactWithEmoji(chatId, msg.message_id, "👍").catch(console.error);
       }
       Chat.updateOne({ telegramChatId: cid }, { $set: { lastReviewedAt: new Date() } }).catch(console.error);
       Activity.create({
@@ -933,7 +933,7 @@ export async function POST(req: NextRequest) {
       if (actions.length > 0) {
         reactToMessage(chatId, msg.message_id, actions.length, false).catch(console.error);
       } else {
-        reactWithEmoji(chatId, msg.message_id, "👌").catch(console.error);
+        reactWithEmoji(chatId, msg.message_id, "👍").catch(console.error);
       }
       Chat.updateOne({ telegramChatId: cid }, { $set: { lastReviewedAt: new Date() } }).catch(console.error);
       Activity.create({
