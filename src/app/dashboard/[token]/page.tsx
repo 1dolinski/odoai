@@ -218,6 +218,8 @@ export default function DashboardPage() {
   });
   const [categoryFilters, setCategoryFilters] = useState<Set<string>>(new Set());
   const [categorizing, setCategorizing] = useState(false);
+  const [taskViewMode, setTaskViewMode] = useState<"list" | "categories">("list");
+  const [expandedCategory, setExpandedCategory] = useState<string | null>(null);
   const [showCalendar, setShowCalendar] = useState(false);
   const [syncingMembers, setSyncingMembers] = useState(false);
   const [personDumpId, setPersonDumpId] = useState<string | null>(null);
@@ -1889,39 +1891,111 @@ export default function DashboardPage() {
                 }}
                 className="text-[10px] text-gray-400 hover:text-gray-600 font-medium transition-colors disabled:opacity-50"
               >{categorizing ? "..." : "⟳ Categorize"}</button>
+              {allCategories.length > 0 && (
+                <div className="flex gap-0.5 bg-gray-100 rounded-md p-0.5">
+                  <button onClick={() => setTaskViewMode("list")} className={`px-2 py-1 rounded text-[10px] font-medium transition-all ${taskViewMode === "list" ? "bg-white text-gray-900 shadow-sm" : "text-gray-500"}`}>List</button>
+                  <button onClick={() => setTaskViewMode("categories")} className={`px-2 py-1 rounded text-[10px] font-medium transition-all ${taskViewMode === "categories" ? "bg-white text-gray-900 shadow-sm" : "text-gray-500"}`}>Categories</button>
+                </div>
+              )}
             </div>
           </div>
-          {allCategories.length > 0 && (
-            <div className="flex flex-wrap gap-1.5 mb-3">
-              {categoryFilters.size > 0 && (
-                <button
-                  onClick={() => setCategoryFilters(new Set())}
-                  className="px-2.5 py-1 rounded-full text-[11px] font-medium bg-gray-900 text-white"
-                >All</button>
+
+          {taskViewMode === "categories" && allCategories.length > 0 ? (
+            <div>
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 mb-4">
+                {allCategories.map((cat) => {
+                  const catTasks = allTasks.filter((t) => (t.categories || []).includes(cat));
+                  const todo = catTasks.filter((t) => t.status === "todo").length;
+                  const upcoming = catTasks.filter((t) => t.status === "upcoming").length;
+                  const done = catTasks.filter((t) => t.status === "done").length;
+                  const total = catTasks.length;
+                  const progress = total > 0 ? Math.round((done / total) * 100) : 0;
+                  const isExpanded = expandedCategory === cat;
+                  const overdue = catTasks.filter((t) => t.dueDate && new Date(t.dueDate) < new Date() && t.status !== "done").length;
+                  const people = [...new Set(catTasks.flatMap((t) => t.people || []))];
+                  return (
+                    <button
+                      key={cat}
+                      onClick={() => setExpandedCategory(isExpanded ? null : cat)}
+                      className={`text-left rounded-xl border-2 p-4 transition-all hover:shadow-md ${
+                        isExpanded
+                          ? "border-indigo-500 bg-indigo-50 shadow-md"
+                          : "border-gray-200 bg-white hover:border-gray-300"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-sm font-semibold text-gray-900 capitalize">{cat}</span>
+                        <span className="text-lg font-bold text-gray-700">{total}</span>
+                      </div>
+                      <div className="w-full bg-gray-200 rounded-full h-1.5 mb-2">
+                        <div className="bg-green-500 h-1.5 rounded-full transition-all" style={{ width: `${progress}%` }} />
+                      </div>
+                      <div className="flex items-center gap-2 text-[10px]">
+                        {todo > 0 && <span className="text-blue-600 font-medium">{todo} todo</span>}
+                        {upcoming > 0 && <span className="text-yellow-600 font-medium">{upcoming} upcoming</span>}
+                        {done > 0 && <span className="text-green-600 font-medium">{done} done</span>}
+                      </div>
+                      {overdue > 0 && <div className="text-[10px] text-red-500 font-medium mt-1">⚠ {overdue} overdue</div>}
+                      {people.length > 0 && (
+                        <div className="flex flex-wrap gap-1 mt-2">
+                          {people.slice(0, 3).map((p) => (
+                            <span key={p} className="text-[9px] bg-gray-100 text-gray-500 rounded-full px-1.5 py-0.5">{p}</span>
+                          ))}
+                          {people.length > 3 && <span className="text-[9px] text-gray-400">+{people.length - 3}</span>}
+                        </div>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+              {expandedCategory && (
+                <div className="mb-4">
+                  <div className="flex items-center gap-2 mb-3">
+                    <h3 className="text-sm font-semibold text-gray-800 capitalize">{expandedCategory}</h3>
+                    <span className="text-xs text-gray-400">{allTasks.filter((t) => (t.categories || []).includes(expandedCategory)).length} tasks</span>
+                    <button onClick={() => setExpandedCategory(null)} className="ml-auto text-xs text-gray-400 hover:text-gray-600">✕ close</button>
+                  </div>
+                </div>
               )}
-              {allCategories.map((cat) => {
-                const count = statusFiltered.filter((t) => (t.categories || []).includes(cat)).length;
-                const active = categoryFilters.has(cat);
-                return (
-                  <button
-                    key={cat}
-                    onClick={() => setCategoryFilters((prev) => {
-                      const next = new Set(prev);
-                      if (next.has(cat)) next.delete(cat); else next.add(cat);
-                      return next;
-                    })}
-                    className={`px-2.5 py-1 rounded-full text-[11px] font-medium transition-all ${
-                      active
-                        ? "bg-indigo-600 text-white shadow-sm"
-                        : "bg-gray-100 text-gray-600 hover:bg-gray-200"
-                    }`}
-                  >{cat} <span className={active ? "text-indigo-200" : "text-gray-400"}>{count}</span></button>
-                );
-              })}
             </div>
+          ) : (
+            <>
+              {allCategories.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 mb-3">
+                  {categoryFilters.size > 0 && (
+                    <button
+                      onClick={() => setCategoryFilters(new Set())}
+                      className="px-2.5 py-1 rounded-full text-[11px] font-medium bg-gray-900 text-white"
+                    >All</button>
+                  )}
+                  {allCategories.map((cat) => {
+                    const count = statusFiltered.filter((t) => (t.categories || []).includes(cat)).length;
+                    const active = categoryFilters.has(cat);
+                    return (
+                      <button
+                        key={cat}
+                        onClick={() => setCategoryFilters((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(cat)) next.delete(cat); else next.add(cat);
+                          return next;
+                        })}
+                        className={`px-2.5 py-1 rounded-full text-[11px] font-medium transition-all ${
+                          active
+                            ? "bg-indigo-600 text-white shadow-sm"
+                            : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+                        }`}
+                      >{cat} <span className={active ? "text-indigo-200" : "text-gray-400"}>{count}</span></button>
+                    );
+                  })}
+                </div>
+              )}
+            </>
           )}
           <div className="space-y-2">
-            {filteredTasks.map((t) => {
+            {(taskViewMode === "categories" && expandedCategory
+              ? allTasks.filter((t) => (t.categories || []).includes(expandedCategory))
+              : filteredTasks
+            ).map((t) => {
               const statusColors: Record<string, string> = {
                 todo: "border-l-blue-400 bg-blue-50/50",
                 upcoming: "border-l-yellow-400 bg-yellow-50/50",
@@ -2256,7 +2330,7 @@ export default function DashboardPage() {
                 </div>
               );
             })}
-            {filteredTasks.length === 0 && (
+            {(taskViewMode === "categories" && expandedCategory ? allTasks.filter((t) => (t.categories || []).includes(expandedCategory)) : filteredTasks).length === 0 && (
               <p className="text-sm text-gray-400 italic py-4 text-center">No items</p>
             )}
           </div>
