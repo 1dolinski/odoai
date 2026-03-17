@@ -693,9 +693,9 @@ export default function DashboardPage() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 via-white to-gray-100 text-gray-900">
-      <div className="max-w-6xl mx-auto px-4 py-8">
+      <div className="max-w-6xl mx-auto px-3 sm:px-6 py-4 sm:py-8">
         {/* Header */}
-        <div className="flex items-center justify-between mb-8">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6 sm:mb-8">
           <div>
             <div className="text-xs font-mono text-gray-400 mb-1">odoai dashboard</div>
             {editingTitle ? (
@@ -732,7 +732,7 @@ export default function DashboardPage() {
                 {data.chat.title} <span className="text-gray-300 text-base">✎</span>
               </h1>
             )}
-            <div className="flex items-center gap-3 mt-2 text-sm">
+            <div className="flex flex-wrap items-center gap-2 sm:gap-3 mt-2 text-sm">
               <div className="flex gap-1 bg-gray-100 rounded-lg p-0.5">
                 {([
                   { key: "passive", label: "Passive", color: "bg-gray-200 text-gray-700" },
@@ -779,7 +779,7 @@ export default function DashboardPage() {
               )}
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <button
               onClick={syncNow}
               disabled={syncing}
@@ -844,8 +844,8 @@ export default function DashboardPage() {
             ))}
           </div>
           {showFeed && (
-            <div className="mt-4 bg-white border border-gray-200 rounded-xl p-5 shadow-sm">
-              <div className="flex items-center justify-between mb-4">
+            <div className="mt-4 bg-white border border-gray-200 rounded-xl p-3 sm:p-5 shadow-sm">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4">
                 <div className="flex items-center gap-3">
                   <h3 className="font-semibold text-gray-800">AI Feed</h3>
                   <button
@@ -892,7 +892,7 @@ export default function DashboardPage() {
               ) : (
                 <div className="space-y-2 max-h-[400px] overflow-y-auto">
                   {focusedFeedIdx >= 0 && (
-                    <div className="flex items-center gap-3 text-[10px] text-gray-400 px-1 pb-1">
+                    <div className="hidden sm:flex items-center gap-3 text-[10px] text-gray-400 px-1 pb-1">
                       <span>↑↓ navigate</span>
                       <span><kbd className="px-1 py-0.5 bg-gray-100 rounded text-[9px] font-mono">S</kbd> seen</span>
                       <span><kbd className="px-1 py-0.5 bg-gray-100 rounded text-[9px] font-mono">T</kbd> todo</span>
@@ -913,7 +913,7 @@ export default function DashboardPage() {
                     };
                     const cfg = typeConfig[item.type] || { icon: "📌", color: "text-gray-700", bg: "bg-gray-50 border-gray-200" };
                     return (
-                      <div key={i} className={`border rounded-lg px-4 py-3 ${cfg.bg} ${visibleFeedIndices[focusedFeedIdx] === i ? "ring-2 ring-indigo-400 ring-offset-1" : ""}`}>
+                      <div key={i} className={`border rounded-lg px-3 sm:px-4 py-3 ${cfg.bg} ${visibleFeedIndices[focusedFeedIdx] === i ? "ring-2 ring-indigo-400 ring-offset-1" : ""}`}>
                         <div className="flex items-start gap-2">
                           <span className="text-base mt-0.5">{cfg.icon}</span>
                           <div className="flex-1 min-w-0">
@@ -953,7 +953,7 @@ export default function DashboardPage() {
                                 {feedQuestionLoading && <span className="text-[10px] text-gray-400">Thinking...</span>}
                               </div>
                             )}
-                            <div className="flex items-center gap-2 mt-2">
+                            <div className="flex flex-wrap items-center gap-2 mt-2">
                               <button
                                 onClick={async () => {
                                   setData((d) => d ? { ...d, chat: { ...d.chat, aiFeed: d.chat.aiFeed.map((f) => f._id === item._id ? { ...f, status: "seen" } : f) } } : d);
@@ -1003,9 +1003,9 @@ export default function DashboardPage() {
             </div>
           )}
           {showInitiatives && (
-            <div className="mt-4 bg-white border border-gray-200 rounded-xl p-5 shadow-sm">
+            <div className="mt-4 bg-white border border-gray-200 rounded-xl p-3 sm:p-5 shadow-sm">
               <h3 className="font-semibold text-gray-800 mb-4">Initiatives</h3>
-              <div className="flex gap-2 mb-4">
+              <div className="flex flex-col sm:flex-row gap-2 mb-4">
                 <input
                   value={newInitName}
                   onChange={(e) => setNewInitName(e.target.value)}
@@ -1093,7 +1093,7 @@ export default function DashboardPage() {
             </div>
           )}
           {showPeople && (
-            <div className="mt-4 bg-white border border-gray-200 rounded-xl p-5 shadow-sm">
+            <div className="mt-4 bg-white border border-gray-200 rounded-xl p-3 sm:p-5 shadow-sm">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="font-semibold text-gray-800">Chat Members</h3>
                 <button
@@ -1261,7 +1261,7 @@ export default function DashboardPage() {
 
                 {showAddContact && (
                   <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-3">
-                    <div className="grid grid-cols-2 gap-2 mb-2">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-2">
                       <input placeholder="Name *" value={contactForm.name} onChange={(e) => setContactForm((f) => ({ ...f, name: e.target.value }))} className="px-2 py-1.5 border border-gray-200 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-blue-200" />
                       <input placeholder="Role / title" value={contactForm.role} onChange={(e) => setContactForm((f) => ({ ...f, role: e.target.value }))} className="px-2 py-1.5 border border-gray-200 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-blue-200" />
                       <input placeholder="Email" value={contactForm.email} onChange={(e) => setContactForm((f) => ({ ...f, email: e.target.value }))} className="px-2 py-1.5 border border-gray-200 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-blue-200" />
@@ -1417,7 +1417,7 @@ export default function DashboardPage() {
             </div>
           )}
           {showActions && (
-            <div className="mt-4 bg-white border border-gray-200 rounded-xl p-5 shadow-sm">
+            <div className="mt-4 bg-white border border-gray-200 rounded-xl p-3 sm:p-5 shadow-sm">
               <div className="flex gap-1 bg-gray-100 rounded-lg p-1 mb-4 w-fit">
                 {([
                   { key: "todo", label: "Add Todo" },
@@ -1442,7 +1442,7 @@ export default function DashboardPage() {
               </div>
 
               {actionForm.type === "person" ? (
-                <div className="flex gap-3 items-end">
+                <div className="flex flex-col sm:flex-row gap-2 sm:gap-3 sm:items-end">
                   <div className="flex-1">
                     <label className="text-xs text-gray-500 mb-1 block">Name</label>
                     <input
@@ -1472,7 +1472,7 @@ export default function DashboardPage() {
                   </button>
                 </div>
               ) : actionForm.type === "status" ? (
-                <div className="flex gap-3 items-end">
+                <div className="flex flex-col sm:flex-row gap-2 sm:gap-3 sm:items-end">
                   <div className="flex-1">
                     <label className="text-xs text-gray-500 mb-1 block">Search task</label>
                     <input
@@ -1496,7 +1496,7 @@ export default function DashboardPage() {
                       </div>
                     )}
                   </div>
-                  <div className="w-36">
+                  <div className="w-full sm:w-36">
                     <label className="text-xs text-gray-500 mb-1 block">New status</label>
                     <select
                       value={actionForm.statusNewStatus}
@@ -1558,7 +1558,7 @@ export default function DashboardPage() {
                 </div>
               ) : (
                 <div className="space-y-2">
-                  <div className="flex gap-3 items-end">
+                  <div className="flex flex-col sm:flex-row gap-2 sm:gap-3 sm:items-end">
                     <div className="flex-1">
                       <label className="text-xs text-gray-500 mb-1 block">Task</label>
                       <input
@@ -1569,7 +1569,7 @@ export default function DashboardPage() {
                         className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
                       />
                     </div>
-                    <div className="w-40">
+                    <div className="w-full sm:w-40">
                       <label className="text-xs text-gray-500 mb-1 block">Due date</label>
                       <input
                         type="date"
@@ -1632,7 +1632,7 @@ export default function DashboardPage() {
             </div>
           )}
           {showContext && (
-            <div className="mt-4 bg-white border border-gray-200 rounded-xl p-5 shadow-sm">
+            <div className="mt-4 bg-white border border-gray-200 rounded-xl p-3 sm:p-5 shadow-sm">
               {data.chat.contextSummary ? (
                 <div className="text-sm text-gray-700 whitespace-pre-wrap">{data.chat.contextSummary}</div>
               ) : (
@@ -1680,7 +1680,7 @@ export default function DashboardPage() {
             </div>
           )}
           {showDump && (
-            <div className="mt-4 bg-white border border-gray-200 rounded-xl p-5 shadow-sm">
+            <div className="mt-4 bg-white border border-gray-200 rounded-xl p-3 sm:p-5 shadow-sm">
               <p className="text-sm text-gray-500 mb-3">Paste notes, context, meeting transcripts, links — anything to get the AI up to speed.</p>
               <div className="flex items-center gap-2 mb-3">
                 <select
@@ -1725,7 +1725,7 @@ export default function DashboardPage() {
             </div>
           )}
           {showGuidance && (
-            <div className="mt-4 bg-white border border-gray-200 rounded-xl p-5 shadow-sm">
+            <div className="mt-4 bg-white border border-gray-200 rounded-xl p-3 sm:p-5 shadow-sm">
               <p className="text-sm text-gray-500 mb-3">Custom instructions for how the AI should behave in this chat.</p>
               <textarea
                 value={guidanceText}
@@ -1749,7 +1749,7 @@ export default function DashboardPage() {
             </div>
           )}
           {showWallet && (
-            <div className="mt-4 bg-white border border-gray-200 rounded-xl p-5 shadow-sm">
+            <div className="mt-4 bg-white border border-gray-200 rounded-xl p-3 sm:p-5 shadow-sm">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="font-semibold text-gray-800">Wallet</h3>
                 {data.walletAddress && (
@@ -1763,7 +1763,7 @@ export default function DashboardPage() {
                   </a>
                 )}
               </div>
-              <div className="grid grid-cols-3 gap-4 text-center mb-4">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4 text-center mb-4">
                 <div>
                   <div className="text-2xl font-bold text-gray-900">{data.spend.totalCalls}</div>
                   <div className="text-xs text-gray-500">API Calls</div>
@@ -1807,7 +1807,7 @@ export default function DashboardPage() {
             </div>
           )}
           {showWatch && (
-            <div className="mt-4 bg-white border border-gray-200 rounded-xl p-5 shadow-sm">
+            <div className="mt-4 bg-white border border-gray-200 rounded-xl p-3 sm:p-5 shadow-sm">
               <p className="text-sm text-gray-500 mb-3">Toggle what odoai actively looks for in your conversations.</p>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 {WATCH_ITEMS.map((item) => (
@@ -1832,7 +1832,7 @@ export default function DashboardPage() {
           )}
 
           {showAbilities && (
-            <div className="mt-4 bg-white border border-gray-200 rounded-xl p-5 shadow-sm">
+            <div className="mt-4 bg-white border border-gray-200 rounded-xl p-3 sm:p-5 shadow-sm">
               <h3 className="text-sm font-semibold text-gray-800 mb-1">Team Abilities & Resources</h3>
               <p className="text-xs text-gray-500 mb-3">Describe what you and your team can do — skills, tools, access, budget. The AI uses this to tailor task breakdowns and subtask steps to what&apos;s actually achievable.</p>
               <textarea
@@ -1867,9 +1867,9 @@ export default function DashboardPage() {
 
         {/* Task Board */}
         <section className="mb-10">
-          <div className="flex items-center justify-between mb-3">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
             <h2 className="text-lg font-semibold text-gray-800">Tasks <span className="text-sm font-normal text-gray-400">({filteredTasks.length})</span></h2>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <div className="flex gap-1 bg-gray-100 rounded-lg p-1">
                 {([
                   { key: "todo", label: "Todo", count: allTasks.filter((t) => t.status === "todo").length },
@@ -2042,9 +2042,9 @@ export default function DashboardPage() {
               return (
                 <div
                   key={t._id}
-                  className={`rounded-lg border border-gray-200 border-l-4 p-3 ${statusColors[t.status] || ""}`}
+                  className={`rounded-lg border border-gray-200 border-l-4 p-2.5 sm:p-3 ${statusColors[t.status] || ""}`}
                 >
-                  <div className="flex items-center gap-3">
+                  <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-1.5 flex-wrap">
                         {editingTaskTitle?.id === t._id ? (
@@ -2064,7 +2064,7 @@ export default function DashboardPage() {
                               if (e.key === "Enter") (e.target as HTMLInputElement).blur();
                               if (e.key === "Escape") setEditingTaskTitle(null);
                             }}
-                            className="font-medium text-sm text-gray-900 border border-indigo-300 rounded px-1.5 py-0.5 outline-none focus:ring-1 focus:ring-indigo-400 min-w-[200px]"
+                            className="font-medium text-sm text-gray-900 border border-indigo-300 rounded px-1.5 py-0.5 outline-none focus:ring-1 focus:ring-indigo-400 w-full min-w-0"
                           />
                         ) : (
                           <span
@@ -2152,7 +2152,7 @@ export default function DashboardPage() {
                       </div>
                     </div>
                     {(t as { _isCheck?: boolean })._isCheck ? (
-                      <div className="flex items-center gap-1 shrink-0">
+                      <div className="flex flex-wrap items-center gap-1 shrink-0">
                         {t.status === "upcoming" ? (
                           <>
                             <button
@@ -2306,7 +2306,7 @@ export default function DashboardPage() {
                                     setData((d) => d ? { ...d, tasks: d.tasks.map((task) => task._id === t._id ? { ...task, subtasks: (task.subtasks || []).filter((s) => s.id !== sub.id) } : task) } : d);
                                     await fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "removeSubtask", taskId: t._id, subtaskId: sub.id }) });
                                   }}
-                                  className="text-[10px] text-gray-300 hover:text-red-400 opacity-0 group-hover/sub:opacity-100 transition-opacity shrink-0"
+                                  className="text-[10px] text-gray-300 hover:text-red-400 sm:opacity-0 sm:group-hover/sub:opacity-100 transition-opacity shrink-0"
                                 >✕</button>
                               </div>
                             ))}
@@ -2424,7 +2424,7 @@ export default function DashboardPage() {
             <h2 className="text-lg font-semibold mb-4 text-gray-800">Activity Feed</h2>
             <div className="bg-white border border-gray-200 rounded-xl shadow-sm divide-y divide-gray-100 max-h-[400px] overflow-y-auto">
               {data.activities.map((a) => (
-                <div key={a._id} className="flex items-start gap-3 px-4 py-3">
+                <div key={a._id} className="flex items-start gap-2 sm:gap-3 px-3 sm:px-4 py-3">
                   <span className="text-base mt-0.5">{activityIcon(a.type)}</span>
                   <div className="flex-1 min-w-0">
                     <div className="text-sm text-gray-900">
@@ -2558,15 +2558,15 @@ function CalendarView({ tasks, checks }: { tasks: Task[]; checks: CheckItem[] })
           )}
         </div>
       </div>
-      <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
-        <div className="grid grid-cols-7 border-b border-gray-100">
+      <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-x-auto">
+        <div className="grid grid-cols-7 border-b border-gray-100 min-w-[320px]">
           {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d) => (
             <div key={d} className="text-xs font-medium text-gray-400 text-center py-2">{d}</div>
           ))}
         </div>
-        <div className="grid grid-cols-7">
+        <div className="grid grid-cols-7 min-w-[320px]">
           {cells.map((day, i) => {
-            if (day === null) return <div key={i} className="min-h-[80px] border-b border-r border-gray-50" />;
+            if (day === null) return <div key={i} className="min-h-[60px] sm:min-h-[80px] border-b border-r border-gray-50" />;
             const key = dayKey(day);
             const isToday = key === todayKey;
             const dayTasks = tasksByDay[key] || [];
@@ -2576,7 +2576,7 @@ function CalendarView({ tasks, checks }: { tasks: Task[]; checks: CheckItem[] })
             return (
               <div
                 key={i}
-                className={`min-h-[80px] border-b border-r border-gray-50 p-1.5 ${isToday ? "bg-blue-50" : hasItems ? "bg-gray-50/50" : ""}`}
+                className={`min-h-[60px] sm:min-h-[80px] border-b border-r border-gray-50 p-1 sm:p-1.5 ${isToday ? "bg-blue-50" : hasItems ? "bg-gray-50/50" : ""}`}
               >
                 <div className={`text-xs font-medium mb-1 ${isToday ? "text-blue-600" : "text-gray-400"}`}>
                   {day}
