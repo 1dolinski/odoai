@@ -482,6 +482,11 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true });
   }
 
+  if (action === "feedDoneWithContext" && body.feedContent && body.context) {
+    writeKnowledge(chatId, "context", `feed-done-${Date.now()}`, `# Feed Item Resolved — ${new Date().toISOString().split("T")[0]}\n\nItem: ${body.feedContent}\nType: ${body.feedType || "unknown"}\nOutcome: ${body.context}`).catch(console.error);
+    return NextResponse.json({ ok: true });
+  }
+
   if (action === "clearFeed") {
     await Chat.updateOne({ telegramChatId: chatId }, { $set: { aiFeed: [] } });
     return NextResponse.json({ ok: true });

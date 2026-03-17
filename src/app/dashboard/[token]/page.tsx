@@ -876,6 +876,17 @@ export default function DashboardPage() {
                                 onClick={() => setFeedQuestion(feedQuestion?.index === i ? null : { index: i, text: "" })}
                                 className="text-[10px] text-amber-500 hover:text-amber-700 font-medium transition-colors"
                               >? Ask</button>
+                              <button
+                                onClick={async () => {
+                                  const ctx = prompt("What happened? Add context:");
+                                  if (ctx !== null && ctx.trim()) {
+                                    setData((d) => d ? { ...d, chat: { ...d.chat, aiFeed: d.chat.aiFeed.map((f, fi) => fi === i ? { ...f, status: "actioned" } : f) } } : d);
+                                    fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "feedItemStatus", feedIndex: i, status: "actioned" }) });
+                                    fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "feedDoneWithContext", feedContent: item.content, feedType: item.type, context: ctx.trim() }) });
+                                  }
+                                }}
+                                className="text-[10px] text-green-500 hover:text-green-700 font-medium transition-colors"
+                              >✓ Done</button>
                             </div>
                           </div>
                         </div>
