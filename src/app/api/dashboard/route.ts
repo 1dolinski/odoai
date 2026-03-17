@@ -13,7 +13,9 @@ import { autoExtract, maybeUpdateContext, deepProcessDump, generateAiFeed } from
 import { chat as aiChat } from "@/lib/openrouter";
 import { writeKnowledge, writePersonKnowledge, writePeopleSnapshot } from "@/lib/knowledge";
 import { getChatAdmins, sendMessage } from "@/lib/telegram";
-import { getAvailableSources, fetchDataForChat, formatDataForAI, DATA_SOURCE_REGISTRY, fetchEndpoint } from "@/lib/dataSources";
+import { getAvailableSources, fetchEnabledEndpoints, formatDataForAI, persistSnapshots, getSnapshotHistory, DATA_SOURCE_REGISTRY, fetchEndpoint } from "@/lib/dataSources";
+import { getAllPlatforms, getEndpointsForPlatform, querySocial, type Platform } from "@/lib/social";
+import DataSnapshot from "@/models/DataSnapshot";
 
 export async function GET(req: NextRequest) {
   await connectDB();
@@ -130,6 +132,7 @@ export async function GET(req: NextRequest) {
     recentSpends,
     walletAddress: process.env.WALLET_ADDRESS || "",
     availableDataSources: getAvailableSources(),
+    socialPlatforms: getAllPlatforms(),
   });
 }
 
@@ -704,56 +707,50 @@ Rules:
     return NextResponse.json({ ok: true, subtasks: task.subtasks });
   }
 
-  if (action === "enableDataSource" && body.sourceId) {
+  if (action === "toggleEndpoint" && body.sourceId && body.endpointId) {
     const sourceId = body.sourceId as string;
-    const exists = DATA_SOURCE_REGISTRY.find((s) => s.id === sourceId);
-    if (!exists) return NextResponse.json({ error: "unknown source" }, { status: 400 });
+    const endpointId = body.endpointId as string;
+    const source = DATA_SOURCE_REGISTRY.find((s) => s.id === sourceId);
+    if (!source) return NextResponse.json({ error: "unknown source" }, { status: 400 });
+    if (!source.endpoints.find((e) => e.id === endpointId)) return NextResponse.json({ error: "unknown endpoint" }, { status: 400 });
     const chatDoc = await Chat.findOne({ telegramChatId: chatId });
     if (!chatDoc) return NextResponse.json({ error: "chat not found" }, { status: 404 });
-    const existing = (chatDoc.dataSources || []).find((ds: { sourceId: string }) => ds.sourceId === sourceId);
+    const existing = (chatDoc.dataSources || []).find(
+      (ds: { sourceId: string; endpointId: string }) => ds.sourceId === sourceId && ds.endpointId === endpointId
+    );
     if (existing) {
       await Chat.updateOne(
-        { telegramChatId: chatId, "dataSources.sourceId": sourceId },
-        { $set: { "dataSources.$.enabled": true } }
+        { telegramChatId: chatId, "dataSources.sourceId": sourceId, "dataSources.endpointId": endpointId },
+        { $set: { "dataSources.$.enabled": !existing.enabled } }
       );
     } else {
       await Chat.updateOne(
         { telegramChatId: chatId },
-        { $push: { dataSources: { sourceId, enabled: true } } }
+        { $push: { dataSources: { sourceId, endpointId, enabled: true } } }
       );
     }
-    return NextResponse.json({ ok: true });
-  }
-
-  if (action === "disableDataSource" && body.sourceId) {
-    await Chat.updateOne(
-      { telegramChatId: chatId, "dataSources.sourceId": body.sourceId },
-      { $set: { "dataSources.$.enabled": false } }
-    );
     return NextResponse.json({ ok: true });
   }
 
   if (action === "fetchDataSources") {
     const chatDoc = await Chat.findOne({ telegramChatId: chatId });
-    const enabledSources = (chatDoc?.dataSources || [])
+    const enabledEps = (chatDoc?.dataSources || [])
       .filter((ds: { enabled: boolean }) => ds.enabled)
-      .map((ds: { sourceId: string }) => ds.sourceId);
-    if (!enabledSources.length) return NextResponse.json({ ok: true, data: [], formatted: "" });
-    const results = await fetchDataForChat(enabledSources);
+      .map((ds: { sourceId: string; endpointId: string }) => ({ sourceId: ds.sourceId, endpointId: ds.endpointId }));
+    if (!enabledEps.length) return NextResponse.json({ ok: true, data: [], formatted: "" });
+    const results = await fetchEnabledEndpoints(enabledEps);
     const formatted = formatDataForAI(results);
-    const cacheUpdate: Record<string, unknown> = {};
+    await persistSnapshots(chatId, results);
+    const updateOps: Record<string, unknown> = {};
     for (const r of results) {
       if (!r.error && r.data) {
         const allDs = chatDoc?.dataSources || [];
-        const idx = allDs.findIndex((ds: { sourceId: string }) => ds.sourceId === r.sourceId);
-        if (idx >= 0) {
-          cacheUpdate[`dataSources.${idx}.lastFetchAt`] = r.fetchedAt;
-          cacheUpdate[`dataSources.${idx}.cachedData`] = { ...((allDs[idx] as { cachedData?: Record<string, unknown> }).cachedData || {}), [r.endpointId]: r.data };
-        }
+        const idx = allDs.findIndex((ds: { sourceId: string; endpointId: string }) => ds.sourceId === r.sourceId && ds.endpointId === r.endpointId);
+        if (idx >= 0) updateOps[`dataSources.${idx}.lastFetchAt`] = r.fetchedAt;
       }
     }
-    if (Object.keys(cacheUpdate).length) {
-      await Chat.updateOne({ telegramChatId: chatId }, { $set: cacheUpdate });
+    if (Object.keys(updateOps).length) {
+      await Chat.updateOne({ telegramChatId: chatId }, { $set: updateOps });
     }
     return NextResponse.json({ ok: true, data: results, formatted });
   }
@@ -764,34 +761,106 @@ Rules:
     const endpoint = source.endpoints.find((e) => e.id === body.endpointId);
     if (!endpoint) return NextResponse.json({ error: "unknown endpoint" }, { status: 400 });
     const result = await fetchEndpoint(source, endpoint, body.params);
+    if (!result.error && result.data) {
+      await persistSnapshots(chatId, [result]);
+    }
     return NextResponse.json({ ok: true, ...result });
+  }
+
+  if (action === "getSnapshotHistory" && body.sourceId && body.endpointId) {
+    const history = await getSnapshotHistory(chatId, body.sourceId, body.endpointId, body.limit || 10);
+    return NextResponse.json({ ok: true, history });
+  }
+
+  if (action === "getSnapshotCounts") {
+    const counts = await DataSnapshot.aggregate([
+      { $match: { telegramChatId: chatId } },
+      { $group: { _id: { sourceId: "$sourceId", endpointId: "$endpointId" }, count: { $sum: 1 }, latest: { $max: "$fetchedAt" } } },
+    ]);
+    return NextResponse.json({ ok: true, counts: counts.map((c) => ({ sourceId: c._id.sourceId, endpointId: c._id.endpointId, count: c.count, latest: c.latest })) });
   }
 
   if (action === "analyzeDataSources") {
     const chatDoc = await Chat.findOne({ telegramChatId: chatId });
-    const enabledSources = (chatDoc?.dataSources || [])
+    const enabledEps = (chatDoc?.dataSources || [])
       .filter((ds: { enabled: boolean }) => ds.enabled)
-      .map((ds: { sourceId: string }) => ds.sourceId);
-    if (!enabledSources.length) return NextResponse.json({ ok: true, insights: "No data sources enabled." });
-    const results = await fetchDataForChat(enabledSources);
+      .map((ds: { sourceId: string; endpointId: string }) => ({ sourceId: ds.sourceId, endpointId: ds.endpointId }));
+    if (!enabledEps.length) return NextResponse.json({ ok: true, insights: "No data source endpoints enabled." });
+    const results = await fetchEnabledEndpoints(enabledEps);
     const formatted = formatDataForAI(results);
     if (!formatted) return NextResponse.json({ ok: true, insights: "No data available from sources." });
+    await persistSnapshots(chatId, results);
+
+    let historyContext = "";
+    for (const ep of enabledEps) {
+      const history = await getSnapshotHistory(chatId, ep.sourceId, ep.endpointId, 5);
+      if (history.length > 1) {
+        historyContext += `\n\n--- ${ep.sourceId}/${ep.endpointId} history (${history.length} snapshots) ---`;
+        for (const snap of history.slice(1)) {
+          historyContext += `\n[${new Date(snap.fetchedAt).toISOString().split("T")[0]}] ${JSON.stringify(snap.data, null, 2).substring(0, 1500)}`;
+        }
+      }
+    }
+
     const analysis = await aiChat([
       {
         role: "system",
-        content: `You are a business analyst AI. Analyze the following live data from connected platforms and produce actionable insights. Focus on:
-- Key metrics and their trends (week-over-week, month-over-month)
+        content: `You are a business analyst AI. Analyze live data from connected platforms plus historical snapshots. Focus on:
+- Key metrics and their trends over time (compare current vs previous snapshots)
+- Week-over-week and month-over-month changes
 - Anomalies or concerning patterns
 - Growth opportunities
 - Revenue and engagement highlights
 - User behavior patterns
 - Things that need immediate attention
+- Strategic recommendations based on trend direction
 
-Be specific with numbers. Keep it concise but thorough. Use bullet points.${chatDoc?.contextSummary ? `\n\nTeam context: ${chatDoc.contextSummary}` : ""}`,
+Be specific with numbers. Compare across time periods when historical data is available. Use bullet points.${chatDoc?.contextSummary ? `\n\nTeam context: ${chatDoc.contextSummary}` : ""}`,
       },
-      { role: "user", content: `Live data:\n${formatted}` },
+      { role: "user", content: `Current data:\n${formatted}${historyContext ? `\n\nHistorical snapshots:\n${historyContext}` : ""}` },
     ], "openai/gpt-4o-mini");
     return NextResponse.json({ ok: true, insights: analysis });
+  }
+
+  if (action === "getSocialEndpoints" && body.platform) {
+    const endpoints = getEndpointsForPlatform(body.platform as Platform);
+    return NextResponse.json({ ok: true, endpoints });
+  }
+
+  if (action === "querySocial" && body.platform && body.endpoint && body.params) {
+    const result = await querySocial(body.platform as Platform, body.endpoint, body.params);
+    if (!result.error && result.data) {
+      await DataSnapshot.create({
+        telegramChatId: chatId,
+        sourceId: `social-${body.platform}`,
+        endpointId: body.endpoint,
+        data: { params: body.params, result: result.data },
+        fetchedAt: result.fetchedAt,
+      });
+      writeKnowledge(
+        chatId,
+        "context",
+        `social-${body.platform}-${body.endpoint}-${Date.now()}`,
+        `# Social Data: ${body.platform}/${body.endpoint}\nParams: ${JSON.stringify(body.params)}\nFetched: ${result.fetchedAt.toISOString()}\nCost: ${result.cost}\n\n${JSON.stringify(result.data, null, 2).substring(0, 4000)}`,
+        { source: `social-${body.platform}`, endpoint: body.endpoint }
+      ).catch(console.error);
+    }
+    return NextResponse.json({ ok: true, ...result });
+  }
+
+  if (action === "getSocialHistory" && body.platform && body.endpoint) {
+    const history = await DataSnapshot.find({
+      telegramChatId: chatId,
+      sourceId: `social-${body.platform}`,
+      endpointId: body.endpoint,
+    }).sort({ fetchedAt: -1 }).limit(body.limit || 10).lean();
+    return NextResponse.json({
+      ok: true,
+      history: history.map((h) => ({
+        data: (h as { data: Record<string, unknown> }).data,
+        fetchedAt: (h as { fetchedAt: Date }).fetchedAt,
+      })),
+    });
   }
 
   return NextResponse.json({ error: "unknown action" }, { status: 400 });

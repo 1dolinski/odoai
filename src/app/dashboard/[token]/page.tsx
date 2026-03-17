@@ -141,7 +141,7 @@ interface DashboardData {
     watchSettings: WatchSettings;
     contextSummary: string;
     messageCount: number;
-    dataSources: { sourceId: string; enabled: boolean; lastFetchAt?: string; cachedData?: Record<string, unknown> }[];
+    dataSources: { sourceId: string; endpointId: string; enabled: boolean; lastFetchAt?: string }[];
   };
   initiatives: Initiative[];
   tasks: Task[];
@@ -158,6 +158,7 @@ interface DashboardData {
   recentSpends: SpendEntry[];
   walletAddress: string;
   availableDataSources: { id: string; name: string; description: string; configured: boolean; endpoints: { id: string; description: string }[] }[];
+  socialPlatforms: { id: string; label: string; endpointCount: number }[];
 }
 
 type AiStyle = "concise" | "detailed" | "casual" | "professional" | "technical";
@@ -249,9 +250,18 @@ export default function DashboardPage() {
   const [showFeed, setShowFeed] = useState(false);
   const [showAbilities, setShowAbilities] = useState(false);
   const [showDataSources, setShowDataSources] = useState(false);
+  const [showSocial, setShowSocial] = useState(false);
+  const [socialPlatform, setSocialPlatform] = useState("");
+  const [socialEndpoint, setSocialEndpoint] = useState("");
+  const [socialEndpoints, setSocialEndpoints] = useState<{ id: string; path: string; description: string; dependsOn?: string; params: { name: string; required: boolean; description: string }[] }[]>([]);
+  const [socialParams, setSocialParams] = useState<Record<string, string>>({});
+  const [socialLoading, setSocialLoading] = useState(false);
+  const [socialResult, setSocialResult] = useState<{ data: Record<string, unknown> | null; cost: string; error?: string } | null>(null);
+  const [socialHistory, setSocialHistory] = useState<{ data: Record<string, unknown>; fetchedAt: string }[]>([]);
   const [dsLoading, setDsLoading] = useState(false);
   const [dsInsights, setDsInsights] = useState<string | null>(null);
   const [dsFetchedData, setDsFetchedData] = useState<{ sourceId: string; endpointId: string; data: Record<string, unknown> | null; error?: string }[] | null>(null);
+  const [dsSnapCounts, setDsSnapCounts] = useState<{ sourceId: string; endpointId: string; count: number; latest: string }[]>([]);
   const [abilitiesDraft, setAbilitiesDraft] = useState("");
   const [abilitiesSaving, setAbilitiesSaving] = useState(false);
   const [generatingSubtasks, setGeneratingSubtasks] = useState<string | null>(null);
@@ -294,6 +304,19 @@ export default function DashboardPage() {
       setAbilitiesDraft(data.chat.abilities);
     }
   }, [data, abilitiesDraft, abilitiesSaving]);
+
+  useEffect(() => {
+    if (showDataSources && token) {
+      fetch("/api/dashboard", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token, action: "getSnapshotCounts" }),
+      })
+        .then((r) => r.json())
+        .then((j) => setDsSnapCounts(j.counts || []))
+        .catch(() => {});
+    }
+  }, [showDataSources, token]);
 
   const visibleFeedIndices = data ? data.chat.aiFeed.map((f, i) => ({ i, status: f.status })).filter((x) => x.status !== "seen" && x.status !== "actioned").map((x) => x.i) : [];
 
@@ -797,7 +820,7 @@ export default function DashboardPage() {
               {syncing ? "..." : "Sync"}
             </button>
             <button
-              onClick={() => { setShowWallet(!showWallet); setShowFeed(false); setShowPeople(false); setShowContext(false); setShowDump(false); setShowGuidance(false); setShowActions(false); setShowWatch(false); setShowDataSources(false); }}
+              onClick={() => { setShowWallet(!showWallet); setShowFeed(false); setShowPeople(false); setShowContext(false); setShowDump(false); setShowGuidance(false); setShowActions(false); setShowWatch(false); setShowDataSources(false); setShowSocial(false); }}
               className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium border transition-all ${
                 showWallet ? "bg-gray-900 text-white border-gray-900" : "bg-gray-100 text-gray-600 border-gray-200 hover:border-gray-400"
               }`}
@@ -831,13 +854,14 @@ export default function DashboardPage() {
               { key: "actions", label: "Quick Actions", state: showActions, set: setShowActions },
               { key: "watch", label: "Watch List", state: showWatch, set: setShowWatch },
               { key: "abilities", label: "Abilities", state: showAbilities, set: setShowAbilities },
-              { key: "dataSources", label: `Data Sources${(data.availableDataSources || []).length ? ` (${(data.chat.dataSources || []).filter((ds: { enabled: boolean }) => ds.enabled).length}/${(data.availableDataSources || []).length})` : ""}`, state: showDataSources, set: setShowDataSources },
+              { key: "dataSources", label: `Data Sources${(() => { const total = (data.availableDataSources || []).reduce((s: number, src: { endpoints: { id: string }[] }) => s + src.endpoints.length, 0); const on = (data.chat.dataSources || []).filter((ds: { enabled: boolean }) => ds.enabled).length; return total ? ` (${on}/${total})` : ""; })()}`, state: showDataSources, set: setShowDataSources },
+              { key: "social", label: "Social Query", state: showSocial, set: setShowSocial },
             ] as { key: string; label: string; state: boolean; set: (v: boolean) => void }[]).map((btn) => (
               <button
                 key={btn.key}
                 onClick={() => {
                   const next = !btn.state;
-                  setShowFeed(false); setShowPeople(false); setShowInitiatives(false); setShowContext(false); setShowDump(false); setShowGuidance(false); setShowActions(false); setShowWatch(false); setShowWallet(false); setShowAbilities(false); setShowDataSources(false);
+                  setShowFeed(false); setShowPeople(false); setShowInitiatives(false); setShowContext(false); setShowDump(false); setShowGuidance(false); setShowActions(false); setShowWatch(false); setShowWallet(false); setShowAbilities(false); setShowDataSources(false); setShowSocial(false);
                   btn.set(next);
                 }}
                 className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all border ${
@@ -1876,7 +1900,7 @@ export default function DashboardPage() {
               <div className="flex items-center justify-between mb-4">
                 <div>
                   <h3 className="text-sm font-semibold text-gray-800">Data Sources</h3>
-                  <p className="text-xs text-gray-500 mt-0.5">Connect external APIs to feed live data into AI insights and feed generation.</p>
+                  <p className="text-xs text-gray-500 mt-0.5">Toggle individual endpoints. Each fetch is stored as a snapshot for trend analysis.</p>
                 </div>
                 <div className="flex items-center gap-2">
                   <button
@@ -1892,12 +1916,20 @@ export default function DashboardPage() {
                         });
                         const json = await res.json();
                         setDsFetchedData(json.data || []);
+                        const countsRes = await fetch("/api/dashboard", {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ token, action: "getSnapshotCounts" }),
+                        });
+                        const countsJson = await countsRes.json();
+                        setDsSnapCounts(countsJson.counts || []);
                       } catch { /* ignore */ }
                       setDsLoading(false);
+                      await fetchData();
                     }}
                     className="text-xs px-3 py-1.5 rounded-lg font-medium border bg-white text-gray-600 border-gray-200 hover:border-gray-400 disabled:opacity-50 transition-all"
                   >
-                    {dsLoading ? "Fetching..." : "Fetch Data"}
+                    {dsLoading ? "Fetching..." : "Fetch & Store"}
                   </button>
                   <button
                     disabled={dsLoading}
@@ -1912,58 +1944,77 @@ export default function DashboardPage() {
                         });
                         const json = await res.json();
                         setDsInsights(json.insights || "No insights.");
+                        const countsRes = await fetch("/api/dashboard", {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ token, action: "getSnapshotCounts" }),
+                        });
+                        const countsJson = await countsRes.json();
+                        setDsSnapCounts(countsJson.counts || []);
                       } catch { /* ignore */ }
                       setDsLoading(false);
                     }}
                     className="text-xs px-3 py-1.5 rounded-lg font-medium bg-gray-800 text-white hover:bg-gray-900 disabled:opacity-50 transition-all shadow-sm"
                   >
-                    {dsLoading ? "Analyzing..." : "Analyze"}
+                    {dsLoading ? "Analyzing..." : "Analyze w/ Trends"}
                   </button>
                 </div>
               </div>
 
-              <div className="space-y-2">
-                {(data.availableDataSources || []).map((source: { id: string; name: string; description: string; configured: boolean; endpoints: { id: string; description: string }[] }) => {
-                  const chatDs = (data.chat.dataSources || []).find((ds: { sourceId: string }) => ds.sourceId === source.id);
-                  const isEnabled = chatDs?.enabled ?? false;
-                  return (
-                    <div key={source.id} className="flex items-start gap-3 p-3 rounded-lg border border-gray-100 bg-gray-50/50">
-                      <button
-                        onClick={async () => {
-                          const action = isEnabled ? "disableDataSource" : "enableDataSource";
-                          await fetch("/api/dashboard", {
-                            method: "POST",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({ token, action, sourceId: source.id }),
-                          });
-                          await fetchData();
-                        }}
-                        className={`mt-0.5 relative inline-flex h-5 w-9 flex-shrink-0 items-center rounded-full transition-colors ${isEnabled ? "bg-green-500" : "bg-gray-300"}`}
-                      >
-                        <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${isEnabled ? "translate-x-4" : "translate-x-0.5"}`} />
-                      </button>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm font-medium text-gray-800">{source.name}</span>
-                          {source.configured ? (
-                            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-green-100 text-green-700 font-medium">API key set</span>
-                          ) : (
-                            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-100 text-red-600 font-medium">Missing key</span>
-                          )}
-                          {chatDs?.lastFetchAt && (
-                            <span className="text-[10px] text-gray-400">fetched {new Date(chatDs.lastFetchAt).toLocaleString()}</span>
-                          )}
-                        </div>
-                        <p className="text-xs text-gray-500 mt-0.5">{source.description}</p>
-                        <div className="flex flex-wrap gap-1 mt-1.5">
-                          {source.endpoints.map((ep) => (
-                            <span key={ep.id} className="text-[10px] px-1.5 py-0.5 rounded bg-gray-200 text-gray-600">{ep.id}: {ep.description.substring(0, 60)}{ep.description.length > 60 ? "…" : ""}</span>
-                          ))}
-                        </div>
-                      </div>
+              <div className="space-y-3">
+                {(data.availableDataSources || []).map((source: { id: string; name: string; description: string; configured: boolean; endpoints: { id: string; description: string }[] }) => (
+                  <div key={source.id} className="rounded-lg border border-gray-100 bg-gray-50/50 overflow-hidden">
+                    <div className="flex items-center gap-2 px-3 py-2 bg-gray-100/80 border-b border-gray-100">
+                      <span className="text-sm font-medium text-gray-800">{source.name}</span>
+                      {source.configured ? (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-green-100 text-green-700 font-medium">API key set</span>
+                      ) : (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-100 text-red-600 font-medium">Missing key</span>
+                      )}
+                      <span className="text-[10px] text-gray-400 ml-auto">{source.description}</span>
                     </div>
-                  );
-                })}
+                    <div className="divide-y divide-gray-100">
+                      {source.endpoints.map((ep) => {
+                        const chatDs = (data.chat.dataSources || []).find(
+                          (ds: { sourceId: string; endpointId: string }) => ds.sourceId === source.id && ds.endpointId === ep.id
+                        );
+                        const isOn = chatDs?.enabled ?? false;
+                        const snapInfo = dsSnapCounts.find((s) => s.sourceId === source.id && s.endpointId === ep.id);
+                        return (
+                          <div key={ep.id} className="flex items-center gap-3 px-3 py-2.5">
+                            <button
+                              onClick={async () => {
+                                await fetch("/api/dashboard", {
+                                  method: "POST",
+                                  headers: { "Content-Type": "application/json" },
+                                  body: JSON.stringify({ token, action: "toggleEndpoint", sourceId: source.id, endpointId: ep.id }),
+                                });
+                                await fetchData();
+                              }}
+                              className={`relative inline-flex h-5 w-9 flex-shrink-0 items-center rounded-full transition-colors ${isOn ? "bg-green-500" : "bg-gray-300"}`}
+                            >
+                              <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${isOn ? "translate-x-4" : "translate-x-0.5"}`} />
+                            </button>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2">
+                                <code className="text-xs font-medium text-gray-700">{ep.id}</code>
+                                <span className="text-[10px] text-gray-400">{ep.description}</span>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-2 flex-shrink-0">
+                              {snapInfo && (
+                                <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-50 text-blue-600 font-medium">{snapInfo.count} snapshot{snapInfo.count !== 1 ? "s" : ""}</span>
+                              )}
+                              {chatDs?.lastFetchAt && (
+                                <span className="text-[10px] text-gray-400">{new Date(chatDs.lastFetchAt).toLocaleDateString()}</span>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
                 {(data.availableDataSources || []).length === 0 && (
                   <p className="text-sm text-gray-400 text-center py-4">No data sources registered yet.</p>
                 )}
@@ -1971,11 +2022,15 @@ export default function DashboardPage() {
 
               {dsFetchedData && dsFetchedData.length > 0 && (
                 <div className="mt-4 border-t border-gray-200 pt-3">
-                  <h4 className="text-xs font-semibold text-gray-600 mb-2">Raw Data</h4>
+                  <h4 className="text-xs font-semibold text-gray-600 mb-2">Latest Fetch</h4>
                   <div className="max-h-[300px] overflow-y-auto bg-gray-50 rounded-lg p-3">
                     {dsFetchedData.map((d, i) => (
                       <div key={i} className="mb-3 last:mb-0">
-                        <p className="text-[10px] font-medium text-gray-500 mb-1">{d.sourceId} → {d.endpointId}{d.error ? ` (error: ${d.error})` : ""}</p>
+                        <div className="flex items-center gap-2 mb-1">
+                          <p className="text-[10px] font-medium text-gray-500">{d.sourceId}/{d.endpointId}</p>
+                          {d.error && <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-50 text-red-500">{d.error}</span>}
+                          {!d.error && <span className="text-[10px] px-1.5 py-0.5 rounded bg-green-50 text-green-600">stored</span>}
+                        </div>
                         {d.data && <pre className="text-[11px] text-gray-700 whitespace-pre-wrap break-all">{JSON.stringify(d.data, null, 2).substring(0, 3000)}</pre>}
                       </div>
                     ))}
@@ -1985,8 +2040,171 @@ export default function DashboardPage() {
 
               {dsInsights && (
                 <div className="mt-4 border-t border-gray-200 pt-3">
-                  <h4 className="text-xs font-semibold text-gray-600 mb-2">AI Analysis</h4>
+                  <h4 className="text-xs font-semibold text-gray-600 mb-2">AI Analysis (with trend data)</h4>
                   <div className="prose prose-sm max-w-none text-sm text-gray-700 whitespace-pre-wrap">{dsInsights}</div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {showSocial && (
+            <div className="mt-4 bg-white border border-gray-200 rounded-xl p-3 sm:p-5 shadow-sm">
+              <div className="mb-4">
+                <h3 className="text-sm font-semibold text-gray-800">Social Media Query</h3>
+                <p className="text-xs text-gray-500 mt-0.5">Pull social media data via connected wallet. $0.06/request (USDC on Base).</p>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
+                <div>
+                  <label className="text-xs font-medium text-gray-600 mb-1 block">Platform</label>
+                  <select
+                    value={socialPlatform}
+                    onChange={async (e) => {
+                      const p = e.target.value;
+                      setSocialPlatform(p);
+                      setSocialEndpoint("");
+                      setSocialParams({});
+                      setSocialResult(null);
+                      setSocialHistory([]);
+                      if (p) {
+                        try {
+                          const res = await fetch("/api/dashboard", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ token, action: "getSocialEndpoints", platform: p }),
+                          });
+                          const json = await res.json();
+                          setSocialEndpoints(json.endpoints || []);
+                        } catch { setSocialEndpoints([]); }
+                      } else {
+                        setSocialEndpoints([]);
+                      }
+                    }}
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-300 focus:border-indigo-400 outline-none"
+                  >
+                    <option value="">Select platform...</option>
+                    {(data.socialPlatforms || []).map((p: { id: string; label: string; endpointCount: number }) => (
+                      <option key={p.id} value={p.id}>{p.label} ({p.endpointCount} endpoints)</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-gray-600 mb-1 block">Endpoint</label>
+                  <select
+                    value={socialEndpoint}
+                    onChange={(e) => {
+                      setSocialEndpoint(e.target.value);
+                      setSocialResult(null);
+                      const ep = socialEndpoints.find((ep) => ep.id === e.target.value);
+                      if (ep) {
+                        const defaults: Record<string, string> = {};
+                        for (const param of ep.params) {
+                          defaults[param.name] = socialParams[param.name] || "";
+                        }
+                        setSocialParams(defaults);
+                      }
+                    }}
+                    disabled={!socialPlatform}
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-300 focus:border-indigo-400 outline-none disabled:bg-gray-50 disabled:text-gray-400"
+                  >
+                    <option value="">Select endpoint...</option>
+                    {socialEndpoints.map((ep) => (
+                      <option key={ep.id} value={ep.id}>{ep.id} — {ep.description}{ep.dependsOn ? ` (needs ${ep.dependsOn} first)` : ""}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {socialEndpoint && (() => {
+                const ep = socialEndpoints.find((e) => e.id === socialEndpoint);
+                if (!ep) return null;
+                return (
+                  <div className="mb-4">
+                    {ep.dependsOn && (
+                      <p className="text-[10px] text-amber-600 bg-amber-50 px-2 py-1 rounded mb-2">Depends on <strong>{ep.dependsOn}</strong> — run that endpoint first for best results.</p>
+                    )}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {ep.params.map((param) => (
+                        <div key={param.name}>
+                          <label className="text-[10px] font-medium text-gray-500 mb-0.5 block">
+                            {param.name}{param.required && <span className="text-red-400">*</span>} <span className="font-normal text-gray-400">— {param.description}</span>
+                          </label>
+                          <input
+                            value={socialParams[param.name] || ""}
+                            onChange={(e) => setSocialParams((p) => ({ ...p, [param.name]: e.target.value }))}
+                            placeholder={param.description}
+                            className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-indigo-300 focus:border-indigo-400 outline-none"
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
+
+              <div className="flex items-center gap-3">
+                <button
+                  disabled={socialLoading || !socialPlatform || !socialEndpoint}
+                  onClick={async () => {
+                    setSocialLoading(true);
+                    setSocialResult(null);
+                    try {
+                      const res = await fetch("/api/dashboard", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ token, action: "querySocial", platform: socialPlatform, endpoint: socialEndpoint, params: socialParams }),
+                      });
+                      const json = await res.json();
+                      setSocialResult({ data: json.data, cost: json.cost, error: json.error });
+                      const histRes = await fetch("/api/dashboard", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ token, action: "getSocialHistory", platform: socialPlatform, endpoint: socialEndpoint, limit: 5 }),
+                      });
+                      const histJson = await histRes.json();
+                      setSocialHistory(histJson.history || []);
+                    } catch (err) {
+                      setSocialResult({ data: null, cost: "$0.00", error: String(err) });
+                    }
+                    setSocialLoading(false);
+                  }}
+                  className="px-4 py-2 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700 disabled:opacity-50 transition-colors font-medium flex items-center gap-2"
+                >
+                  {socialLoading ? (
+                    <>
+                      <svg className="w-3.5 h-3.5 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2" /></svg>
+                      Querying...
+                    </>
+                  ) : "Query ($0.06)"}
+                </button>
+                {socialResult?.cost && !socialResult.error && (
+                  <span className="text-[10px] px-2 py-1 rounded bg-green-50 text-green-600 font-medium">Cost: {socialResult.cost} — stored as snapshot</span>
+                )}
+                {socialResult?.error && (
+                  <span className="text-[10px] px-2 py-1 rounded bg-red-50 text-red-500 font-medium">{socialResult.error}</span>
+                )}
+              </div>
+
+              {socialResult?.data && (
+                <div className="mt-4 border-t border-gray-200 pt-3">
+                  <h4 className="text-xs font-semibold text-gray-600 mb-2">Result</h4>
+                  <div className="max-h-[400px] overflow-y-auto bg-gray-50 rounded-lg p-3">
+                    <pre className="text-[11px] text-gray-700 whitespace-pre-wrap break-all">{JSON.stringify(socialResult.data, null, 2)}</pre>
+                  </div>
+                </div>
+              )}
+
+              {socialHistory.length > 0 && (
+                <div className="mt-4 border-t border-gray-200 pt-3">
+                  <h4 className="text-xs font-semibold text-gray-600 mb-2">Previous Snapshots ({socialHistory.length})</h4>
+                  <div className="space-y-2 max-h-[200px] overflow-y-auto">
+                    {socialHistory.map((h, i) => (
+                      <div key={i} className="bg-gray-50 rounded-lg p-2">
+                        <p className="text-[10px] text-gray-400 mb-1">{new Date(h.fetchedAt).toLocaleString()}</p>
+                        <pre className="text-[10px] text-gray-600 whitespace-pre-wrap break-all">{JSON.stringify(h.data, null, 2).substring(0, 500)}{JSON.stringify(h.data).length > 500 ? "…" : ""}</pre>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               )}
             </div>

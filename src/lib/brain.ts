@@ -1,6 +1,6 @@
 import { chat as aiChat } from "@/lib/openrouter";
 import { qmdSearch, writeKnowledge, writeDump, writeContextSummary, writePeopleSnapshot, writePersonKnowledge, writeTasksSnapshot, formatQMDResults } from "@/lib/knowledge";
-import { fetchDataForChat, formatDataForAI } from "@/lib/dataSources";
+import { fetchEnabledEndpoints, formatDataForAI, persistSnapshots, buildTrendContext, type EnabledEndpoint } from "@/lib/dataSources";
 import Chat, { WATCH_DEFAULTS } from "@/models/Chat";
 import Task from "@/models/Task";
 import Person from "@/models/Person";
@@ -46,28 +46,20 @@ function isSimilarTask(a: string, b: string): boolean {
   return false;
 }
 
-async function getDataSourceContext(chatDoc: { dataSources?: { sourceId: string; enabled: boolean; lastFetchAt?: Date; cachedData?: Record<string, unknown> }[] } | null): Promise<string> {
-  if (!chatDoc?.dataSources?.length) return "";
-  const enabled = chatDoc.dataSources.filter((ds) => ds.enabled);
+function getEnabledEndpoints(chatDoc: { dataSources?: { sourceId: string; endpointId: string; enabled: boolean }[] } | null): EnabledEndpoint[] {
+  if (!chatDoc?.dataSources?.length) return [];
+  return chatDoc.dataSources
+    .filter((ds) => ds.enabled)
+    .map((ds) => ({ sourceId: ds.sourceId, endpointId: ds.endpointId }));
+}
+
+async function getDataSourceContext(chatId: string, chatDoc: { dataSources?: { sourceId: string; endpointId: string; enabled: boolean }[] } | null): Promise<string> {
+  const enabled = getEnabledEndpoints(chatDoc);
   if (!enabled.length) return "";
 
-  const CACHE_TTL_MS = 10 * 60 * 1000;
-  const needsFresh = enabled.some(
-    (ds) => !ds.lastFetchAt || Date.now() - new Date(ds.lastFetchAt).getTime() > CACHE_TTL_MS
-  );
-
-  if (!needsFresh) {
-    const cached = enabled
-      .filter((ds) => ds.cachedData)
-      .map((ds) => `[${ds.sourceId}]\n${JSON.stringify(ds.cachedData, null, 2)}`)
-      .join("\n\n");
-    return cached ? `\nDATA SOURCES (live business data):\n${cached}` : "";
-  }
-
   try {
-    const results = await fetchDataForChat(enabled.map((ds) => ds.sourceId));
-    const formatted = formatDataForAI(results);
-    return formatted ? `\nDATA SOURCES (live business data):\n${formatted}` : "";
+    const trendContext = await buildTrendContext(chatId, enabled);
+    return trendContext ? `\nDATA SOURCES (live business data + historical snapshots for trend analysis):\n${trendContext}` : "";
   } catch {
     return "";
   }
@@ -142,7 +134,7 @@ export async function buildSystemPrompt(chatId: string, userQuery?: string): Pro
     }
   }
 
-  const dataSourceBlock = await getDataSourceContext(chatDoc);
+  const dataSourceBlock = await getDataSourceContext(chatId, chatDoc);
 
   const watchLines = [
     watch.deadlines && "deadlines/dates",
@@ -654,26 +646,25 @@ export async function generateAiFeed(chatId: string): Promise<{ type: string; co
   }
 
   let dataSourceContext = "";
-  const enabledSources = (chatDoc.dataSources || []).filter((ds: { enabled: boolean }) => ds.enabled);
-  if (enabledSources.length) {
+  const enabledEps = getEnabledEndpoints(chatDoc);
+  if (enabledEps.length) {
     try {
-      const sourceIds = enabledSources.map((ds: { sourceId: string }) => ds.sourceId);
-      const dsResults = await fetchDataForChat(sourceIds);
+      const dsResults = await fetchEnabledEndpoints(enabledEps);
       dataSourceContext = formatDataForAI(dsResults);
-      const cacheUpdate: Record<string, unknown> = {};
+      persistSnapshots(chatId, dsResults).catch(console.error);
+      const updateOps: Record<string, unknown> = {};
       for (const r of dsResults) {
         if (!r.error && r.data) {
-          const idx = enabledSources.findIndex((ds: { sourceId: string }) => ds.sourceId === r.sourceId);
-          if (idx >= 0) {
-            const dsIndex = (chatDoc.dataSources || []).indexOf(enabledSources[idx]);
-            cacheUpdate[`dataSources.${dsIndex}.lastFetchAt`] = r.fetchedAt;
-            cacheUpdate[`dataSources.${dsIndex}.cachedData`] = { [r.endpointId]: r.data };
-          }
+          const allDs = chatDoc.dataSources || [];
+          const idx = allDs.findIndex((ds: { sourceId: string; endpointId: string }) => ds.sourceId === r.sourceId && ds.endpointId === r.endpointId);
+          if (idx >= 0) updateOps[`dataSources.${idx}.lastFetchAt`] = r.fetchedAt;
         }
       }
-      if (Object.keys(cacheUpdate).length) {
-        Chat.updateOne({ telegramChatId: chatId }, { $set: cacheUpdate }).catch(console.error);
+      if (Object.keys(updateOps).length) {
+        Chat.updateOne({ telegramChatId: chatId }, { $set: updateOps }).catch(console.error);
       }
+      const trendCtx = await buildTrendContext(chatId, enabledEps);
+      if (trendCtx) dataSourceContext += `\n\nHISTORICAL SNAPSHOTS:\n${trendCtx}`;
     } catch { /* data sources unavailable */ }
   }
 
