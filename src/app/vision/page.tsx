@@ -17,20 +17,25 @@ export default function VisionPage() {
 
       <div className="relative z-10">
         {/* Nav */}
-        <nav className="max-w-5xl mx-auto px-6 py-6 flex items-center justify-between">
+        <nav className="max-w-5xl mx-auto px-4 sm:px-6 py-4 sm:py-6 flex items-center justify-between">
           <a href="/" className="text-lg font-bold tracking-tight">
             odo<span className="text-blue-400">ai</span>
           </a>
-          <a
-            href="https://t.me/odoai_bot"
-            className="text-sm text-gray-400 hover:text-white transition-colors"
-          >
-            Try it →
-          </a>
+          <div className="flex items-center gap-3 sm:gap-4 text-sm text-gray-400">
+            <a href="/autoresearch" className="hover:text-white transition-colors">
+              Autoresearch
+            </a>
+            <a
+              href="https://t.me/odoai_bot"
+              className="hover:text-white transition-colors"
+            >
+              Try it →
+            </a>
+          </div>
         </nav>
 
         {/* Hero */}
-        <section className="max-w-3xl mx-auto px-6 pt-20 pb-32 text-center">
+        <section className="max-w-3xl mx-auto px-4 sm:px-6 pt-12 sm:pt-20 pb-16 sm:pb-32 text-center">
           <div className="inline-flex items-center gap-2 bg-white/5 border border-white/10 rounded-full px-4 py-1.5 text-xs text-gray-400 font-medium mb-10 backdrop-blur-sm">
             A new way to run things
           </div>
@@ -47,8 +52,8 @@ export default function VisionPage() {
         </section>
 
         {/* The Problem */}
-        <section className="max-w-3xl mx-auto px-6 pb-28">
-          <div className="grid gap-4 sm:grid-cols-3">
+        <section className="max-w-3xl mx-auto px-4 sm:px-6 pb-16 sm:pb-28">
+          <div className="grid gap-3 sm:gap-4 sm:grid-cols-3">
             <ProblemCard
               number="1"
               text="Ideas come up in conversation. They never become tasks."
@@ -65,11 +70,11 @@ export default function VisionPage() {
         </section>
 
         {/* The Shift */}
-        <section className="max-w-3xl mx-auto px-6 pb-32">
-          <p className="text-xs uppercase tracking-[0.2em] text-gray-600 font-semibold mb-6">
+        <section className="max-w-3xl mx-auto px-4 sm:px-6 pb-16 sm:pb-32">
+          <p className="text-xs uppercase tracking-[0.2em] text-gray-600 font-semibold mb-4 sm:mb-6">
             The shift
           </p>
-          <h2 className="text-3xl sm:text-4xl font-bold tracking-tight leading-tight mb-6">
+          <h2 className="text-2xl sm:text-3xl md:text-4xl font-bold tracking-tight leading-tight mb-4 sm:mb-6">
             An AI that listens to your group chat,<br className="hidden sm:block" />
             builds the full picture, and tells you{" "}
             <span className="text-blue-400">what actually matters</span>.
@@ -82,8 +87,8 @@ export default function VisionPage() {
         </section>
 
         {/* The Flow */}
-        <section className="max-w-4xl mx-auto px-6 pb-32">
-          <p className="text-xs uppercase tracking-[0.2em] text-gray-600 font-semibold mb-10 text-center">
+        <section className="max-w-4xl mx-auto px-4 sm:px-6 pb-16 sm:pb-32">
+          <p className="text-xs uppercase tracking-[0.2em] text-gray-600 font-semibold mb-6 sm:mb-10 text-center">
             The flow
           </p>
           <div className="space-y-0">
@@ -138,9 +143,9 @@ export default function VisionPage() {
         </section>
 
         {/* What changes */}
-        <section className="max-w-3xl mx-auto px-6 pb-32">
-          <div className="rounded-2xl border border-gray-800 bg-gray-900/40 backdrop-blur-sm p-8 sm:p-10">
-            <h2 className="text-2xl sm:text-3xl font-bold tracking-tight mb-8">
+        <section className="max-w-3xl mx-auto px-4 sm:px-6 pb-16 sm:pb-32">
+          <div className="rounded-2xl border border-gray-800 bg-gray-900/40 backdrop-blur-sm p-5 sm:p-8 md:p-10">
+            <h2 className="text-xl sm:text-2xl md:text-3xl font-bold tracking-tight mb-6 sm:mb-8">
               What changes
             </h2>
             <div className="space-y-6">
@@ -177,8 +182,8 @@ export default function VisionPage() {
         </section>
 
         {/* The bigger idea */}
-        <section className="max-w-3xl mx-auto px-6 pb-32 text-center">
-          <h2 className="text-3xl sm:text-4xl font-bold tracking-tight leading-tight mb-6">
+        <section className="max-w-3xl mx-auto px-4 sm:px-6 pb-16 sm:pb-32 text-center">
+          <h2 className="text-2xl sm:text-3xl md:text-4xl font-bold tracking-tight leading-tight mb-4 sm:mb-6">
             The best teams don&apos;t need more tools.<br />
             They need{" "}
             <span className="bg-gradient-to-r from-purple-400 to-amber-400 bg-clip-text text-transparent">
@@ -198,8 +203,8 @@ export default function VisionPage() {
         </section>
 
         {/* Vision block */}
-        <section className="max-w-4xl mx-auto px-6 pb-32">
-          <div className="relative rounded-2xl border border-purple-500/20 bg-gradient-to-br from-purple-950/40 via-gray-950 to-blue-950/30 p-8 sm:p-12 overflow-hidden">
+        <section className="max-w-4xl mx-auto px-4 sm:px-6 pb-16 sm:pb-32">
+          <div className="relative rounded-2xl border border-purple-500/20 bg-gradient-to-br from-purple-950/40 via-gray-950 to-blue-950/30 p-5 sm:p-8 md:p-12 overflow-hidden">
             <div className="pointer-events-none absolute top-0 right-0 w-64 h-64 bg-purple-500/5 rounded-full blur-[80px]" />
             <div className="pointer-events-none absolute bottom-0 left-0 w-48 h-48 bg-blue-500/5 rounded-full blur-[60px]" />
             <div className="relative">
@@ -242,11 +247,11 @@ export default function VisionPage() {
         </section>
 
         {/* CTA */}
-        <section className="max-w-3xl mx-auto px-6 pb-24 text-center">
-          <h2 className="text-2xl sm:text-3xl font-bold tracking-tight mb-4">
+        <section className="max-w-3xl mx-auto px-4 sm:px-6 pb-16 sm:pb-24 text-center">
+          <h2 className="text-xl sm:text-2xl md:text-3xl font-bold tracking-tight mb-3 sm:mb-4">
             Start with a conversation.
           </h2>
-          <p className="text-gray-400 text-base mb-8 max-w-lg mx-auto">
+          <p className="text-gray-400 text-sm sm:text-base mb-6 sm:mb-8 max-w-lg mx-auto">
             Add odoai to your Telegram group. Keep talking like you always do.
             The AI handles the rest.
           </p>
@@ -265,13 +270,18 @@ export default function VisionPage() {
         </section>
 
         {/* Footer */}
-        <footer className="max-w-5xl mx-auto px-6 py-8 border-t border-gray-800/50 flex items-center justify-between text-xs text-gray-600">
+        <footer className="max-w-5xl mx-auto px-4 sm:px-6 py-6 sm:py-8 border-t border-gray-800/50 flex items-center justify-between text-xs text-gray-600">
           <span>
             odo<span className="text-gray-500">ai</span>
           </span>
-          <a href="/" className="hover:text-gray-400 transition-colors">
-            Home
-          </a>
+          <div className="flex items-center gap-4">
+            <a href="/" className="hover:text-gray-400 transition-colors">
+              Home
+            </a>
+            <a href="/autoresearch" className="hover:text-gray-400 transition-colors">
+              Autoresearch
+            </a>
+          </div>
         </footer>
       </div>
     </div>
@@ -319,26 +329,26 @@ function FlowStep({
     pink: "text-pink-500",
   };
   return (
-    <div className="flex gap-5 sm:gap-8">
+    <div className="flex gap-3 sm:gap-5 md:gap-8">
       <div className="flex flex-col items-center shrink-0">
         <div
-          className={`w-3 h-3 rounded-full ${dotColor[accent] || "bg-gray-400"} shadow-lg`}
+          className={`w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-full ${dotColor[accent] || "bg-gray-400"} shadow-lg`}
           style={{ boxShadow: `0 0 12px 2px currentColor` }}
         />
       </div>
-      <div className="pb-2">
-        <div className="flex items-baseline gap-3 mb-1">
+      <div className="pb-2 min-w-0">
+        <div className="flex items-baseline gap-2 sm:gap-3 mb-1">
           <span
-            className={`text-xs font-mono font-bold ${numColor[accent] || "text-gray-500"}`}
+            className={`text-[10px] sm:text-xs font-mono font-bold ${numColor[accent] || "text-gray-500"}`}
           >
             {number}
           </span>
-          <h3 className="text-lg sm:text-xl font-bold text-white">{title}</h3>
+          <h3 className="text-base sm:text-lg md:text-xl font-bold text-white">{title}</h3>
         </div>
-        <p className="text-gray-300 text-sm sm:text-base leading-relaxed mb-1">
+        <p className="text-gray-300 text-[13px] sm:text-sm md:text-base leading-relaxed mb-1">
           {description}
         </p>
-        <p className="text-gray-500 text-sm leading-relaxed">{detail}</p>
+        <p className="text-gray-500 text-xs sm:text-sm leading-relaxed">{detail}</p>
       </div>
     </div>
   );
@@ -346,9 +356,9 @@ function FlowStep({
 
 function FlowConnector() {
   return (
-    <div className="flex gap-5 sm:gap-8">
-      <div className="flex flex-col items-center shrink-0 w-3">
-        <div className="w-px h-8 bg-gradient-to-b from-gray-700 to-gray-800" />
+    <div className="flex gap-3 sm:gap-5 md:gap-8">
+      <div className="flex flex-col items-center shrink-0 w-2.5 sm:w-3">
+        <div className="w-px h-5 sm:h-8 bg-gradient-to-b from-gray-700 to-gray-800" />
       </div>
       <div />
     </div>

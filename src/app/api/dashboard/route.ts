@@ -57,6 +57,19 @@ export async function GET(req: NextRequest) {
       priorityNarrative: chat.priorityNarrative || "",
       leveragePlay: chat.leveragePlay || "",
       lastPrioritizedAt: chat.lastPrioritizedAt || null,
+      offers: (chat.offers || []).map((o: { id: string; name: string; description: string; pricePoint: string; targetBuyer: string; whyNow: string; deliveryMethod: string; costToDeliver: string; revenueEstimate: string; confidenceScore: number; confidenceReason: string; validationNotes: string; status: string; iteration: number; createdAt: Date; updatedAt: Date }) => ({
+        id: o.id, name: o.name, description: o.description, pricePoint: o.pricePoint,
+        targetBuyer: o.targetBuyer, whyNow: o.whyNow, deliveryMethod: o.deliveryMethod,
+        costToDeliver: o.costToDeliver, revenueEstimate: o.revenueEstimate,
+        confidenceScore: o.confidenceScore, confidenceReason: o.confidenceReason,
+        validationNotes: o.validationNotes, status: o.status, iteration: o.iteration,
+        createdAt: o.createdAt, updatedAt: o.updatedAt,
+      })),
+      offerIteration: chat.offerIteration || 0,
+      offerResearchLog: (chat.offerResearchLog || []).slice(-10).map((l: { id: string; iteration: number; action: string; result: string; keptOffers: string[]; discardedOffers: string[]; newOffers: string[]; createdAt: Date }) => ({
+        id: l.id, iteration: l.iteration, action: l.action, result: l.result,
+        keptOffers: l.keptOffers, discardedOffers: l.discardedOffers, newOffers: l.newOffers, createdAt: l.createdAt,
+      })),
       messageCount: chat.messages?.length || 0,
       dataSources: chat.dataSources || [],
       aiQuestions: (chat.aiQuestions || []).map((q: { id: string; category: string; question: string; answer: string; skipped?: boolean; answeredAt?: Date; createdAt: Date }) => ({
@@ -1012,6 +1025,195 @@ CONTEXT SUMMARY:\n${chatDoc?.contextSummary || "none"}` },
     if (body.blockedBy !== undefined) update.blockedBy = body.blockedBy;
     if (body.waitingOn !== undefined) update.waitingOn = body.waitingOn;
     await Task.updateOne({ _id: body.taskId, telegramChatId: chatId }, { $set: update });
+    return NextResponse.json({ ok: true });
+  }
+
+  if (action === "researchOffers") {
+    const chatDoc = await Chat.findOne({ telegramChatId: chatId });
+    if (!chatDoc) return NextResponse.json({ error: "chat not found" }, { status: 404 });
+
+    const [tasks, people, activitiesData] = await Promise.all([
+      Task.find({ telegramChatId: chatId }).lean(),
+      Person.find({ telegramChatId: chatId }).lean(),
+      Activity.find({ telegramChatId: chatId }).sort({ createdAt: -1 }).limit(30).lean(),
+    ]);
+
+    const openTasks = tasks.filter((t) => t.status !== "done");
+    const doneTasks = tasks.filter((t) => t.status === "done");
+    const initiatives = (chatDoc.initiatives || []).filter((i: { status: string }) => i.status === "active");
+    const existingOffers = chatDoc.offers || [];
+    const prevLog = (chatDoc.offerResearchLog || []).slice(-5);
+    const iteration = (chatDoc.offerIteration || 0) + 1;
+
+    const recentMessages = (chatDoc.messages || []).slice(-30);
+    const transcript = recentMessages.map((m: { telegramUsername?: string; firstName?: string; content: string }) =>
+      `${m.telegramUsername || m.firstName || "user"}: ${m.content}`
+    ).join("\n");
+
+    const peopleSummary = people.map((p) => {
+      const name = p.username || p.firstName;
+      if (!name) return null;
+      let line = `${name}`;
+      if (p.role && p.role !== "null") line += ` (${p.role})`;
+      if (p.intentions?.length) line += ` — ${p.intentions.slice(0, 3).join(", ")}`;
+      if (p.resources) line += ` | resources: ${p.resources}`;
+      if (p.access) line += ` | access: ${p.access}`;
+      return line;
+    }).filter(Boolean).join("\n");
+
+    const dumps = (chatDoc.dumps || []).slice(-15).map((d: { text: string; category: string; subject: string }) =>
+      `[${d.category}${d.subject ? `:${d.subject}` : ""}] ${d.text.substring(0, 300)}`
+    ).join("\n");
+
+    const answeredQs = (chatDoc.aiQuestions || [])
+      .filter((q: { answer: string }) => q.answer)
+      .map((q: { category: string; question: string; answer: string }) => `[${q.category}] Q: ${q.question}\nA: ${q.answer}`)
+      .join("\n\n");
+
+    const menuItems = (chatDoc.menu || []).map((m: { name: string; description: string; price: string; category: string; targetBuyers: string }) =>
+      `${m.name} — ${m.description} (${m.price}) [${m.category}]${m.targetBuyers ? ` targets: ${m.targetBuyers}` : ""}`
+    ).join("\n");
+
+    let dataContext = "";
+    try {
+      const snaps = await DataSnapshot.find({ telegramChatId: chatId }).sort({ fetchedAt: -1 }).limit(8).lean();
+      if (snaps.length) {
+        dataContext = snaps.map((s) => {
+          const d = s as { sourceId: string; endpointId: string; data: unknown; fetchedAt: Date };
+          return `[${d.sourceId}/${d.endpointId}] ${JSON.stringify(d.data).substring(0, 800)}`;
+        }).join("\n");
+      }
+    } catch { /* unavailable */ }
+
+    const existingOffersBlock = existingOffers.length
+      ? existingOffers.map((o: { id: string; name: string; status: string; confidenceScore: number; validationNotes: string; iteration: number }) =>
+        `[${o.status}|iter${o.iteration}|conf:${o.confidenceScore}] "${o.name}"${o.validationNotes ? ` — ${o.validationNotes}` : ""}`
+      ).join("\n")
+      : "";
+
+    const prevLogBlock = prevLog.length
+      ? prevLog.map((l: { iteration: number; action: string; result: string }) =>
+        `[iter${l.iteration}] ${l.action}: ${l.result}`
+      ).join("\n")
+      : "";
+
+    const response = await aiChat([
+      { role: "system", content: `You are an autonomous offer research engine. You analyze everything about a team — their conversations, abilities, contacts, metrics, existing products, and market signals — and generate crystal-clear business offers they can sell.
+
+This is iteration ${iteration} of the research loop. Like autoresearch: try an idea, measure it against evidence, keep what works, discard what doesn't, iterate.
+
+${iteration === 1 ? "This is the FIRST iteration. Generate 3-5 fresh offers from scratch." : `Previous iterations have been run. Review existing offers below. Your job: KEEP offers that look strong (increase confidence if evidence supports them), REJECT offers that are weak (explain why), and generate NEW offers to replace rejected ones. Always maintain 3-5 active offers.`}
+
+FOR EACH OFFER, provide:
+- id: unique string (keep same id if iterating on existing offer)
+- name: short punchy name (the "product" name)
+- description: 2-3 sentences — what the buyer gets, crystal clear
+- pricePoint: specific price or range ("$500/mo", "$2k one-time", "$50/video")
+- targetBuyer: specific buyer persona — who, where, why they'd pay
+- whyNow: why this offer works RIGHT NOW for this team (timing, momentum, market)
+- deliveryMethod: how it gets delivered — "automated" | "human" | "hybrid" + specifics
+- costToDeliver: real cost to fulfill this (team time, tools, etc)
+- revenueEstimate: realistic monthly/quarterly revenue potential
+- confidenceScore: 1-100 based on evidence strength
+- confidenceReason: 1 sentence — what evidence supports/weakens this
+- validationNotes: what you'd want to test next to increase confidence
+- status: "hypothesis" (new/untested) | "validating" (being tested) | "validated" (strong evidence) | "rejected" (doesn't work)
+
+ALSO OUTPUT:
+- researchSummary: 2-4 sentences about what this iteration discovered, what changed, what's getting sharper
+- keptOffers: ids of offers kept from previous iteration
+- discardedOffers: ids of offers rejected and why
+- newOffers: ids of newly generated offers
+
+RULES:
+- Offers must be SPECIFIC — not "consulting services" but "Weekly 30-min strategy call + async Telegram support for DTC brands doing $50-500k/mo, $1,500/mo"
+- Ground everything in their ACTUAL abilities, people, and data
+- Price based on value delivered, not time spent
+- If social/metrics data shows traction somewhere, BUILD an offer around it
+- Automated/hybrid delivery > pure human when possible (leverage)
+- Each offer should be different enough to test a different market/price/delivery hypothesis
+- Be honest about confidence — a 30 is fine if the idea is worth testing
+
+Respond ONLY with valid JSON:
+{
+  "researchSummary": "...",
+  "offers": [{ id, name, description, pricePoint, targetBuyer, whyNow, deliveryMethod, costToDeliver, revenueEstimate, confidenceScore, confidenceReason, validationNotes, status }],
+  "keptOffers": ["id1"],
+  "discardedOffers": [{"id": "id2", "reason": "..."}],
+  "newOffers": ["id3", "id4"]
+}
+
+Today is ${new Date().toISOString().split("T")[0]}.` },
+      { role: "user", content: `TEAM CONTEXT:\n${chatDoc.contextSummary || "none"}
+
+ABILITIES:\n${chatDoc.abilities || "unknown"}
+
+ACTIVE TASKS (${openTasks.length}):\n${openTasks.map((t) => `[${t.status}] "${t.title}" ${t.executionType ? `(${t.executionType})` : ""} ${t.revenueEstimate ? `rev:${t.revenueEstimate}` : ""}`).join("\n") || "none"}
+
+COMPLETED TASKS (${doneTasks.length}):\n${doneTasks.slice(-10).map((t) => `"${t.title}"`).join(", ") || "none"}
+
+TEAM:\n${peopleSummary || "unknown"}
+
+INITIATIVES:\n${initiatives.length ? initiatives.map((i: { name: string; description: string }) => `${i.name}: ${i.description}`).join("\n") : "none"}
+
+EXISTING MENU/PRODUCTS:\n${menuItems || "none"}
+
+RECENT CONVERSATION:\n${transcript || "none"}
+
+NOTES & DUMPS:\n${dumps || "none"}
+
+ANSWERED QUESTIONS (team knowledge):\n${answeredQs || "none"}
+
+METRICS / DATA:\n${dataContext || "none"}
+
+${existingOffersBlock ? `EXISTING OFFERS (from previous iterations — keep, reject, or iterate):\n${existingOffersBlock}` : ""}
+${prevLogBlock ? `PREVIOUS RESEARCH LOG:\n${prevLogBlock}` : ""}` },
+    ], "openai/gpt-4o");
+
+    try {
+      const cleaned = response.replace(/```json?\n?/g, "").replace(/```/g, "").trim();
+      const result = JSON.parse(cleaned);
+
+      const offers = (result.offers || []).map((o: { id?: string; name: string; description: string; pricePoint: string; targetBuyer: string; whyNow: string; deliveryMethod: string; costToDeliver: string; revenueEstimate: string; confidenceScore: number; confidenceReason: string; validationNotes: string; status: string }) => ({
+        id: o.id || `offer_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        name: o.name, description: o.description, pricePoint: o.pricePoint,
+        targetBuyer: o.targetBuyer, whyNow: o.whyNow, deliveryMethod: o.deliveryMethod,
+        costToDeliver: o.costToDeliver, revenueEstimate: o.revenueEstimate,
+        confidenceScore: o.confidenceScore || 0, confidenceReason: o.confidenceReason || "",
+        validationNotes: o.validationNotes || "",
+        status: o.status || "hypothesis", iteration,
+        createdAt: new Date(), updatedAt: new Date(),
+      }));
+
+      const logEntry = {
+        id: `log_${Date.now()}`,
+        iteration,
+        action: iteration === 1 ? "initial_generation" : "iteration",
+        result: result.researchSummary || "",
+        keptOffers: result.keptOffers || [],
+        discardedOffers: (result.discardedOffers || []).map((d: { id: string } | string) => typeof d === "string" ? d : d.id),
+        newOffers: result.newOffers || [],
+        createdAt: new Date(),
+      };
+
+      await Chat.updateOne({ telegramChatId: chatId }, {
+        $set: { offers, offerIteration: iteration },
+        $push: { offerResearchLog: logEntry },
+      });
+
+      return NextResponse.json({ ok: true, offers, researchSummary: result.researchSummary, iteration, log: logEntry });
+    } catch {
+      return NextResponse.json({ ok: false, error: "Failed to parse offer research" });
+    }
+  }
+
+  if (action === "updateOfferStatus" && body.offerId && body.status) {
+    const validStatuses = ["hypothesis", "validating", "validated", "rejected", "live"];
+    if (!validStatuses.includes(body.status)) return NextResponse.json({ error: "invalid status" }, { status: 400 });
+    await Chat.updateOne(
+      { telegramChatId: chatId, "offers.id": body.offerId },
+      { $set: { "offers.$.status": body.status, "offers.$.updatedAt": new Date() } }
+    );
     return NextResponse.json({ ok: true });
   }
 

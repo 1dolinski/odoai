@@ -155,6 +155,20 @@ interface DashboardData {
     priorityNarrative: string;
     leveragePlay: string;
     lastPrioritizedAt: string | null;
+    offers: {
+      id: string; name: string; description: string; pricePoint: string;
+      targetBuyer: string; whyNow: string; deliveryMethod: string;
+      costToDeliver: string; revenueEstimate: string;
+      confidenceScore: number; confidenceReason: string; validationNotes: string;
+      status: "hypothesis" | "validating" | "validated" | "rejected" | "live";
+      iteration: number; createdAt: string; updatedAt: string;
+    }[];
+    offerIteration: number;
+    offerResearchLog: {
+      id: string; iteration: number; action: string; result: string;
+      keptOffers: string[]; discardedOffers: string[]; newOffers: string[];
+      createdAt: string;
+    }[];
     messageCount: number;
     dataSources: { sourceId: string; endpointId: string; enabled: boolean; lastFetchAt?: string }[];
   };
@@ -291,6 +305,7 @@ export default function DashboardPage() {
     return "list";
   });
   const [prioritizing, setPrioritizing] = useState(false);
+  const [researchingOffers, setResearchingOffers] = useState(false);
   const [expandedCategory, setExpandedCategory] = useState<string | null>(null);
   const [showCalendar, setShowCalendar] = useState(false);
   const [syncingMembers, setSyncingMembers] = useState(false);
@@ -3144,6 +3159,105 @@ export default function DashboardPage() {
                   </div>
                 </div>
               )}
+              {/* Offer Research */}
+              <div className="bg-white border border-gray-200 rounded-xl p-4 mb-4">
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-sm font-semibold text-gray-800">Offer Research</h3>
+                    {data.chat.offerIteration > 0 && (
+                      <span className="text-[10px] text-gray-400 bg-gray-100 rounded-full px-2 py-0.5">iter {data.chat.offerIteration}</span>
+                    )}
+                    {data.chat.offers.length > 0 && (
+                      <span className="text-[10px] text-gray-400">{data.chat.offers.filter((o) => o.status !== "rejected").length} active</span>
+                    )}
+                  </div>
+                  <button
+                    disabled={researchingOffers}
+                    onClick={async () => {
+                      setResearchingOffers(true);
+                      await fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "researchOffers" }) });
+                      await fetchData();
+                      setResearchingOffers(false);
+                    }}
+                    className="text-[11px] font-medium px-3 py-1.5 rounded-lg transition-all disabled:opacity-50 bg-emerald-600 text-white hover:bg-emerald-700"
+                  >{researchingOffers ? "Researching..." : data.chat.offers.length > 0 ? "Iterate" : "Generate Offers"}</button>
+                </div>
+
+                {researchingOffers && (
+                  <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-4 text-center animate-pulse">
+                    <p className="text-sm text-emerald-700">Analyzing team context, conversations, abilities, metrics, and market signals to {data.chat.offers.length > 0 ? "refine offers..." : "generate offers..."}</p>
+                  </div>
+                )}
+
+                {data.chat.offerResearchLog.length > 0 && !researchingOffers && (
+                  <div className="mb-3 bg-gray-50 border border-gray-100 rounded-lg px-3 py-2">
+                    <p className="text-xs text-gray-600">{data.chat.offerResearchLog[data.chat.offerResearchLog.length - 1]?.result}</p>
+                  </div>
+                )}
+
+                {data.chat.offers.length > 0 && !researchingOffers && (
+                  <div className="space-y-2.5">
+                    {[...data.chat.offers]
+                      .sort((a, b) => b.confidenceScore - a.confidenceScore)
+                      .map((o) => {
+                        const statusColors: Record<string, string> = {
+                          hypothesis: "bg-blue-100 text-blue-700 border-blue-200",
+                          validating: "bg-yellow-100 text-yellow-700 border-yellow-200",
+                          validated: "bg-green-100 text-green-700 border-green-200",
+                          rejected: "bg-red-100 text-red-700 border-red-200",
+                          live: "bg-emerald-100 text-emerald-700 border-emerald-200",
+                        };
+                        const confColor = o.confidenceScore >= 70 ? "text-green-600" : o.confidenceScore >= 40 ? "text-yellow-600" : "text-gray-400";
+                        return (
+                          <div key={o.id} className={`border rounded-lg p-3 transition-all ${o.status === "rejected" ? "opacity-50 border-gray-200" : "border-gray-200 hover:shadow-sm"}`}>
+                            <div className="flex items-start gap-3">
+                              <div className="shrink-0 w-10 text-center pt-0.5">
+                                <div className={`text-lg font-bold ${confColor}`}>{o.confidenceScore}</div>
+                                <div className="text-[8px] text-gray-400 uppercase">conf</div>
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-1.5 flex-wrap mb-0.5">
+                                  <span className="font-semibold text-sm text-gray-900">{o.name}</span>
+                                  <span className={`text-[9px] font-medium rounded-full px-1.5 py-0.5 border ${statusColors[o.status]}`}>{o.status}</span>
+                                  <span className="text-[10px] font-bold text-emerald-600">{o.pricePoint}</span>
+                                </div>
+                                <p className="text-xs text-gray-600 leading-relaxed mb-1">{o.description}</p>
+                                <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[10px]">
+                                  <span className="text-gray-500"><span className="font-medium text-gray-700">Buyer:</span> {o.targetBuyer}</span>
+                                  <span className="text-gray-500"><span className="font-medium text-gray-700">Delivery:</span> {o.deliveryMethod}</span>
+                                  {o.costToDeliver && <span className="text-red-500">Cost: {o.costToDeliver}</span>}
+                                  {o.revenueEstimate && <span className="text-green-600">Rev: {o.revenueEstimate}</span>}
+                                </div>
+                                {o.whyNow && <p className="text-[10px] text-amber-600 mt-1">Why now: {o.whyNow}</p>}
+                                {o.confidenceReason && <p className="text-[10px] text-gray-400 mt-0.5">{o.confidenceReason}</p>}
+                                {o.validationNotes && (
+                                  <p className="text-[10px] text-indigo-500 mt-0.5">Next validation: {o.validationNotes}</p>
+                                )}
+                                <div className="flex items-center gap-1 mt-1.5">
+                                  {(["hypothesis", "validating", "validated", "live", "rejected"] as const).map((s) => (
+                                    <button
+                                      key={s}
+                                      onClick={() => {
+                                        setData((d) => d ? { ...d, chat: { ...d.chat, offers: d.chat.offers.map((offer) => offer.id === o.id ? { ...offer, status: s } : offer) } } : d);
+                                        fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "updateOfferStatus", offerId: o.id, status: s }) });
+                                      }}
+                                      className={`text-[9px] px-1.5 py-0.5 rounded-full border transition-all ${o.status === s ? statusColors[s] : "text-gray-300 border-gray-200 hover:border-gray-300"}`}
+                                    >{s === "live" ? "🟢 live" : s}</button>
+                                  ))}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                    })}
+                  </div>
+                )}
+
+                {data.chat.offers.length === 0 && !researchingOffers && (
+                  <p className="text-xs text-gray-400 text-center py-3">Hit &ldquo;Generate Offers&rdquo; to research 3-5 offers based on your team&apos;s full context — conversations, abilities, metrics, and momentum.</p>
+                )}
+              </div>
+
               {!data.chat.priorityNarrative && !prioritizing && (
                 <div className="bg-gray-50 border border-gray-200 rounded-xl p-6 mb-4 text-center">
                   <p className="text-sm text-gray-500 mb-3">No priorities analyzed yet. Run the AI to score tasks by momentum, impact, effort, and switching costs.</p>

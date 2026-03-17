@@ -72,6 +72,36 @@ export interface IMenuItem {
   createdAt: Date;
 }
 
+export interface IOffer {
+  id: string;
+  name: string;
+  description: string;
+  pricePoint: string;
+  targetBuyer: string;
+  whyNow: string;
+  deliveryMethod: string;
+  costToDeliver: string;
+  revenueEstimate: string;
+  confidenceScore: number;
+  confidenceReason: string;
+  validationNotes: string;
+  status: "hypothesis" | "validating" | "validated" | "rejected" | "live";
+  iteration: number;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface IOfferResearchLog {
+  id: string;
+  iteration: number;
+  action: string;
+  result: string;
+  keptOffers: string[];
+  discardedOffers: string[];
+  newOffers: string[];
+  createdAt: Date;
+}
+
 export interface IChat extends Document {
   telegramChatId: string;
   chatTitle?: string;
@@ -97,6 +127,9 @@ export interface IChat extends Document {
   priorityNarrative: string;
   leveragePlay: string;
   lastPrioritizedAt: Date;
+  offers: IOffer[];
+  offerResearchLog: IOfferResearchLog[];
+  offerIteration: number;
   messagesSinceSummary: number;
   createdAt: Date;
   updatedAt: Date;
@@ -151,6 +184,23 @@ const ChatSchema = new Schema<IChat>(
     priorityNarrative: { type: String, default: "" },
     leveragePlay: { type: String, default: "" },
     lastPrioritizedAt: { type: Date },
+    offers: { type: [{
+      id: String, name: String, description: { type: String, default: "" },
+      pricePoint: { type: String, default: "" }, targetBuyer: { type: String, default: "" },
+      whyNow: { type: String, default: "" }, deliveryMethod: { type: String, default: "" },
+      costToDeliver: { type: String, default: "" }, revenueEstimate: { type: String, default: "" },
+      confidenceScore: { type: Number, default: 0 }, confidenceReason: { type: String, default: "" },
+      validationNotes: { type: String, default: "" },
+      status: { type: String, enum: ["hypothesis", "validating", "validated", "rejected", "live"], default: "hypothesis" },
+      iteration: { type: Number, default: 1 },
+      createdAt: { type: Date, default: Date.now }, updatedAt: { type: Date, default: Date.now },
+    }], default: [] },
+    offerResearchLog: { type: [{
+      id: String, iteration: Number, action: String, result: String,
+      keptOffers: [String], discardedOffers: [String], newOffers: [String],
+      createdAt: { type: Date, default: Date.now },
+    }], default: [] },
+    offerIteration: { type: Number, default: 0 },
     messagesSinceSummary: { type: Number, default: 0 },
   },
   { timestamps: true }
