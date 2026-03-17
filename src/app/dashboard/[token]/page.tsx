@@ -241,6 +241,7 @@ export default function DashboardPage() {
   const [feedQuestion, setFeedQuestion] = useState<{ index: number; text: string } | null>(null);
   const [feedQuestionLoading, setFeedQuestionLoading] = useState(false);
   const [feedAnswers, setFeedAnswers] = useState<Record<number, string>>({});
+  const [focusedFeedIdx, setFocusedFeedIdx] = useState<number>(-1);
   const [newInitName, setNewInitName] = useState("");
   const [newInitDesc, setNewInitDesc] = useState("");
   const [editingDateId, setEditingDateId] = useState<string | null>(null);
@@ -274,6 +275,69 @@ export default function DashboardPage() {
       setAbilitiesDraft(data.chat.abilities);
     }
   }, [data, abilitiesDraft, abilitiesSaving]);
+
+  const visibleFeedIndices = data ? data.chat.aiFeed.map((f, i) => ({ i, status: f.status })).filter((x) => x.status !== "seen" && x.status !== "actioned").map((x) => x.i) : [];
+
+  const feedAction = useCallback((action: "seen" | "todo" | "ask" | "done") => {
+    if (!data || focusedFeedIdx < 0) return;
+    const pos = focusedFeedIndices();
+    if (pos === -1) return;
+    const i = visibleFeedIndices[pos >= 0 ? pos : 0];
+    if (i === undefined) return;
+    const item = data.chat.aiFeed[i];
+    if (!item) return;
+
+    if (action === "seen") {
+      setData((d) => d ? { ...d, chat: { ...d.chat, aiFeed: d.chat.aiFeed.map((f, fi) => fi === i ? { ...f, status: "seen" } : f) } } : d);
+      fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "feedItemStatus", feedIndex: i, status: "seen" }) });
+    } else if (action === "todo") {
+      setData((d) => d ? { ...d, chat: { ...d.chat, aiFeed: d.chat.aiFeed.map((f, fi) => fi === i ? { ...f, status: "actioned" } : f) } } : d);
+      fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "addTask", task: { title: item.content.length > 80 ? item.content.slice(0, 80) + "..." : item.content, status: "todo", description: item.content } }) });
+      fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "feedItemStatus", feedIndex: i, status: "actioned" }) });
+      fetchData();
+    } else if (action === "ask") {
+      setFeedQuestion((prev) => prev?.index === i ? null : { index: i, text: "" });
+    } else if (action === "done") {
+      const ctx = prompt("What happened? Add context:");
+      if (ctx !== null && ctx.trim()) {
+        setData((d) => d ? { ...d, chat: { ...d.chat, aiFeed: d.chat.aiFeed.map((f, fi) => fi === i ? { ...f, status: "actioned" } : f) } } : d);
+        fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "feedItemStatus", feedIndex: i, status: "actioned" }) });
+        fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "feedDoneWithContext", feedContent: item.content, feedType: item.type, context: ctx.trim() }) });
+      }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, focusedFeedIdx, token]);
+
+  function focusedFeedIndices() {
+    if (focusedFeedIdx < 0 || focusedFeedIdx >= visibleFeedIndices.length) return -1;
+    return focusedFeedIdx;
+  }
+
+  useEffect(() => {
+    function handleFeedKeys(e: KeyboardEvent) {
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      if (visibleFeedIndices.length === 0) return;
+
+      if (e.key === "ArrowDown" || e.key === "j") {
+        e.preventDefault();
+        setFocusedFeedIdx((p) => Math.min(p + 1, visibleFeedIndices.length - 1));
+      } else if (e.key === "ArrowUp" || e.key === "k") {
+        e.preventDefault();
+        setFocusedFeedIdx((p) => Math.max(p - 1, 0));
+      } else if (e.key === "s" || e.key === "S") {
+        feedAction("seen");
+      } else if (e.key === "t" || e.key === "T") {
+        feedAction("todo");
+      } else if (e.key === "a" || e.key === "A") {
+        feedAction("ask");
+      } else if (e.key === "d" || e.key === "D") {
+        feedAction("done");
+      }
+    }
+    window.addEventListener("keydown", handleFeedKeys);
+    return () => window.removeEventListener("keydown", handleFeedKeys);
+  }, [visibleFeedIndices, feedAction]);
 
   async function setMode(newMode: string) {
     setData((d) => d ? { ...d, chat: { ...d.chat, mode: newMode } } : d);
@@ -803,6 +867,15 @@ export default function DashboardPage() {
                 </div>
               ) : (
                 <div className="space-y-2 max-h-[400px] overflow-y-auto">
+                  {focusedFeedIdx >= 0 && (
+                    <div className="flex items-center gap-3 text-[10px] text-gray-400 px-1 pb-1">
+                      <span>↑↓ navigate</span>
+                      <span><kbd className="px-1 py-0.5 bg-gray-100 rounded text-[9px] font-mono">S</kbd> seen</span>
+                      <span><kbd className="px-1 py-0.5 bg-gray-100 rounded text-[9px] font-mono">T</kbd> todo</span>
+                      <span><kbd className="px-1 py-0.5 bg-gray-100 rounded text-[9px] font-mono">A</kbd> ask</span>
+                      <span><kbd className="px-1 py-0.5 bg-gray-100 rounded text-[9px] font-mono">D</kbd> done</span>
+                    </div>
+                  )}
                   {data.chat.aiFeed.map((item, i) => {
                     if (item.status === "seen" || item.status === "actioned") return null;
                     const typeConfig: Record<string, { icon: string; color: string; bg: string }> = {
@@ -815,7 +888,7 @@ export default function DashboardPage() {
                     };
                     const cfg = typeConfig[item.type] || { icon: "📌", color: "text-gray-700", bg: "bg-gray-50 border-gray-200" };
                     return (
-                      <div key={i} className={`border rounded-lg px-4 py-3 ${cfg.bg}`}>
+                      <div key={i} className={`border rounded-lg px-4 py-3 ${cfg.bg} ${visibleFeedIndices[focusedFeedIdx] === i ? "ring-2 ring-indigo-400 ring-offset-1" : ""}`}>
                         <div className="flex items-start gap-2">
                           <span className="text-base mt-0.5">{cfg.icon}</span>
                           <div className="flex-1 min-w-0">
