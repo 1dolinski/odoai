@@ -593,7 +593,8 @@ export async function generateAiFeed(chatId: string): Promise<{ type: string; co
     return name ? `${name}${role && role !== "null" ? ` (${role})` : ""}${intentions.length ? ` — ${intentions.join(", ")}` : ""}` : null;
   }).filter(Boolean).join("\n") || "none";
 
-  const existingFeed = (chatDoc.aiFeed || []).slice(-5).map((f: { content: string }) => f.content).join("\n");
+  const recentFeedItems = (chatDoc.aiFeed || []).slice(-20);
+  const existingFeed = recentFeedItems.map((f: { type: string; content: string }) => `[${f.type}] ${f.content}`).join("\n");
 
   const initiatives = (chatDoc.initiatives || []).filter((i: { status: string }) => i.status === "active");
   const initiativeBlock = initiatives.length
@@ -642,11 +643,14 @@ Rules:
 - Be specific — reference actual task names, people, dates, initiatives
 - Cross-reference knowledge base findings with current tasks to surface connections
 - Consider the team's abilities when suggesting actions — suggest things they can actually do
-- Don't repeat what's already in recent feed: ${existingFeed || "nothing yet"}
+- CRITICAL DEDUP: Read the recent feed below carefully. Do NOT generate items about the same TOPIC, THEME, or SUBJECT as any existing item — even if you phrase it differently. Each new item must cover a genuinely different angle or topic. If you can't think of something new, return fewer items or [].
 - If nothing useful to say, return empty array []
 - Keep each item to 1-2 sentences (shout can be slightly longer)
 - Today is ${new Date().toISOString().split("T")[0]}
-- shout items get posted directly to the group chat, so make them count`,
+- shout: posted to the group chat. Max 1 per generation, ONLY if the topic hasn't been covered in recent feed. Skip shout entirely if recent feed already has shouts on similar topics.
+
+RECENT FEED (do NOT repeat these topics):
+${existingFeed || "nothing yet"}`,
     },
     {
       role: "user",
@@ -658,7 +662,17 @@ Rules:
     const cleaned = response.replace(/```json?\n?/g, "").replace(/```/g, "").trim();
     const items = JSON.parse(cleaned);
     if (!Array.isArray(items)) return [];
-    const filtered = items.filter((i: { type?: string; content?: string }) => i.type && i.content).slice(0, 5);
+    const valid = items.filter((i: { type?: string; content?: string }) => i.type && i.content).slice(0, 5);
+
+    const getKeywords = (s: string) => new Set(s.toLowerCase().replace(/[^a-z0-9\s]/g, "").split(/\s+/).filter((w) => w.length > 4));
+    const existingKeywordSets = recentFeedItems.map((f: { content: string }) => getKeywords(f.content));
+    const filtered = valid.filter((item: { content: string }) => {
+      const kw = getKeywords(item.content);
+      return !existingKeywordSets.some((existing: Set<string>) => {
+        const overlap = [...kw].filter((w) => existing.has(w)).length;
+        return overlap >= Math.min(4, Math.floor(kw.size * 0.5));
+      });
+    });
 
     // Write insights back to QMD for future retrieval
     if (filtered.length) {
