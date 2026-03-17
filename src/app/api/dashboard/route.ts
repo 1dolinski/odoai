@@ -828,10 +828,23 @@ Be specific with numbers. Compare across time periods when historical data is av
     const pk = process.env.APINOW_PRIVATE_KEY?.trim();
     steps.push({ step: "APINOW_PRIVATE_KEY exists", ok: !!pk, detail: pk ? `length=${pk.length}, starts=0x=${pk.startsWith("0x")}` : "missing" });
     if (pk) {
+      const t_sdk = Date.now();
+      try {
+        const { createClient } = await import("apinow-sdk");
+        let k = pk;
+        if (!k.startsWith("0x")) k = `0x${k}`;
+        const sdk = createClient({ privateKey: k as `0x${string}` });
+        const data = await sdk.callExternal("https://stablesocial.dev/api/instagram/profile", { method: "POST", body: { handle: "nike" } });
+        steps.push({ step: "SDK callExternal (0.21.0)", ok: true, detail: JSON.stringify(data).substring(0, 200), ms: Date.now() - t_sdk });
+      } catch (e: unknown) {
+        const err = e as Error;
+        steps.push({ step: "SDK callExternal (0.21.0)", ok: false, detail: `${err.message} | cause: ${err.cause ? JSON.stringify(err.cause, Object.getOwnPropertyNames(err.cause as object)) : "none"}`, ms: Date.now() - t_sdk });
+      }
+
       const t0 = Date.now();
       try {
         const result = await querySocial("instagram", "profile", { handle: "nike" }, { autoPoll: false });
-        steps.push({ step: "querySocial (trigger only)", ok: !result.error, detail: `pollStatus=${result.pollStatus} jobToken=${result.jobToken ? result.jobToken.substring(0, 30) + "…" : "no"} error=${result.error || "none"} cost=${result.cost}`, ms: Date.now() - t0 });
+        steps.push({ step: "custom callExternal (trigger)", ok: !result.error, detail: `pollStatus=${result.pollStatus} jobToken=${result.jobToken ? result.jobToken.substring(0, 30) + "…" : "no"} error=${result.error || "none"} cost=${result.cost}`, ms: Date.now() - t0 });
 
         if (result.jobToken) {
           const t1 = Date.now();
@@ -844,7 +857,7 @@ Be specific with numbers. Compare across time periods when historical data is av
         }
       } catch (e: unknown) {
         const err = e as Error;
-        steps.push({ step: "querySocial (trigger only)", ok: false, detail: `${err.message} | cause: ${err.cause ? JSON.stringify(err.cause, Object.getOwnPropertyNames(err.cause as object)) : "none"}`, ms: Date.now() - t0 });
+        steps.push({ step: "custom callExternal (trigger)", ok: false, detail: `${err.message} | cause: ${err.cause ? JSON.stringify(err.cause, Object.getOwnPropertyNames(err.cause as object)) : "none"}`, ms: Date.now() - t0 });
       }
     }
     return NextResponse.json({ ok: true, steps });
@@ -924,6 +937,32 @@ Be specific with numbers. Compare across time periods when historical data is av
       history: history.map((h) => ({
         data: (h as { data: Record<string, unknown> }).data,
         fetchedAt: (h as { fetchedAt: Date }).fetchedAt,
+      })),
+    });
+  }
+
+  if (action === "getSocialSnapshots") {
+    const snapshots = await DataSnapshot.aggregate([
+      { $match: { telegramChatId: chatId, sourceId: /^social-/ } },
+      { $sort: { fetchedAt: -1 } },
+      { $group: {
+        _id: { sourceId: "$sourceId", endpointId: "$endpointId" },
+        count: { $sum: 1 },
+        latest: { $first: "$fetchedAt" },
+        latestPollStatus: { $first: "$data.pollStatus" },
+        latestParams: { $first: "$data.params" },
+      }},
+      { $sort: { latest: -1 } },
+    ]);
+    return NextResponse.json({
+      ok: true,
+      snapshots: snapshots.map((s) => ({
+        sourceId: s._id.sourceId,
+        endpointId: s._id.endpointId,
+        count: s.count,
+        latest: s.latest,
+        pollStatus: s.latestPollStatus,
+        params: s.latestParams,
       })),
     });
   }

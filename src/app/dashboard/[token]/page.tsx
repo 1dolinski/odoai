@@ -260,6 +260,7 @@ export default function DashboardPage() {
   const [socialResult, setSocialResult] = useState<{ data: Record<string, unknown> | null; cost: string; error?: string; jobToken?: string; pollStatus?: string } | null>(null);
   const [pollLoading, setPollLoading] = useState(false);
   const [socialHistory, setSocialHistory] = useState<{ data: Record<string, unknown>; fetchedAt: string }[]>([]);
+  const [socialSnapshots, setSocialSnapshots] = useState<{ sourceId: string; endpointId: string; count: number; latest: string; pollStatus?: string; params?: Record<string, string> }[]>([]);
   const [dsLoading, setDsLoading] = useState(false);
   const [dsInsights, setDsInsights] = useState<string | null>(null);
   const [dsFetchedData, setDsFetchedData] = useState<{ sourceId: string; endpointId: string; data: Record<string, unknown> | null; error?: string }[] | null>(null);
@@ -319,6 +320,24 @@ export default function DashboardPage() {
         .catch(() => {});
     }
   }, [showDataSources, token]);
+
+  const refreshSocialSnapshots = () => {
+    if (token) {
+      fetch("/api/dashboard", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token, action: "getSocialSnapshots" }),
+      })
+        .then((r) => r.json())
+        .then((j) => setSocialSnapshots(j.snapshots || []))
+        .catch(() => {});
+    }
+  };
+
+  useEffect(() => {
+    if (showSocial && token) refreshSocialSnapshots();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showSocial, token]);
 
   const visibleFeedIndices = data ? data.chat.aiFeed.map((f, i) => ({ i, status: f.status })).filter((x) => x.status !== "seen" && x.status !== "actioned").map((x) => x.i) : [];
 
@@ -2071,6 +2090,37 @@ export default function DashboardPage() {
                 >Run connection test</button>
               </div>
 
+              {socialSnapshots.length > 0 && (
+                <div className="mb-4 border border-gray-100 rounded-lg overflow-hidden">
+                  <div className="bg-gray-50 px-3 py-2 border-b border-gray-100">
+                    <h4 className="text-xs font-semibold text-gray-700">Collected Data</h4>
+                  </div>
+                  <div className="divide-y divide-gray-50">
+                    {socialSnapshots.map((s) => {
+                      const platform = s.sourceId.replace("social-", "");
+                      const platformLabel = platform.charAt(0).toUpperCase() + platform.slice(1);
+                      const handle = s.params?.handle || s.params?.profile_id || s.params?.query || s.params?.post_id || "";
+                      return (
+                        <div key={`${s.sourceId}-${s.endpointId}`} className="flex items-center justify-between px-3 py-2">
+                          <div className="flex items-center gap-2">
+                            <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${s.pollStatus === "finished" ? "bg-green-50 text-green-700" : "bg-amber-50 text-amber-700"}`}>
+                              {s.pollStatus === "finished" ? "✓" : "⏳"}
+                            </span>
+                            <span className="text-xs font-medium text-gray-800">{platformLabel}</span>
+                            <span className="text-[11px] text-gray-500">{s.endpointId}</span>
+                            {handle && <span className="text-[10px] text-gray-400 font-mono">@{handle}</span>}
+                          </div>
+                          <div className="flex items-center gap-2 text-right">
+                            <span className="text-[10px] text-gray-400">{s.count} call{s.count !== 1 ? "s" : ""}</span>
+                            <span className="text-[10px] text-gray-400">{new Date(s.latest).toLocaleDateString()} {new Date(s.latest).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
                 <div>
                   <label className="text-xs font-medium text-gray-600 mb-1 block">Platform</label>
@@ -2180,6 +2230,7 @@ export default function DashboardPage() {
                       });
                       const histJson = await histRes.json();
                       setSocialHistory(histJson.history || []);
+                      refreshSocialSnapshots();
                     } catch (err) {
                       setSocialResult({ data: null, cost: "$0.00", error: String(err) });
                     }
@@ -2223,6 +2274,7 @@ export default function DashboardPage() {
                           });
                           const histJson = await histRes.json();
                           setSocialHistory(histJson.history || []);
+                          refreshSocialSnapshots();
                         } else if (json.status === "failed") {
                           setSocialResult((prev) => prev ? { ...prev, pollStatus: "failed", error: json.error } : prev);
                         }
