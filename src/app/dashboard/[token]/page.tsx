@@ -309,6 +309,9 @@ export default function DashboardPage() {
   const [dsInsights, setDsInsights] = useState<string | null>(null);
   const [dsFetchedData, setDsFetchedData] = useState<{ sourceId: string; endpointId: string; data: Record<string, unknown> | null; error?: string }[] | null>(null);
   const [dsSnapCounts, setDsSnapCounts] = useState<{ sourceId: string; endpointId: string; count: number; latest: string }[]>([]);
+  const [expandedSnap, setExpandedSnap] = useState<string | null>(null);
+  const [expandedSnapData, setExpandedSnapData] = useState<Record<string, { data: Record<string, unknown>; fetchedAt: string }[] | null>>({});
+  const [expandedSnapLoading, setExpandedSnapLoading] = useState<string | null>(null);
   const [abilitiesDraft, setAbilitiesDraft] = useState("");
   const [abilitiesSaving, setAbilitiesSaving] = useState(false);
   const [generatingSubtasks, setGeneratingSubtasks] = useState<string | null>(null);
@@ -2196,35 +2199,77 @@ export default function DashboardPage() {
                         );
                         const isOn = chatDs?.enabled ?? false;
                         const snapInfo = dsSnapCounts.find((s) => s.sourceId === source.id && s.endpointId === ep.id);
+                        const dsKey = `ds-${source.id}-${ep.id}`;
+                        const isDsExpanded = expandedSnap === dsKey;
+                        const latestDate = snapInfo?.latest || chatDs?.lastFetchAt;
+                        const isStale = latestDate ? Date.now() - new Date(latestDate).getTime() > 24 * 60 * 60 * 1000 : false;
                         return (
-                          <div key={ep.id} className="flex items-center gap-3 px-3 py-2.5">
-                            <button
-                              onClick={async () => {
-                                await fetch("/api/dashboard", {
-                                  method: "POST",
-                                  headers: { "Content-Type": "application/json" },
-                                  body: JSON.stringify({ token, action: "toggleEndpoint", sourceId: source.id, endpointId: ep.id }),
-                                });
-                                await fetchData();
-                              }}
-                              className={`relative inline-flex h-5 w-9 flex-shrink-0 items-center rounded-full transition-colors ${isOn ? "bg-green-500" : "bg-gray-300"}`}
-                            >
-                              <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${isOn ? "translate-x-4" : "translate-x-0.5"}`} />
-                            </button>
-                            <div className="flex-1 min-w-0">
-                              <div className="flex items-center gap-2">
-                                <code className="text-xs font-medium text-gray-700">{ep.id}</code>
-                                <span className="text-[10px] text-gray-400">{ep.description}</span>
+                          <div key={ep.id}>
+                            <div className="flex items-center gap-3 px-3 py-2.5">
+                              <button
+                                onClick={async () => {
+                                  await fetch("/api/dashboard", {
+                                    method: "POST",
+                                    headers: { "Content-Type": "application/json" },
+                                    body: JSON.stringify({ token, action: "toggleEndpoint", sourceId: source.id, endpointId: ep.id }),
+                                  });
+                                  await fetchData();
+                                }}
+                                className={`relative inline-flex h-5 w-9 flex-shrink-0 items-center rounded-full transition-colors ${isOn ? "bg-green-500" : "bg-gray-300"}`}
+                              >
+                                <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${isOn ? "translate-x-4" : "translate-x-0.5"}`} />
+                              </button>
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-2">
+                                  <code className="text-xs font-medium text-gray-700">{ep.id}</code>
+                                  <span className="text-[10px] text-gray-400">{ep.description}</span>
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-2 flex-shrink-0">
+                                {snapInfo && (
+                                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-50 text-blue-600 font-medium">{snapInfo.count} snapshot{snapInfo.count !== 1 ? "s" : ""}</span>
+                                )}
+                                {latestDate && (
+                                  <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${isStale ? "bg-amber-50 text-amber-700" : "bg-green-50 text-green-700"}`}>{timeAgo(latestDate)}</span>
+                                )}
+                                {snapInfo && snapInfo.count > 0 && (
+                                  <button
+                                    className="text-[10px] text-indigo-500 hover:text-indigo-700 font-medium"
+                                    onClick={async () => {
+                                      if (isDsExpanded) { setExpandedSnap(null); return; }
+                                      setExpandedSnap(dsKey);
+                                      if (!expandedSnapData[dsKey]) {
+                                        setExpandedSnapLoading(dsKey);
+                                        try {
+                                          const res = await fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "getSnapshotHistory", sourceId: source.id, endpointId: ep.id, limit: 3 }) });
+                                          const json = await res.json();
+                                          setExpandedSnapData((prev) => ({ ...prev, [dsKey]: json.history || [] }));
+                                        } catch { setExpandedSnapData((prev) => ({ ...prev, [dsKey]: [] })); }
+                                        setExpandedSnapLoading(null);
+                                      }
+                                    }}
+                                  >{isDsExpanded ? "Hide ▲" : "View ▼"}</button>
+                                )}
                               </div>
                             </div>
-                            <div className="flex items-center gap-2 flex-shrink-0">
-                              {snapInfo && (
-                                <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-50 text-blue-600 font-medium">{snapInfo.count} snapshot{snapInfo.count !== 1 ? "s" : ""}</span>
-                              )}
-                              {chatDs?.lastFetchAt && (
-                                <span className="text-[10px] text-gray-400">{new Date(chatDs.lastFetchAt).toLocaleDateString()}</span>
-                              )}
-                            </div>
+                            {isDsExpanded && (
+                              <div className="px-3 pb-3 bg-gray-50/50 ml-12">
+                                {expandedSnapLoading === dsKey ? (
+                                  <p className="text-[10px] text-gray-400 py-2">Loading...</p>
+                                ) : (expandedSnapData[dsKey] || []).length === 0 ? (
+                                  <p className="text-[10px] text-gray-400 py-2">No snapshots stored yet.</p>
+                                ) : (
+                                  <div className="space-y-2 max-h-[400px] overflow-y-auto">
+                                    {(expandedSnapData[dsKey] || []).map((h, i) => (
+                                      <div key={i} className="bg-white rounded-lg border border-gray-100 p-2">
+                                        <p className="text-[10px] text-gray-400 mb-1 font-medium">{new Date(h.fetchedAt).toLocaleString()} ({timeAgo(h.fetchedAt)})</p>
+                                        <pre className="text-[10px] text-gray-600 whitespace-pre-wrap break-all max-h-[300px] overflow-y-auto">{renderJsonWithLinks(h.data)}</pre>
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            )}
                           </div>
                         );
                       })}
@@ -2295,20 +2340,59 @@ export default function DashboardPage() {
                       const platform = s.sourceId.replace("social-", "");
                       const platformLabel = platform.charAt(0).toUpperCase() + platform.slice(1);
                       const handle = s.params?.handle || s.params?.profile_id || s.params?.query || s.params?.post_id || "";
+                      const snapKey = `social-${platform}-${s.endpointId}`;
+                      const isExpanded = expandedSnap === snapKey;
+                      const isStale = Date.now() - new Date(s.latest).getTime() > 24 * 60 * 60 * 1000;
                       return (
-                        <div key={`${s.sourceId}-${s.endpointId}`} className="flex items-center justify-between px-3 py-2">
-                          <div className="flex items-center gap-2">
-                            <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${s.pollStatus === "finished" ? "bg-green-50 text-green-700" : "bg-amber-50 text-amber-700"}`}>
-                              {s.pollStatus === "finished" ? "✓" : "⏳"}
-                            </span>
-                            <span className="text-xs font-medium text-gray-800">{platformLabel}</span>
-                            <span className="text-[11px] text-gray-500">{s.endpointId}</span>
-                            {handle && <span className="text-[10px] text-gray-400 font-mono">@{handle}</span>}
-                          </div>
-                          <div className="flex items-center gap-2 text-right">
-                            <span className="text-[10px] text-gray-400">{s.count} call{s.count !== 1 ? "s" : ""}</span>
-                            <span className="text-[10px] text-gray-400">{new Date(s.latest).toLocaleDateString()} {new Date(s.latest).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
-                          </div>
+                        <div key={snapKey}>
+                          <button
+                            className="w-full flex items-center justify-between px-3 py-2 hover:bg-gray-50 transition-colors text-left"
+                            onClick={async () => {
+                              if (isExpanded) { setExpandedSnap(null); return; }
+                              setExpandedSnap(snapKey);
+                              if (!expandedSnapData[snapKey]) {
+                                setExpandedSnapLoading(snapKey);
+                                try {
+                                  const res = await fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "getSocialHistory", platform, endpoint: s.endpointId, limit: 3 }) });
+                                  const json = await res.json();
+                                  setExpandedSnapData((prev) => ({ ...prev, [snapKey]: json.history || [] }));
+                                } catch { setExpandedSnapData((prev) => ({ ...prev, [snapKey]: [] })); }
+                                setExpandedSnapLoading(null);
+                              }
+                            }}
+                          >
+                            <div className="flex items-center gap-2">
+                              <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${s.pollStatus === "finished" ? "bg-green-50 text-green-700" : "bg-amber-50 text-amber-700"}`}>
+                                {s.pollStatus === "finished" ? "✓" : "⏳"}
+                              </span>
+                              <span className="text-xs font-medium text-gray-800">{platformLabel}</span>
+                              <span className="text-[11px] text-gray-500">{s.endpointId}</span>
+                              {handle && <span className="text-[10px] text-gray-400 font-mono">@{handle}</span>}
+                            </div>
+                            <div className="flex items-center gap-2 text-right">
+                              <span className="text-[10px] text-gray-400">{s.count} call{s.count !== 1 ? "s" : ""}</span>
+                              <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${isStale ? "bg-amber-50 text-amber-700" : "bg-green-50 text-green-700"}`}>{timeAgo(s.latest)}</span>
+                              <span className="text-[10px] text-gray-300">{isExpanded ? "▲" : "▼"}</span>
+                            </div>
+                          </button>
+                          {isExpanded && (
+                            <div className="px-3 pb-3 bg-gray-50/50">
+                              {expandedSnapLoading === snapKey ? (
+                                <p className="text-[10px] text-gray-400 py-2">Loading...</p>
+                              ) : (expandedSnapData[snapKey] || []).length === 0 ? (
+                                <p className="text-[10px] text-gray-400 py-2">No data stored yet.</p>
+                              ) : (
+                                <div className="space-y-2 max-h-[400px] overflow-y-auto">
+                                  {(expandedSnapData[snapKey] || []).map((h, i) => (
+                                    <div key={i} className="bg-white rounded-lg border border-gray-100 p-2">
+                                      <p className="text-[10px] text-gray-400 mb-1 font-medium">{new Date(h.fetchedAt).toLocaleString()} ({timeAgo(h.fetchedAt)})</p>
+                                      <pre className="text-[10px] text-gray-600 whitespace-pre-wrap break-all max-h-[300px] overflow-y-auto">{renderJsonWithLinks(h.data)}</pre>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          )}
                         </div>
                       );
                     })}
