@@ -141,6 +141,7 @@ interface DashboardData {
     watchSettings: WatchSettings;
     contextSummary: string;
     messageCount: number;
+    dataSources: { sourceId: string; enabled: boolean; lastFetchAt?: string; cachedData?: Record<string, unknown> }[];
   };
   initiatives: Initiative[];
   tasks: Task[];
@@ -156,6 +157,7 @@ interface DashboardData {
   };
   recentSpends: SpendEntry[];
   walletAddress: string;
+  availableDataSources: { id: string; name: string; description: string; configured: boolean; endpoints: { id: string; description: string }[] }[];
 }
 
 type AiStyle = "concise" | "detailed" | "casual" | "professional" | "technical";
@@ -246,6 +248,10 @@ export default function DashboardPage() {
   const [showInitiatives, setShowInitiatives] = useState(false);
   const [showFeed, setShowFeed] = useState(false);
   const [showAbilities, setShowAbilities] = useState(false);
+  const [showDataSources, setShowDataSources] = useState(false);
+  const [dsLoading, setDsLoading] = useState(false);
+  const [dsInsights, setDsInsights] = useState<string | null>(null);
+  const [dsFetchedData, setDsFetchedData] = useState<{ sourceId: string; endpointId: string; data: Record<string, unknown> | null; error?: string }[] | null>(null);
   const [abilitiesDraft, setAbilitiesDraft] = useState("");
   const [abilitiesSaving, setAbilitiesSaving] = useState(false);
   const [generatingSubtasks, setGeneratingSubtasks] = useState<string | null>(null);
@@ -791,7 +797,7 @@ export default function DashboardPage() {
               {syncing ? "..." : "Sync"}
             </button>
             <button
-              onClick={() => { setShowWallet(!showWallet); setShowFeed(false); setShowPeople(false); setShowContext(false); setShowDump(false); setShowGuidance(false); setShowActions(false); setShowWatch(false); }}
+              onClick={() => { setShowWallet(!showWallet); setShowFeed(false); setShowPeople(false); setShowContext(false); setShowDump(false); setShowGuidance(false); setShowActions(false); setShowWatch(false); setShowDataSources(false); }}
               className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium border transition-all ${
                 showWallet ? "bg-gray-900 text-white border-gray-900" : "bg-gray-100 text-gray-600 border-gray-200 hover:border-gray-400"
               }`}
@@ -825,12 +831,13 @@ export default function DashboardPage() {
               { key: "actions", label: "Quick Actions", state: showActions, set: setShowActions },
               { key: "watch", label: "Watch List", state: showWatch, set: setShowWatch },
               { key: "abilities", label: "Abilities", state: showAbilities, set: setShowAbilities },
+              { key: "dataSources", label: `Data Sources${(data.availableDataSources || []).length ? ` (${(data.chat.dataSources || []).filter((ds: { enabled: boolean }) => ds.enabled).length}/${(data.availableDataSources || []).length})` : ""}`, state: showDataSources, set: setShowDataSources },
             ] as { key: string; label: string; state: boolean; set: (v: boolean) => void }[]).map((btn) => (
               <button
                 key={btn.key}
                 onClick={() => {
                   const next = !btn.state;
-                  setShowFeed(false); setShowPeople(false); setShowInitiatives(false); setShowContext(false); setShowDump(false); setShowGuidance(false); setShowActions(false); setShowWatch(false); setShowWallet(false); setShowAbilities(false);
+                  setShowFeed(false); setShowPeople(false); setShowInitiatives(false); setShowContext(false); setShowDump(false); setShowGuidance(false); setShowActions(false); setShowWatch(false); setShowWallet(false); setShowAbilities(false); setShowDataSources(false);
                   btn.set(next);
                 }}
                 className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all border ${
@@ -1861,6 +1868,127 @@ export default function DashboardPage() {
                 </button>
                 <span className="text-xs text-gray-400">Used by AI when generating subtask steps</span>
               </div>
+            </div>
+          )}
+
+          {showDataSources && (
+            <div className="mt-4 bg-white border border-gray-200 rounded-xl p-3 sm:p-5 shadow-sm">
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <h3 className="text-sm font-semibold text-gray-800">Data Sources</h3>
+                  <p className="text-xs text-gray-500 mt-0.5">Connect external APIs to feed live data into AI insights and feed generation.</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    disabled={dsLoading}
+                    onClick={async () => {
+                      setDsLoading(true);
+                      setDsInsights(null);
+                      try {
+                        const res = await fetch("/api/dashboard", {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ token, action: "fetchDataSources" }),
+                        });
+                        const json = await res.json();
+                        setDsFetchedData(json.data || []);
+                      } catch { /* ignore */ }
+                      setDsLoading(false);
+                    }}
+                    className="text-xs px-3 py-1.5 rounded-lg font-medium border bg-white text-gray-600 border-gray-200 hover:border-gray-400 disabled:opacity-50 transition-all"
+                  >
+                    {dsLoading ? "Fetching..." : "Fetch Data"}
+                  </button>
+                  <button
+                    disabled={dsLoading}
+                    onClick={async () => {
+                      setDsLoading(true);
+                      setDsInsights(null);
+                      try {
+                        const res = await fetch("/api/dashboard", {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ token, action: "analyzeDataSources" }),
+                        });
+                        const json = await res.json();
+                        setDsInsights(json.insights || "No insights.");
+                      } catch { /* ignore */ }
+                      setDsLoading(false);
+                    }}
+                    className="text-xs px-3 py-1.5 rounded-lg font-medium bg-gray-800 text-white hover:bg-gray-900 disabled:opacity-50 transition-all shadow-sm"
+                  >
+                    {dsLoading ? "Analyzing..." : "Analyze"}
+                  </button>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                {(data.availableDataSources || []).map((source: { id: string; name: string; description: string; configured: boolean; endpoints: { id: string; description: string }[] }) => {
+                  const chatDs = (data.chat.dataSources || []).find((ds: { sourceId: string }) => ds.sourceId === source.id);
+                  const isEnabled = chatDs?.enabled ?? false;
+                  return (
+                    <div key={source.id} className="flex items-start gap-3 p-3 rounded-lg border border-gray-100 bg-gray-50/50">
+                      <button
+                        onClick={async () => {
+                          const action = isEnabled ? "disableDataSource" : "enableDataSource";
+                          await fetch("/api/dashboard", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ token, action, sourceId: source.id }),
+                          });
+                          await fetchData();
+                        }}
+                        className={`mt-0.5 relative inline-flex h-5 w-9 flex-shrink-0 items-center rounded-full transition-colors ${isEnabled ? "bg-green-500" : "bg-gray-300"}`}
+                      >
+                        <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${isEnabled ? "translate-x-4" : "translate-x-0.5"}`} />
+                      </button>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-medium text-gray-800">{source.name}</span>
+                          {source.configured ? (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-green-100 text-green-700 font-medium">API key set</span>
+                          ) : (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-100 text-red-600 font-medium">Missing key</span>
+                          )}
+                          {chatDs?.lastFetchAt && (
+                            <span className="text-[10px] text-gray-400">fetched {new Date(chatDs.lastFetchAt).toLocaleString()}</span>
+                          )}
+                        </div>
+                        <p className="text-xs text-gray-500 mt-0.5">{source.description}</p>
+                        <div className="flex flex-wrap gap-1 mt-1.5">
+                          {source.endpoints.map((ep) => (
+                            <span key={ep.id} className="text-[10px] px-1.5 py-0.5 rounded bg-gray-200 text-gray-600">{ep.id}: {ep.description.substring(0, 60)}{ep.description.length > 60 ? "…" : ""}</span>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+                {(data.availableDataSources || []).length === 0 && (
+                  <p className="text-sm text-gray-400 text-center py-4">No data sources registered yet.</p>
+                )}
+              </div>
+
+              {dsFetchedData && dsFetchedData.length > 0 && (
+                <div className="mt-4 border-t border-gray-200 pt-3">
+                  <h4 className="text-xs font-semibold text-gray-600 mb-2">Raw Data</h4>
+                  <div className="max-h-[300px] overflow-y-auto bg-gray-50 rounded-lg p-3">
+                    {dsFetchedData.map((d, i) => (
+                      <div key={i} className="mb-3 last:mb-0">
+                        <p className="text-[10px] font-medium text-gray-500 mb-1">{d.sourceId} → {d.endpointId}{d.error ? ` (error: ${d.error})` : ""}</p>
+                        {d.data && <pre className="text-[11px] text-gray-700 whitespace-pre-wrap break-all">{JSON.stringify(d.data, null, 2).substring(0, 3000)}</pre>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {dsInsights && (
+                <div className="mt-4 border-t border-gray-200 pt-3">
+                  <h4 className="text-xs font-semibold text-gray-600 mb-2">AI Analysis</h4>
+                  <div className="prose prose-sm max-w-none text-sm text-gray-700 whitespace-pre-wrap">{dsInsights}</div>
+                </div>
+              )}
             </div>
           )}
         </section>
