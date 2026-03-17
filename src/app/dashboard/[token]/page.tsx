@@ -208,7 +208,13 @@ export default function DashboardPage() {
   const [guidanceText, setGuidanceText] = useState("");
   const [guidanceSaving, setGuidanceSaving] = useState(false);
   const [guidanceSaved, setGuidanceSaved] = useState(false);
-  const [taskFilter, setTaskFilter] = useState<"all" | "todo" | "upcoming" | "done">("all");
+  const [taskFilters, setTaskFilters] = useState<Set<string>>(() => {
+    if (typeof window !== "undefined") {
+      const cached = localStorage.getItem("taskFilters");
+      if (cached) try { return new Set(JSON.parse(cached)); } catch {}
+    }
+    return new Set(["todo", "upcoming", "done"]);
+  });
   const [showCalendar, setShowCalendar] = useState(false);
   const [syncingMembers, setSyncingMembers] = useState(false);
   const [personDumpId, setPersonDumpId] = useState<string | null>(null);
@@ -595,7 +601,7 @@ export default function DashboardPage() {
   })) as (Task & { _isCheck?: boolean; _checkId?: string; _checkResult?: string })[];
 
   const allTasks = [...data.tasks.map((t) => ({ ...t, _isCheck: false, _checkId: "", _checkResult: "" })), ...checkTasks];
-  const filteredTasks = taskFilter === "all" ? allTasks : allTasks.filter((t) => t.status === taskFilter);
+  const filteredTasks = taskFilters.size === 3 ? allTasks : allTasks.filter((t) => taskFilters.has(t.status));
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 via-white to-gray-100 text-gray-900">
@@ -1744,23 +1750,33 @@ export default function DashboardPage() {
             <h2 className="text-lg font-semibold text-gray-800">Tasks</h2>
             <div className="flex gap-1 bg-gray-100 rounded-lg p-1">
               {([
-                { key: "all", label: "All", count: allTasks.length },
                 { key: "todo", label: "Todo", count: allTasks.filter((t) => t.status === "todo").length },
                 { key: "upcoming", label: "Upcoming", count: allTasks.filter((t) => t.status === "upcoming").length },
                 { key: "done", label: "Done", count: allTasks.filter((t) => t.status === "done").length },
-              ] as { key: "all" | "todo" | "upcoming" | "done"; label: string; count: number }[]).map((f) => (
-                <button
-                  key={f.key}
-                  onClick={() => setTaskFilter(f.key)}
-                  className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
-                    taskFilter === f.key
-                      ? "bg-white text-gray-900 shadow-sm"
-                      : "text-gray-500 hover:text-gray-700"
-                  }`}
-                >
-                  {f.label} ({f.count})
-                </button>
-              ))}
+              ] as { key: string; label: string; count: number }[]).map((f) => {
+                const active = taskFilters.has(f.key);
+                return (
+                  <button
+                    key={f.key}
+                    onClick={() => {
+                      setTaskFilters((prev) => {
+                        const next = new Set(prev);
+                        if (next.has(f.key)) { if (next.size > 1) next.delete(f.key); }
+                        else next.add(f.key);
+                        localStorage.setItem("taskFilters", JSON.stringify([...next]));
+                        return next;
+                      });
+                    }}
+                    className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
+                      active
+                        ? "bg-white text-gray-900 shadow-sm"
+                        : "text-gray-500 hover:text-gray-700"
+                    }`}
+                  >
+                    {f.label} ({f.count})
+                  </button>
+                );
+              })}
             </div>
           </div>
           <div className="space-y-2">
@@ -2096,7 +2112,7 @@ export default function DashboardPage() {
               <p className="text-sm text-gray-400 italic py-4 text-center">No items</p>
             )}
           </div>
-          {taskFilter === "upcoming" && (
+          {taskFilters.has("upcoming") && taskFilters.size === 1 && (
             <div className="mt-3">
               <button
                 onClick={() => setShowCalendar(!showCalendar)}
