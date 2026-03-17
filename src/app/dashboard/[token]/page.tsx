@@ -138,6 +138,7 @@ interface DashboardData {
     lastReviewedAt: string | null;
     aiFeedEnabled: boolean;
     aiFeed: { _id: string; type: string; content: string; status?: string; createdAt: string }[];
+    aiQuestions: { id: string; category: string; question: string; answer: string; answeredAt: string | null; createdAt: string }[];
     watchSettings: WatchSettings;
     contextSummary: string;
     messageCount: number;
@@ -296,6 +297,11 @@ export default function DashboardPage() {
   const [showAbilities, setShowAbilities] = useState(false);
   const [showDataSources, setShowDataSources] = useState(false);
   const [showSocial, setShowSocial] = useState(false);
+  const [showAiQuestions, setShowAiQuestions] = useState(false);
+  const [aiQGenerating, setAiQGenerating] = useState(false);
+  const [aiQDrafts, setAiQDrafts] = useState<Record<string, string>>({});
+  const [aiQSaving, setAiQSaving] = useState<string | null>(null);
+  const [aiQFilter, setAiQFilter] = useState<string>("all");
   const [socialPlatform, setSocialPlatform] = useState("");
   const [socialEndpoint, setSocialEndpoint] = useState("");
   const [socialEndpoints, setSocialEndpoints] = useState<{ id: string; path: string; description: string; dependsOn?: string; params: { name: string; required: boolean; description: string; default?: string }[] }[]>([]);
@@ -949,6 +955,7 @@ export default function DashboardPage() {
         <section className="mb-10">
           <div className="flex flex-wrap items-center gap-2">
             {([
+              { key: "aiQuestions", label: `AI Questions${data.chat.aiQuestions?.length ? ` (${data.chat.aiQuestions.filter((q) => !q.answer).length}/${data.chat.aiQuestions.length})` : ""}`, state: showAiQuestions, set: setShowAiQuestions },
               { key: "feed", label: "AI Feed", state: showFeed, set: setShowFeed },
               { key: "people", label: `People (${data.people.length})`, state: showPeople, set: setShowPeople },
               { key: "initiatives", label: `Initiatives (${(data.initiatives || []).filter((i) => i.status === "active").length})`, state: showInitiatives, set: setShowInitiatives },
@@ -965,19 +972,194 @@ export default function DashboardPage() {
                 key={btn.key}
                 onClick={() => {
                   const next = !btn.state;
-                  setShowFeed(false); setShowPeople(false); setShowInitiatives(false); setShowContext(false); setShowDump(false); setShowGuidance(false); setShowActions(false); setShowWatch(false); setShowWallet(false); setShowAbilities(false); setShowDataSources(false); setShowSocial(false);
+                  setShowFeed(false); setShowPeople(false); setShowInitiatives(false); setShowContext(false); setShowDump(false); setShowGuidance(false); setShowActions(false); setShowWatch(false); setShowWallet(false); setShowAbilities(false); setShowDataSources(false); setShowSocial(false); setShowAiQuestions(false);
                   btn.set(next);
                 }}
                 className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all border ${
                   btn.state
-                    ? "bg-gray-900 text-white border-gray-900"
-                    : "bg-white text-gray-600 border-gray-200 hover:border-gray-400"
+                    ? btn.key === "aiQuestions" ? "bg-indigo-600 text-white border-indigo-600 shadow-sm" : "bg-gray-900 text-white border-gray-900"
+                    : btn.key === "aiQuestions" ? "bg-indigo-50 text-indigo-700 border-indigo-200 hover:border-indigo-400 hover:bg-indigo-100" : "bg-white text-gray-600 border-gray-200 hover:border-gray-400"
                 }`}
               >
-                {btn.label}
+                {btn.key === "aiQuestions" && <span className="mr-1">✦</span>}{btn.label}
               </button>
             ))}
           </div>
+          {showAiQuestions && (
+            <div className="mt-4 bg-white border border-gray-200 rounded-xl p-3 sm:p-5 shadow-sm">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4">
+                <div>
+                  <h3 className="font-semibold text-gray-800">AI Questions</h3>
+                  <p className="text-xs text-gray-500 mt-0.5">AI-generated questions to understand your team better — fill in answers to improve strategy, sales, and partnership recommendations</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  {(data.chat.aiQuestions || []).length > 0 && (
+                    <button
+                      onClick={async () => {
+                        if (!confirm("Clear all AI questions?")) return;
+                        await fetch("/api/dashboard", {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ token, action: "clearAiQuestions" }),
+                        });
+                        setData((d) => d ? { ...d, chat: { ...d.chat, aiQuestions: [] } } : d);
+                        setAiQDrafts({});
+                      }}
+                      className="text-xs text-gray-400 hover:text-red-500 transition-colors"
+                    >
+                      Clear All
+                    </button>
+                  )}
+                  <button
+                    onClick={async () => {
+                      setAiQGenerating(true);
+                      try {
+                        const res = await fetch("/api/dashboard", {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ token, action: "generateAiQuestions" }),
+                        });
+                        const json = await res.json();
+                        if (json.ok && json.questions?.length) {
+                          fetchData();
+                        }
+                      } catch {}
+                      setAiQGenerating(false);
+                    }}
+                    disabled={aiQGenerating}
+                    className="bg-gray-800 hover:bg-gray-900 text-white px-3 py-1.5 rounded-lg text-xs font-medium disabled:opacity-50 shadow-sm flex items-center gap-1.5"
+                  >
+                    {aiQGenerating ? (
+                      <>
+                        <svg className="w-3 h-3 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2" /></svg>
+                        Generating…
+                      </>
+                    ) : "Generate Questions"}
+                  </button>
+                </div>
+              </div>
+
+              {(data.chat.aiQuestions || []).length > 0 && (
+                <>
+                  <div className="flex flex-wrap gap-1.5 mb-3">
+                    {["all", ...Array.from(new Set((data.chat.aiQuestions || []).map((q) => q.category)))].map((cat) => {
+                      const count = cat === "all" ? data.chat.aiQuestions.length : data.chat.aiQuestions.filter((q) => q.category === cat).length;
+                      const unanswered = cat === "all" ? data.chat.aiQuestions.filter((q) => !q.answer).length : data.chat.aiQuestions.filter((q) => q.category === cat && !q.answer).length;
+                      return (
+                        <button
+                          key={cat}
+                          onClick={() => setAiQFilter(cat)}
+                          className={`text-xs px-2.5 py-1 rounded-full font-medium transition-all border ${
+                            aiQFilter === cat
+                              ? "bg-gray-900 text-white border-gray-900"
+                              : "bg-white text-gray-500 border-gray-200 hover:border-gray-400"
+                          }`}
+                        >
+                          {cat === "all" ? "All" : cat.charAt(0).toUpperCase() + cat.slice(1)} ({unanswered}/{count})
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  <div className="space-y-3">
+                    {(data.chat.aiQuestions || [])
+                      .filter((q) => aiQFilter === "all" || q.category === aiQFilter)
+                      .map((q) => (
+                        <div key={q.id} className={`rounded-lg border p-3 transition-all ${q.answer ? "bg-green-50 border-green-200" : "bg-gray-50 border-gray-200"}`}>
+                          <div className="flex items-start justify-between gap-2 mb-2">
+                            <div className="flex-1">
+                              <span className={`inline-block text-[10px] font-semibold px-1.5 py-0.5 rounded mr-2 ${
+                                {
+                                  strategy: "bg-purple-100 text-purple-700",
+                                  abilities: "bg-blue-100 text-blue-700",
+                                  sales: "bg-emerald-100 text-emerald-700",
+                                  brand: "bg-orange-100 text-orange-700",
+                                  content: "bg-pink-100 text-pink-700",
+                                  faq: "bg-yellow-100 text-yellow-700",
+                                  general: "bg-gray-100 text-gray-700",
+                                }[q.category] || "bg-gray-100 text-gray-700"
+                              }`}>
+                                {q.category}
+                              </span>
+                              <span className="text-sm font-medium text-gray-800">{q.question}</span>
+                            </div>
+                            {q.answer && (
+                              <span className="text-[10px] text-green-600 font-medium whitespace-nowrap flex items-center gap-1">
+                                <svg className="w-3 h-3" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" /></svg>
+                                Answered
+                              </span>
+                            )}
+                          </div>
+                          {q.answer && !aiQDrafts[q.id] && (
+                            <div className="mt-1.5 text-sm text-gray-700 bg-white rounded p-2 border border-green-100 cursor-pointer hover:border-green-300 transition-colors" onClick={() => setAiQDrafts((d) => ({ ...d, [q.id]: q.answer }))}>
+                              {q.answer}
+                            </div>
+                          )}
+                          {(!q.answer || aiQDrafts[q.id] !== undefined) && (
+                            <div className="mt-1.5">
+                              <textarea
+                                value={aiQDrafts[q.id] ?? q.answer ?? ""}
+                                onChange={(e) => setAiQDrafts((d) => ({ ...d, [q.id]: e.target.value }))}
+                                placeholder="Type your answer…"
+                                rows={2}
+                                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-300 focus:border-indigo-400 outline-none resize-y"
+                              />
+                              <div className="flex justify-end gap-2 mt-1.5">
+                                {aiQDrafts[q.id] !== undefined && (
+                                  <button
+                                    onClick={() => setAiQDrafts((d) => { const n = { ...d }; delete n[q.id]; return n; })}
+                                    className="text-xs text-gray-400 hover:text-gray-600"
+                                  >
+                                    Cancel
+                                  </button>
+                                )}
+                                <button
+                                  disabled={aiQSaving === q.id || !(aiQDrafts[q.id] ?? "").trim()}
+                                  onClick={async () => {
+                                    const answer = (aiQDrafts[q.id] ?? "").trim();
+                                    setAiQSaving(q.id);
+                                    try {
+                                      await fetch("/api/dashboard", {
+                                        method: "POST",
+                                        headers: { "Content-Type": "application/json" },
+                                        body: JSON.stringify({ token, action: "answerAiQuestion", questionId: q.id, answer }),
+                                      });
+                                      setData((d) => d ? {
+                                        ...d,
+                                        chat: {
+                                          ...d.chat,
+                                          aiQuestions: d.chat.aiQuestions.map((existing) =>
+                                            existing.id === q.id ? { ...existing, answer, answeredAt: new Date().toISOString() } : existing
+                                          ),
+                                        },
+                                      } : d);
+                                      setAiQDrafts((d) => { const n = { ...d }; delete n[q.id]; return n; });
+                                    } catch {}
+                                    setAiQSaving(null);
+                                  }}
+                                  className="bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1 rounded-lg text-xs font-medium disabled:opacity-50 transition-colors"
+                                >
+                                  {aiQSaving === q.id ? "Saving…" : "Save"}
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                  </div>
+                </>
+              )}
+
+              {(data.chat.aiQuestions || []).length === 0 && !aiQGenerating && (
+                <div className="text-center py-8 text-gray-400">
+                  <svg className="w-10 h-10 mx-auto mb-2 text-gray-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M9.879 7.519c1.171-1.025 3.071-1.025 4.242 0 1.172 1.025 1.172 2.687 0 3.712-.203.179-.43.326-.67.442-.745.361-1.45.999-1.45 1.827v.75M12 18h.01" strokeLinecap="round" strokeLinejoin="round" /></svg>
+                  <p className="text-sm">No questions yet — click &ldquo;Generate Questions&rdquo; to get started</p>
+                  <p className="text-xs mt-1">AI will look at everything it knows about your team and ask questions to help with attention, sales, and brand partnerships</p>
+                </div>
+              )}
+            </div>
+          )}
+
           {showFeed && (
             <div className="mt-4 bg-white border border-gray-200 rounded-xl p-3 sm:p-5 shadow-sm">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4">

@@ -9,7 +9,7 @@ import Person from "@/models/Person";
 import Job from "@/models/Job";
 import Check from "@/models/Check";
 import Activity from "@/models/Activity";
-import { autoExtract, maybeUpdateContext, deepProcessDump, generateAiFeed } from "@/lib/brain";
+import { autoExtract, maybeUpdateContext, deepProcessDump, generateAiFeed, generateAiQuestions } from "@/lib/brain";
 import { chat as aiChat } from "@/lib/openrouter";
 import { writeKnowledge, writePersonKnowledge, writePeopleSnapshot, qmdSearch, formatQMDResults } from "@/lib/knowledge";
 import { getChatAdmins, sendMessage } from "@/lib/telegram";
@@ -56,6 +56,14 @@ export async function GET(req: NextRequest) {
       aiFeed: (chat.aiFeed || []).map((f: { _id?: unknown; type: string; content: string; status?: string; createdAt: Date }) => ({ _id: String(f._id || ""), type: f.type, content: f.content, status: f.status || "new", createdAt: f.createdAt })).sort((a: { createdAt: Date }, b: { createdAt: Date }) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()),
       messageCount: chat.messages?.length || 0,
       dataSources: chat.dataSources || [],
+      aiQuestions: (chat.aiQuestions || []).map((q: { id: string; category: string; question: string; answer: string; answeredAt?: Date; createdAt: Date }) => ({
+        id: q.id,
+        category: q.category,
+        question: q.question,
+        answer: q.answer || "",
+        answeredAt: q.answeredAt || null,
+        createdAt: q.createdAt,
+      })),
     },
     tasks,
     initiatives: chat.initiatives || [],
@@ -559,6 +567,44 @@ ${chatDoc.contextSummary ? `\n## Team Context\n${chatDoc.contextSummary}` : ""}`
       console.error("generateFeed error:", err);
       return NextResponse.json({ ok: false, items: [], error: String(err) });
     }
+  }
+
+  if (action === "generateAiQuestions") {
+    const chatDoc = await Chat.findOne({ telegramChatId: chatId });
+    if (!chatDoc) return NextResponse.json({ error: "chat not found" }, { status: 404 });
+    try {
+      const questions = await generateAiQuestions(chatId);
+      if (questions.length) {
+        const entries = questions.map((q) => ({ id: q.id, category: q.category, question: q.question, answer: "", createdAt: new Date() }));
+        await Chat.updateOne({ telegramChatId: chatId }, { $push: { aiQuestions: { $each: entries } } });
+        Activity.create({ telegramChatId: chatId, type: "ai_triggered", title: "AI questions generated", detail: `${questions.length} questions`, actor: "odoai" }).catch(console.error);
+      }
+      return NextResponse.json({ ok: true, questions });
+    } catch (err) {
+      console.error("generateAiQuestions error:", err);
+      return NextResponse.json({ ok: false, questions: [], error: String(err) });
+    }
+  }
+
+  if (action === "answerAiQuestion" && body.questionId && typeof body.answer === "string") {
+    const answer = (body.answer as string).trim();
+    await Chat.updateOne(
+      { telegramChatId: chatId, "aiQuestions.id": body.questionId },
+      { $set: { "aiQuestions.$.answer": answer, "aiQuestions.$.answeredAt": answer ? new Date() : null } }
+    );
+    if (answer) {
+      const chatDoc = await Chat.findOne({ telegramChatId: chatId });
+      const q = chatDoc?.aiQuestions?.find((q: { id: string }) => q.id === body.questionId);
+      if (q) {
+        writeKnowledge(chatId, "context", `ai-qa-${body.questionId}`, `# AI Q&A: ${q.category}\n\nQ: ${q.question}\nA: ${answer}`).catch(console.error);
+      }
+    }
+    return NextResponse.json({ ok: true });
+  }
+
+  if (action === "clearAiQuestions") {
+    await Chat.updateOne({ telegramChatId: chatId }, { $set: { aiQuestions: [] } });
+    return NextResponse.json({ ok: true });
   }
 
   if (action === "feedItemStatus" && body.status) {

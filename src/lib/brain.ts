@@ -732,3 +732,135 @@ ${existingFeed || "nothing yet"}`,
     return [];
   }
 }
+
+export async function generateAiQuestions(chatId: string): Promise<{ id: string; category: string; question: string }[]> {
+  const [chatDoc, tasks, people] = await Promise.all([
+    Chat.findOne({ telegramChatId: chatId }),
+    Task.find({ telegramChatId: chatId }).lean(),
+    Person.find({ telegramChatId: chatId }).lean(),
+  ]);
+  if (!chatDoc) return [];
+
+  const recentMessages = chatDoc.messages.slice(-30);
+  const transcript = recentMessages
+    .map((m: { telegramUsername?: string; firstName?: string; content: string }) =>
+      `${m.telegramUsername || m.firstName || "user"}: ${m.content}`
+    )
+    .join("\n");
+
+  const openTasks = tasks.filter((t) => (t as { status: string }).status !== "done");
+  const taskSummary = openTasks.map((t) => `[${(t as { status: string }).status}] ${(t as { title: string }).title}`).join("\n") || "none";
+
+  const peopleSummary = people.map((p) => {
+    const name = (p as { username?: string; firstName?: string }).username || (p as { username?: string; firstName?: string }).firstName;
+    const role = (p as { role?: string }).role;
+    const intentions = (p as { intentions?: string[] }).intentions || [];
+    return name ? `${name}${role && role !== "null" ? ` (${role})` : ""}${intentions.length ? ` — ${intentions.join(", ")}` : ""}` : null;
+  }).filter(Boolean).join("\n") || "none";
+
+  const initiatives = (chatDoc.initiatives || []).filter((i: { status: string }) => i.status === "active");
+  const initiativeBlock = initiatives.length
+    ? initiatives.map((i: { name: string; description: string }) => `- ${i.name}${i.description ? `: ${i.description}` : ""}`).join("\n")
+    : "";
+
+  const abilitiesBlock = chatDoc.abilities || "";
+
+  const dumps = (chatDoc.dumps || []).slice(-15).map((d: { text: string; category: string; subject: string }) =>
+    `[${d.category}${d.subject ? `:${d.subject}` : ""}] ${d.text.substring(0, 200)}`
+  ).join("\n");
+
+  const existingQA = (chatDoc.aiQuestions || [])
+    .filter((q: { answer: string }) => q.answer)
+    .map((q: { category: string; question: string; answer: string }) => `[${q.category}] Q: ${q.question}\nA: ${q.answer}`)
+    .join("\n\n");
+
+  const unanswered = (chatDoc.aiQuestions || [])
+    .filter((q: { answer: string }) => !q.answer)
+    .map((q: { category: string; question: string }) => `[${q.category}] ${q.question}`)
+    .join("\n");
+
+  let qmdContext = "";
+  const searchTerms = [
+    "team strategy goals",
+    "brand partnerships opportunities",
+    "sales revenue pipeline",
+    "content social media audience",
+  ];
+  for (const q of searchTerms) {
+    try {
+      const results = await qmdSearch(q, 3);
+      if (results.length) {
+        qmdContext += results.map((r) => `- ${r.title}: ${r.snippet?.substring(0, 150) || ""}`).join("\n") + "\n";
+      }
+    } catch { /* QMD unavailable */ }
+  }
+
+  const enabledEps = getEnabledEndpoints(chatDoc);
+  let dataSourceContext = "";
+  if (enabledEps.length) {
+    try {
+      const trendCtx = await buildTrendContext(chatId, enabledEps);
+      if (trendCtx) dataSourceContext = trendCtx.substring(0, 2000);
+    } catch { /* data sources unavailable */ }
+  }
+
+  const response = await aiChat([
+    {
+      role: "system",
+      content: `You are a strategic AI advisor helping a team build a stronger business profile. Your job is to generate SMART, SPECIFIC questions that will help you deeply understand this team so you can better help them get attention, sales, and brand partnerships.
+
+Generate questions across these categories:
+- strategy: Growth direction, positioning, competitive advantages, goals, target market
+- abilities: What the team can actually do, tools they use, skills, production capabilities
+- sales: Revenue model, pipeline, pricing, conversion, customer acquisition
+- brand: Partnership potential, what they offer partners, ideal partner profiles, collaboration ideas
+- content: Social strategy, content types, audience demographics, engagement patterns, distribution
+- faq: Questions their audience/customers/partners would commonly ask
+- general: Anything else that would help you understand the team better
+
+CRITICAL RULES:
+- Generate 5-8 questions total, spread across categories
+- Make questions SPECIFIC to what you already know about this team — reference their actual tasks, people, initiatives, data
+- Ask about GAPS in your knowledge — things you don't know yet that would help you advise better
+- Don't ask things you already have answers to from the existing Q&A below
+- Don't repeat questions from the unanswered list below
+- Questions should be actionable — the answer should directly help with attention, sales, or brand partnerships
+- Frame questions so the answers will help you give better strategic advice
+- Keep questions concise but specific
+
+Respond ONLY with valid JSON array. Each item: {"id": "unique-id", "category": "strategy"|"abilities"|"sales"|"brand"|"content"|"faq"|"general", "question": "the question"}`,
+    },
+    {
+      role: "user",
+      content: `TEAM CONTEXT: ${chatDoc.contextSummary || "none yet"}
+
+OPEN TASKS:\n${taskSummary}
+
+PEOPLE:\n${peopleSummary}
+${initiativeBlock ? `\nINITIATIVES:\n${initiativeBlock}` : ""}
+${abilitiesBlock ? `\nTEAM ABILITIES:\n${abilitiesBlock}` : ""}
+${dumps ? `\nDUMPS/NOTES:\n${dumps}` : ""}
+${qmdContext ? `\nKNOWLEDGE BASE:\n${qmdContext}` : ""}
+${dataSourceContext ? `\nDATA SOURCES:\n${dataSourceContext}` : ""}
+${existingQA ? `\nALREADY ANSWERED (don't ask these again):\n${existingQA}` : ""}
+${unanswered ? `\nSTILL UNANSWERED (don't repeat):\n${unanswered}` : ""}
+RECENT CHAT:\n${transcript || "no recent messages"}`,
+    },
+  ], "openai/gpt-4o-mini");
+
+  try {
+    const cleaned = response.replace(/```json?\n?/g, "").replace(/```/g, "").trim();
+    const items = JSON.parse(cleaned);
+    if (!Array.isArray(items)) return [];
+    return items
+      .filter((i: { id?: string; category?: string; question?: string }) => i.category && i.question)
+      .map((i: { id?: string; category: string; question: string }) => ({
+        id: i.id || `q-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        category: i.category,
+        question: i.question,
+      }))
+      .slice(0, 8);
+  } catch {
+    return [];
+  }
+}
