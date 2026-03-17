@@ -1,6 +1,10 @@
 import { createClient } from "apinow-sdk";
+import { privateKeyToAccount } from "viem/accounts";
+import { createSIWxPayload, encodeSIWxHeader } from "@x402/extensions/sign-in-with-x";
+import { decodePaymentRequiredHeader } from "@x402/core/http";
 
 const BASE_URL = "https://stablesocial.dev";
+const JOBS_URL = `${BASE_URL}/api/jobs`;
 
 let _client: ReturnType<typeof createClient> | null = null;
 
@@ -11,13 +15,21 @@ function cleanKey(raw: string): `0x${string}` {
   return k as `0x${string}`;
 }
 
+function getPrivateKey(): `0x${string}` {
+  const pk = process.env.APINOW_PRIVATE_KEY;
+  if (!pk) throw new Error("APINOW_PRIVATE_KEY not configured — set it in Vercel env vars");
+  return cleanKey(pk);
+}
+
 function getClient() {
   if (!_client) {
-    const pk = process.env.APINOW_PRIVATE_KEY;
-    if (!pk) throw new Error("APINOW_PRIVATE_KEY not configured — set it in Vercel env vars");
-    _client = createClient({ privateKey: cleanKey(pk) });
+    _client = createClient({ privateKey: getPrivateKey() });
   }
   return _client;
+}
+
+function getSigner() {
+  return privateKeyToAccount(getPrivateKey());
 }
 
 export function isConfigured(): boolean {
@@ -54,7 +66,7 @@ export const SOCIAL_PLATFORMS: Record<Platform, { label: string; endpoints: Soci
   instagram: {
     label: "Instagram",
     endpoints: [
-      { id: "profile", path: "/api/instagram/profile", description: "Get user profile", params: [{ name: "handle", required: true, description: "Username" }] },
+      { id: "profile", path: "/api/instagram/profile", description: "Get user profile", params: [{ name: "handle", required: true, description: "Username (without @)" }] },
       { id: "posts", path: "/api/instagram/posts", description: "Get user posts", dependsOn: "profile", params: [{ name: "handle", required: true, description: "Username" }, { name: "max_posts", required: false, description: "Max posts" }] },
       { id: "post-comments", path: "/api/instagram/post-comments", description: "Get post comments", dependsOn: "posts", params: [{ name: "post_id", required: true, description: "Post ID" }] },
       { id: "comment-replies", path: "/api/instagram/comment-replies", description: "Get replies to a comment", dependsOn: "post-comments", params: [{ name: "comment_id", required: true, description: "Comment ID" }] },
@@ -114,12 +126,103 @@ export interface SocialQueryResult {
   cost: string;
   fetchedAt: Date;
   error?: string;
+  jobToken?: string;
+  pollStatus?: "pending" | "finished" | "failed" | "timeout";
+}
+
+export interface PollResult {
+  status: "pending" | "finished" | "failed" | "timeout";
+  data?: unknown;
+  error?: string;
+  attempts: number;
+}
+
+async function siwxAuthFetch(url: string): Promise<Response> {
+  const signer = getSigner();
+  const res = await fetch(url);
+
+  if (res.status !== 402) return res;
+
+  const prHeader = res.headers.get("PAYMENT-REQUIRED") || res.headers.get("payment-required");
+  if (!prHeader) return res;
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let paymentRequired: any;
+  try {
+    paymentRequired = decodePaymentRequiredHeader(prHeader);
+  } catch {
+    return res;
+  }
+
+  const siwxExt = paymentRequired.extensions?.["sign-in-with-x"];
+  if (!siwxExt?.supportedChains?.length) return res;
+
+  const paymentNetwork = paymentRequired.accepts?.[0]?.network;
+  const chain = paymentNetwork
+    ? siwxExt.supportedChains.find((c: { chainId: string }) => c.chainId === paymentNetwork)
+    : siwxExt.supportedChains.find((c: { chainId: string }) => c.chainId.startsWith("eip155:"));
+
+  if (!chain) return res;
+
+  const completeInfo = { ...siwxExt.info, chainId: chain.chainId, type: chain.type };
+  const payload = await createSIWxPayload(completeInfo as Parameters<typeof createSIWxPayload>[0], signer);
+  const header = encodeSIWxHeader(payload);
+
+  return fetch(url, { headers: { "SIGN-IN-WITH-X": header } });
+}
+
+export async function pollJobResult(
+  token: string,
+  { maxAttempts = 20, initialDelayMs = 2000, maxDelayMs = 10000, deadlineMs = 50000 } = {}
+): Promise<PollResult> {
+  const url = `${JOBS_URL}?token=${encodeURIComponent(token)}`;
+  const start = Date.now();
+  let delay = initialDelayMs;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    if (Date.now() - start > deadlineMs) {
+      return { status: "timeout", attempts: attempt - 1, error: `Polling timed out after ${deadlineMs}ms` };
+    }
+
+    try {
+      const res = await siwxAuthFetch(url);
+
+      if (!res.ok && res.status !== 200) {
+        const text = await res.text().catch(() => "");
+        if (res.status === 401) return { status: "failed", attempts: attempt, error: `Token invalid/expired (401): ${text}` };
+        if (res.status === 403) return { status: "failed", attempts: attempt, error: `Wrong wallet (403): ${text}` };
+        if (res.status === 402) {
+          return { status: "failed", attempts: attempt, error: `SIWX auth not accepted (402) — server may not support server-side SIWX yet: ${text}` };
+        }
+        return { status: "failed", attempts: attempt, error: `HTTP ${res.status}: ${text}` };
+      }
+
+      const body = await res.json();
+
+      if (body.status === "finished") {
+        return { status: "finished", data: body.data, attempts: attempt };
+      }
+      if (body.status === "failed") {
+        return { status: "failed", error: body.error || "Job failed", attempts: attempt };
+      }
+    } catch (err) {
+      if (attempt === maxAttempts) {
+        return { status: "failed", attempts: attempt, error: `Poll error: ${err}` };
+      }
+    }
+
+    await new Promise((r) => setTimeout(r, delay));
+    delay = Math.min(delay * 1.5, maxDelayMs);
+  }
+
+  return { status: "timeout", attempts: maxAttempts, error: "Max poll attempts reached" };
 }
 
 export async function querySocial(
   platform: Platform,
   endpointId: string,
-  params: Record<string, string>
+  params: Record<string, string>,
+  { autoPoll = true, pollDeadlineMs = 50000 } = {}
 ): Promise<SocialQueryResult> {
   const platformDef = SOCIAL_PLATFORMS[platform];
   if (!platformDef) {
@@ -139,23 +242,47 @@ export async function querySocial(
       body: params,
     });
 
+    const parsed = typeof data === "string" ? JSON.parse(data) : data;
+
+    if (parsed?.token) {
+      const jobToken: string = parsed.token;
+
+      if (!autoPoll) {
+        return {
+          platform, endpoint: endpointId, params,
+          data: parsed, cost: "$0.07", fetchedAt: new Date(),
+          jobToken, pollStatus: "pending",
+        };
+      }
+
+      const poll = await pollJobResult(jobToken, { deadlineMs: pollDeadlineMs });
+
+      if (poll.status === "finished" && poll.data) {
+        return {
+          platform, endpoint: endpointId, params,
+          data: poll.data, cost: "$0.07", fetchedAt: new Date(),
+          jobToken, pollStatus: "finished",
+        };
+      }
+
+      return {
+        platform, endpoint: endpointId, params,
+        data: parsed, cost: "$0.07", fetchedAt: new Date(),
+        jobToken, pollStatus: poll.status,
+        error: poll.status !== "finished" ? `Poll ${poll.status} after ${poll.attempts} attempts: ${poll.error || ""}` : undefined,
+      };
+    }
+
     return {
-      platform,
-      endpoint: endpointId,
-      params,
-      data: typeof data === "string" ? JSON.parse(data) : data,
-      cost: "$0.06",
-      fetchedAt: new Date(),
+      platform, endpoint: endpointId, params,
+      data: parsed, cost: "$0.07", fetchedAt: new Date(),
+      pollStatus: "finished",
     };
   } catch (err) {
     _client = null;
     return {
-      platform,
-      endpoint: endpointId,
-      params,
-      data: null,
-      cost: "$0.00",
-      fetchedAt: new Date(),
+      platform, endpoint: endpointId, params,
+      data: null, cost: "$0.00", fetchedAt: new Date(),
       error: String(err),
     };
   }

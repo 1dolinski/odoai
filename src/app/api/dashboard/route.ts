@@ -14,7 +14,7 @@ import { chat as aiChat } from "@/lib/openrouter";
 import { writeKnowledge, writePersonKnowledge, writePeopleSnapshot } from "@/lib/knowledge";
 import { getChatAdmins, sendMessage } from "@/lib/telegram";
 import { getAvailableSources, fetchEnabledEndpoints, formatDataForAI, persistSnapshots, getSnapshotHistory, DATA_SOURCE_REGISTRY, fetchEndpoint } from "@/lib/dataSources";
-import { getAllPlatforms, getEndpointsForPlatform, querySocial, isConfigured as isSocialConfigured, type Platform } from "@/lib/social";
+import { getAllPlatforms, getEndpointsForPlatform, querySocial, pollJobResult, isConfigured as isSocialConfigured, type Platform } from "@/lib/social";
 import DataSnapshot from "@/models/DataSnapshot";
 
 export async function GET(req: NextRequest) {
@@ -835,24 +835,55 @@ Be specific with numbers. Compare across time periods when historical data is av
     try {
       const result = await querySocial(body.platform as Platform, body.endpoint, body.params);
       if (!result.error && result.data) {
+        const gotData = result.pollStatus === "finished" && !result.jobToken?.startsWith("eyJ");
         await DataSnapshot.create({
           telegramChatId: chatId,
           sourceId: `social-${body.platform}`,
           endpointId: body.endpoint,
-          data: { params: body.params, result: result.data },
+          data: { params: body.params, result: result.data, jobToken: result.jobToken, pollStatus: result.pollStatus },
           fetchedAt: result.fetchedAt,
+        });
+        if (gotData || result.pollStatus === "finished") {
+          writeKnowledge(
+            chatId,
+            "context",
+            `social-${body.platform}-${body.endpoint}-${Date.now()}`,
+            `# Social Data: ${body.platform}/${body.endpoint}\nParams: ${JSON.stringify(body.params)}\nFetched: ${result.fetchedAt.toISOString()}\nCost: ${result.cost}\nStatus: ${result.pollStatus}\n\n${JSON.stringify(result.data, null, 2).substring(0, 4000)}`,
+            { source: `social-${body.platform}`, endpoint: body.endpoint }
+          ).catch(console.error);
+        }
+      }
+      return NextResponse.json({ ok: true, ...result, fetchedAt: result.fetchedAt.toISOString() });
+    } catch (err) {
+      return NextResponse.json({ ok: false, error: String(err), cost: "$0.00", data: null, fetchedAt: new Date().toISOString() });
+    }
+  }
+
+  if (action === "pollSocialJob" && body.jobToken) {
+    if (!isSocialConfigured()) {
+      return NextResponse.json({ ok: false, error: "APINOW_PRIVATE_KEY not configured" });
+    }
+    try {
+      const poll = await pollJobResult(body.jobToken, { deadlineMs: body.deadlineMs || 25000 });
+      if (poll.status === "finished" && poll.data && body.platform && body.endpoint) {
+        await DataSnapshot.create({
+          telegramChatId: chatId,
+          sourceId: `social-${body.platform}`,
+          endpointId: body.endpoint,
+          data: { params: body.params || {}, result: poll.data, pollStatus: "finished" },
+          fetchedAt: new Date(),
         });
         writeKnowledge(
           chatId,
           "context",
           `social-${body.platform}-${body.endpoint}-${Date.now()}`,
-          `# Social Data: ${body.platform}/${body.endpoint}\nParams: ${JSON.stringify(body.params)}\nFetched: ${result.fetchedAt.toISOString()}\nCost: ${result.cost}\n\n${JSON.stringify(result.data, null, 2).substring(0, 4000)}`,
+          `# Social Data: ${body.platform}/${body.endpoint}\nPolled result\n\n${JSON.stringify(poll.data, null, 2).substring(0, 4000)}`,
           { source: `social-${body.platform}`, endpoint: body.endpoint }
         ).catch(console.error);
       }
-      return NextResponse.json({ ok: true, ...result });
+      return NextResponse.json({ ok: true, ...poll });
     } catch (err) {
-      return NextResponse.json({ ok: false, error: String(err), cost: "$0.00", data: null, fetchedAt: new Date() });
+      return NextResponse.json({ ok: false, status: "failed", error: String(err), attempts: 0 });
     }
   }
 

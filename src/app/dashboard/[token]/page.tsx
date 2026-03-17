@@ -257,7 +257,8 @@ export default function DashboardPage() {
   const [socialEndpoints, setSocialEndpoints] = useState<{ id: string; path: string; description: string; dependsOn?: string; params: { name: string; required: boolean; description: string }[] }[]>([]);
   const [socialParams, setSocialParams] = useState<Record<string, string>>({});
   const [socialLoading, setSocialLoading] = useState(false);
-  const [socialResult, setSocialResult] = useState<{ data: Record<string, unknown> | null; cost: string; error?: string } | null>(null);
+  const [socialResult, setSocialResult] = useState<{ data: Record<string, unknown> | null; cost: string; error?: string; jobToken?: string; pollStatus?: string } | null>(null);
+  const [pollLoading, setPollLoading] = useState(false);
   const [socialHistory, setSocialHistory] = useState<{ data: Record<string, unknown>; fetchedAt: string }[]>([]);
   const [dsLoading, setDsLoading] = useState(false);
   const [dsInsights, setDsInsights] = useState<string | null>(null);
@@ -2059,7 +2060,7 @@ export default function DashboardPage() {
                     <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-100 text-red-600 font-medium">APINOW_PRIVATE_KEY not set</span>
                   )}
                 </div>
-                <p className="text-xs text-gray-500 mt-0.5">Pull social media data via connected wallet. $0.06/request (USDC on Base).</p>
+                <p className="text-xs text-gray-500 mt-0.5">Pull social media data via apinow proxy. $0.07/request ($0.06 upstream + $0.01 proxy, USDC on Base).</p>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
@@ -2163,7 +2164,7 @@ export default function DashboardPage() {
                         body: JSON.stringify({ token, action: "querySocial", platform: socialPlatform, endpoint: socialEndpoint, params: socialParams }),
                       });
                       const json = await res.json();
-                      setSocialResult({ data: json.data, cost: json.cost, error: json.error });
+                      setSocialResult({ data: json.data, cost: json.cost, error: json.error, jobToken: json.jobToken, pollStatus: json.pollStatus });
                       const histRes = await fetch("/api/dashboard", {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
@@ -2181,21 +2182,70 @@ export default function DashboardPage() {
                   {socialLoading ? (
                     <>
                       <svg className="w-3.5 h-3.5 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2" /></svg>
-                      Querying...
+                      Querying + Polling…
                     </>
-                  ) : "Query ($0.06)"}
+                  ) : "Query & Fetch ($0.07)"}
                 </button>
                 {socialResult?.cost && !socialResult.error && (
-                  <span className="text-[10px] px-2 py-1 rounded bg-green-50 text-green-600 font-medium">Cost: {socialResult.cost} — stored as snapshot</span>
+                  <span className="text-[10px] px-2 py-1 rounded bg-green-50 text-green-600 font-medium">
+                    {socialResult.cost} — {socialResult.pollStatus === "finished" ? "data received & stored" : socialResult.pollStatus === "timeout" ? "poll timed out (can retry)" : socialResult.pollStatus === "pending" ? "job pending" : "stored as snapshot"}
+                  </span>
                 )}
                 {socialResult?.error && (
                   <span className="text-[10px] px-2 py-1 rounded bg-red-50 text-red-500 font-medium">{socialResult.error}</span>
+                )}
+                {socialResult?.jobToken && socialResult.pollStatus !== "finished" && (
+                  <button
+                    disabled={pollLoading}
+                    onClick={async () => {
+                      setPollLoading(true);
+                      try {
+                        const res = await fetch("/api/dashboard", {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ token, action: "pollSocialJob", jobToken: socialResult.jobToken, platform: socialPlatform, endpoint: socialEndpoint, params: socialParams, deadlineMs: 25000 }),
+                        });
+                        const json = await res.json();
+                        if (json.status === "finished" && json.data) {
+                          setSocialResult((prev) => prev ? { ...prev, data: json.data, pollStatus: "finished", error: undefined } : prev);
+                          const histRes = await fetch("/api/dashboard", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ token, action: "getSocialHistory", platform: socialPlatform, endpoint: socialEndpoint, limit: 5 }),
+                          });
+                          const histJson = await histRes.json();
+                          setSocialHistory(histJson.history || []);
+                        } else if (json.status === "failed") {
+                          setSocialResult((prev) => prev ? { ...prev, pollStatus: "failed", error: json.error } : prev);
+                        }
+                      } catch (err) {
+                        setSocialResult((prev) => prev ? { ...prev, error: `Poll error: ${err}` } : prev);
+                      }
+                      setPollLoading(false);
+                    }}
+                    className="px-3 py-1.5 bg-amber-500 text-white text-xs rounded-lg hover:bg-amber-600 disabled:opacity-50 transition-colors font-medium flex items-center gap-1.5"
+                  >
+                    {pollLoading ? (
+                      <>
+                        <svg className="w-3 h-3 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2" /></svg>
+                        Polling…
+                      </>
+                    ) : "Retry Poll"}
+                  </button>
                 )}
               </div>
 
               {socialResult?.data && (
                 <div className="mt-4 border-t border-gray-200 pt-3">
-                  <h4 className="text-xs font-semibold text-gray-600 mb-2">Result</h4>
+                  <h4 className="text-xs font-semibold text-gray-600 mb-2">
+                    {socialResult.pollStatus === "finished" ? "Result" : socialResult.pollStatus === "timeout" ? "Partial (Job Token)" : socialResult.pollStatus === "pending" ? "Pending…" : "Result"}
+                  </h4>
+                  {socialResult.pollStatus !== "finished" && socialResult.jobToken && (
+                    <div className="mb-2 p-2 bg-amber-50 border border-amber-200 rounded-lg">
+                      <p className="text-[11px] text-amber-700">Payment succeeded. Job submitted — polling via SIWX wallet auth{socialResult.pollStatus === "timeout" ? " timed out. Click Retry Poll to continue." : "."}</p>
+                      <p className="text-[10px] text-amber-600 mt-1 font-mono break-all">Token: {socialResult.jobToken.substring(0, 80)}…</p>
+                    </div>
+                  )}
                   <div className="max-h-[400px] overflow-y-auto bg-gray-50 rounded-lg p-3">
                     <pre className="text-[11px] text-gray-700 whitespace-pre-wrap break-all">{JSON.stringify(socialResult.data, null, 2)}</pre>
                   </div>
