@@ -26,6 +26,7 @@ export interface IPerson extends Document {
   email?: string;
   phone?: string;
   notes?: string;
+  avatarUrl?: string;
   dumps: IDump[];
   resources?: string;
   access?: string;
@@ -62,6 +63,7 @@ const PersonSchema = new Schema<IPerson>(
     email: String,
     phone: String,
     notes: String,
+    avatarUrl: { type: String, default: "" },
     dumps: { type: [DumpSchema], default: [] },
     resources: { type: String, default: "" },
     access: { type: String, default: "" },

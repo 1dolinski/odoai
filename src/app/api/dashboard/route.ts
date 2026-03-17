@@ -76,6 +76,7 @@ export async function GET(req: NextRequest) {
         dumps: p.dumps || [],
         resources: p.resources || "",
         access: p.access || "",
+        avatarUrl: p.avatarUrl || "",
         messageCount: p.messageCount || 0,
         lastSeen: p.lastSeen,
       }));
@@ -311,8 +312,14 @@ export async function POST(req: NextRequest) {
     if (contact.resources !== undefined) update.resources = contact.resources;
     if (contact.access !== undefined) update.access = contact.access;
     if (contact.personType !== undefined) update.personType = contact.personType;
+    if (contact.avatarUrl !== undefined) update.avatarUrl = contact.avatarUrl;
 
     await Person.updateOne({ _id: contact._id, telegramChatId: chatId }, { $set: update });
+    return NextResponse.json({ ok: true });
+  }
+
+  if (action === "updateAvatar" && body.personId && typeof body.avatarUrl === "string") {
+    await Person.updateOne({ _id: body.personId, telegramChatId: chatId }, { $set: { avatarUrl: body.avatarUrl } });
     return NextResponse.json({ ok: true });
   }
 

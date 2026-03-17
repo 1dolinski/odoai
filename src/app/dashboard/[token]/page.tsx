@@ -69,6 +69,7 @@ interface Person {
   dumps?: DumpEntry[];
   resources?: string;
   access?: string;
+  avatarUrl?: string;
   source: "telegram" | "manual";
   personType: "member" | "contact";
   messageCount: number;
@@ -1116,9 +1117,19 @@ export default function DashboardPage() {
                   return (
                     <div key={p._id} className="bg-gray-50 border border-gray-200 rounded-lg p-3">
                       <div className="flex items-center gap-2">
-                        <div className="w-7 h-7 rounded-full bg-gray-200 flex items-center justify-center text-xs font-medium text-gray-600 shrink-0">
-                          {(p.username || p.firstName || "?")[0].toUpperCase()}
-                        </div>
+                        <button
+                          onClick={() => {
+                            const url = prompt("Avatar image URL:", p.avatarUrl || "");
+                            if (url !== null) {
+                              setData((d) => d ? { ...d, people: d.people.map((pp) => pp._id === p._id ? { ...pp, avatarUrl: url } : pp) } : d);
+                              fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "updateAvatar", personId: p._id, avatarUrl: url }) });
+                            }
+                          }}
+                          className="w-7 h-7 rounded-full bg-gray-200 flex items-center justify-center text-xs font-medium text-gray-600 shrink-0 overflow-hidden hover:ring-2 hover:ring-indigo-300 transition-all cursor-pointer"
+                          title="Click to set avatar URL"
+                        >
+                          {p.avatarUrl ? <img src={p.avatarUrl} alt="" className="w-full h-full object-cover" /> : (p.username || p.firstName || "?")[0].toUpperCase()}
+                        </button>
                         <div className="flex-1 min-w-0">
                           <div className="font-medium text-xs text-gray-900 truncate">{p.username || p.firstName || "unknown"}</div>
                           <div className="text-[10px] text-gray-400">
@@ -2074,12 +2085,22 @@ export default function DashboardPage() {
                           </svg>
                         </button>
                         {t.people && t.people.length > 0 && (
-                          <span className="flex items-center gap-1 ml-1">
-                            {t.people.map((p) => (
-                              <span key={p} className="inline-flex items-center text-[10px] font-medium bg-indigo-50 text-indigo-600 border border-indigo-100 rounded-full px-1.5 py-0.5">
-                                {p}
-                              </span>
-                            ))}
+                          <span className="flex items-center -space-x-1 ml-1">
+                            {t.people.map((p) => {
+                              const person = data.people.find((pp) => (pp.username || pp.firstName || "").toLowerCase() === p.toLowerCase());
+                              const avatar = person?.avatarUrl;
+                              return (
+                                <span key={p} className="relative group">
+                                  {avatar ? (
+                                    <img src={avatar} alt={p} className="w-5 h-5 rounded-full border-2 border-white object-cover" title={p} />
+                                  ) : (
+                                    <span className="w-5 h-5 rounded-full border-2 border-white bg-indigo-100 text-indigo-600 flex items-center justify-center text-[9px] font-bold" title={p}>
+                                      {p[0].toUpperCase()}
+                                    </span>
+                                  )}
+                                </span>
+                              );
+                            })}
                           </span>
                         )}
                         {(t as { _isCheck?: boolean })._isCheck && (
