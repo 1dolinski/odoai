@@ -1,6 +1,9 @@
 import mongoose, { Schema, Document } from "mongoose";
 
 export type TaskStatus = "todo" | "upcoming" | "done";
+export type Momentum = "new" | "in-motion" | "stalled" | "blocked";
+export type EffortLevel = "low" | "medium" | "high";
+export type ImpactLevel = "low" | "medium" | "high";
 
 export interface ISubtask {
   id: string;
@@ -28,6 +31,13 @@ export interface ITask extends Document {
   createdBy: string;
   createdByUsername?: string;
   completedAt?: Date;
+  momentum: Momentum;
+  effort: EffortLevel;
+  impact: ImpactLevel;
+  blockedBy: string;
+  waitingOn: string;
+  priorityScore: number;
+  priorityReason: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -47,6 +57,13 @@ const TaskSchema = new Schema<ITask>(
     createdBy: { type: String, required: true },
     createdByUsername: String,
     completedAt: Date,
+    momentum: { type: String, enum: ["new", "in-motion", "stalled", "blocked"], default: "new" },
+    effort: { type: String, enum: ["low", "medium", "high"], default: "medium" },
+    impact: { type: String, enum: ["low", "medium", "high"], default: "medium" },
+    blockedBy: { type: String, default: "" },
+    waitingOn: { type: String, default: "" },
+    priorityScore: { type: Number, default: 0 },
+    priorityReason: { type: String, default: "" },
   },
   { timestamps: true }
 );

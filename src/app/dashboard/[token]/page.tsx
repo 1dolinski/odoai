@@ -29,6 +29,13 @@ interface Task {
   titleHistory?: TitleChange[];
   createdByUsername?: string;
   completedAt?: string;
+  momentum?: "new" | "in-motion" | "stalled" | "blocked";
+  effort?: "low" | "medium" | "high";
+  impact?: "low" | "medium" | "high";
+  blockedBy?: string;
+  waitingOn?: string;
+  priorityScore?: number;
+  priorityReason?: string;
   createdAt: string;
 }
 
@@ -142,6 +149,8 @@ interface DashboardData {
     menu: { id: string; name: string; description: string; price: string; category: string; aiSuggestions: string; targetBuyers: string; createdAt: string }[];
     watchSettings: WatchSettings;
     contextSummary: string;
+    priorityNarrative: string;
+    lastPrioritizedAt: string | null;
     messageCount: number;
     dataSources: { sourceId: string; endpointId: string; enabled: boolean; lastFetchAt?: string }[];
   };
@@ -270,13 +279,14 @@ export default function DashboardPage() {
   });
   const [categoryFilters, setCategoryFilters] = useState<Set<string>>(new Set());
   const [categorizing, setCategorizing] = useState(false);
-  const [taskViewMode, setTaskViewMode] = useState<"list" | "categories">(() => {
+  const [taskViewMode, setTaskViewMode] = useState<"list" | "categories" | "priorities">(() => {
     if (typeof window !== "undefined") {
       const cached = localStorage.getItem("taskViewMode");
-      if (cached === "list" || cached === "categories") return cached;
+      if (cached === "list" || cached === "categories" || cached === "priorities") return cached;
     }
     return "list";
   });
+  const [prioritizing, setPrioritizing] = useState(false);
   const [expandedCategory, setExpandedCategory] = useState<string | null>(null);
   const [showCalendar, setShowCalendar] = useState(false);
   const [syncingMembers, setSyncingMembers] = useState(false);
@@ -3054,9 +3064,9 @@ export default function DashboardPage() {
                 }}
                 className="text-[10px] text-gray-400 hover:text-gray-600 font-medium transition-colors disabled:opacity-50"
               >{categorizing ? "..." : activeTasks.some((t) => !t.categories || t.categories.length === 0) && allCategories.length > 0 ? "⟳ Re-categorize" : "⟳ Categorize"}</button>
-              {allCategories.length > 0 && (
-                <div className="flex gap-0.5 bg-gray-100 rounded-md p-0.5">
-                  <button onClick={() => { setTaskViewMode("list"); localStorage.setItem("taskViewMode", "list"); }} className={`px-2 py-1 rounded text-[10px] font-medium transition-all ${taskViewMode === "list" ? "bg-white text-gray-900 shadow-sm" : "text-gray-500"}`}>List</button>
+              <div className="flex gap-0.5 bg-gray-100 rounded-md p-0.5">
+                <button onClick={() => { setTaskViewMode("list"); localStorage.setItem("taskViewMode", "list"); }} className={`px-2 py-1 rounded text-[10px] font-medium transition-all ${taskViewMode === "list" ? "bg-white text-gray-900 shadow-sm" : "text-gray-500"}`}>List</button>
+                {allCategories.length > 0 && (
                   <button
                     disabled={categorizing}
                     onClick={async () => {
@@ -3072,12 +3082,210 @@ export default function DashboardPage() {
                     }}
                     className={`px-2 py-1 rounded text-[10px] font-medium transition-all ${taskViewMode === "categories" ? "bg-white text-gray-900 shadow-sm" : "text-gray-500"} disabled:opacity-50`}
                   >{categorizing ? "..." : "Categories"}</button>
-                </div>
-              )}
+                )}
+                <button
+                  disabled={prioritizing}
+                  onClick={async () => {
+                    if (taskViewMode === "priorities") { setTaskViewMode("list"); localStorage.setItem("taskViewMode", "list"); return; }
+                    const hasPriorities = activeTasks.some((t) => (t.priorityScore ?? 0) > 0);
+                    if (!hasPriorities) {
+                      setPrioritizing(true);
+                      await fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "prioritizeTasks" }) });
+                      await fetchData();
+                      setPrioritizing(false);
+                    }
+                    setTaskViewMode("priorities");
+                    localStorage.setItem("taskViewMode", "priorities");
+                  }}
+                  className={`px-2 py-1 rounded text-[10px] font-medium transition-all ${taskViewMode === "priorities" ? "bg-white text-gray-900 shadow-sm" : "text-gray-500"} disabled:opacity-50`}
+                >{prioritizing ? "..." : "Priorities"}</button>
+              </div>
             </div>
           </div>
 
-          {taskViewMode === "categories" && allCategories.length > 0 ? (
+          {taskViewMode === "priorities" ? (
+            <div className="mb-4">
+              {data.chat.priorityNarrative && (
+                <div className="bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-200 rounded-xl p-4 mb-4">
+                  <div className="flex items-start justify-between gap-2 mb-2">
+                    <h3 className="text-sm font-semibold text-amber-900">State of the Board</h3>
+                    <div className="flex items-center gap-2 shrink-0">
+                      {data.chat.lastPrioritizedAt && (
+                        <span className="text-[10px] text-amber-500">{timeAgo(data.chat.lastPrioritizedAt)}</span>
+                      )}
+                      <button
+                        disabled={prioritizing}
+                        onClick={async () => {
+                          setPrioritizing(true);
+                          await fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "prioritizeTasks" }) });
+                          await fetchData();
+                          setPrioritizing(false);
+                        }}
+                        className="text-[10px] text-amber-600 hover:text-amber-800 font-medium disabled:opacity-50"
+                      >{prioritizing ? "Re-prioritizing..." : "Re-prioritize"}</button>
+                    </div>
+                  </div>
+                  <div className="text-sm text-amber-800 leading-relaxed whitespace-pre-line [&>p]:mb-2" dangerouslySetInnerHTML={{ __html: data.chat.priorityNarrative.replace(/\*\*(.+?)\*\*/g, '<strong class="text-amber-900">$1</strong>') }} />
+                </div>
+              )}
+              {!data.chat.priorityNarrative && !prioritizing && (
+                <div className="bg-gray-50 border border-gray-200 rounded-xl p-6 mb-4 text-center">
+                  <p className="text-sm text-gray-500 mb-3">No priorities analyzed yet. Run the AI to score tasks by momentum, impact, effort, and switching costs.</p>
+                  <button
+                    onClick={async () => {
+                      setPrioritizing(true);
+                      await fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "prioritizeTasks" }) });
+                      await fetchData();
+                      setPrioritizing(false);
+                    }}
+                    className="px-4 py-2 bg-amber-600 text-white rounded-lg text-sm font-medium hover:bg-amber-700 transition-colors"
+                  >Analyze Priorities</button>
+                </div>
+              )}
+              {prioritizing && (
+                <div className="bg-amber-50 border border-amber-200 rounded-xl p-6 mb-4 text-center">
+                  <div className="animate-pulse text-sm text-amber-700">Analyzing tasks against momentum, resources, switching costs, and expected return...</div>
+                </div>
+              )}
+              {(() => {
+                const ranked = [...activeTasks].filter((t) => t.status !== "done").sort((a, b) => (b.priorityScore ?? 0) - (a.priorityScore ?? 0));
+                const inMotion = ranked.filter((t) => t.momentum === "in-motion");
+                const blocked = ranked.filter((t) => t.momentum === "blocked" || t.blockedBy || t.waitingOn);
+                const newIdeas = ranked.filter((t) => t.momentum === "new" && !t.blockedBy && !t.waitingOn);
+                const stalled = ranked.filter((t) => t.momentum === "stalled" && !t.blockedBy && !t.waitingOn);
+                const momentumColors: Record<string, string> = {
+                  "in-motion": "bg-green-100 text-green-700 border-green-200",
+                  "new": "bg-blue-100 text-blue-700 border-blue-200",
+                  "stalled": "bg-yellow-100 text-yellow-700 border-yellow-200",
+                  "blocked": "bg-red-100 text-red-700 border-red-200",
+                };
+                const impactColors: Record<string, string> = {
+                  high: "text-green-700 bg-green-50",
+                  medium: "text-yellow-700 bg-yellow-50",
+                  low: "text-gray-500 bg-gray-50",
+                };
+                const effortColors: Record<string, string> = {
+                  low: "text-green-600",
+                  medium: "text-yellow-600",
+                  high: "text-red-600",
+                };
+                const renderPriorityTask = (t: typeof ranked[0]) => (
+                  <div key={t._id} className="flex items-start gap-3 bg-white border border-gray-200 rounded-lg p-3 hover:shadow-sm transition-shadow">
+                    <div className="shrink-0 w-10 text-center">
+                      <div className={`text-lg font-bold ${(t.priorityScore ?? 0) >= 70 ? "text-green-600" : (t.priorityScore ?? 0) >= 40 ? "text-yellow-600" : "text-gray-400"}`}>
+                        {t.priorityScore ?? "–"}
+                      </div>
+                      <div className="text-[8px] text-gray-400 uppercase">score</div>
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="font-medium text-sm text-gray-900">{t.title}</span>
+                        <span className={`text-[9px] font-medium rounded-full px-1.5 py-0.5 border ${momentumColors[t.momentum || "new"]}`}>{t.momentum || "new"}</span>
+                        {t.impact && <span className={`text-[9px] font-medium rounded px-1 py-0.5 ${impactColors[t.impact]}`}>impact: {t.impact}</span>}
+                        {t.effort && <span className={`text-[9px] font-medium ${effortColors[t.effort]}`}>effort: {t.effort}</span>}
+                      </div>
+                      {t.priorityReason && <p className="text-xs text-gray-500 mt-0.5">{t.priorityReason}</p>}
+                      <div className="flex items-center gap-2 mt-1 flex-wrap">
+                        {(t.blockedBy || t.waitingOn) && (
+                          <span className="text-[10px] text-red-500 font-medium">
+                            {t.blockedBy ? `blocked: ${t.blockedBy}` : `waiting: ${t.waitingOn}`}
+                          </span>
+                        )}
+                        {t.people && t.people.length > 0 && (
+                          <span className="text-[10px] text-gray-400">{t.people.join(", ")}</span>
+                        )}
+                        {t.dueDate && (
+                          <span className={`text-[10px] font-medium ${new Date(t.dueDate) < new Date() ? "text-red-500" : "text-orange-500"}`}>
+                            due {format(parseISO(typeof t.dueDate === "string" && t.dueDate.length === 10 ? t.dueDate + "T12:00:00" : t.dueDate), "MMM d")}
+                          </span>
+                        )}
+                        {t.initiative && (() => { const ini = (data.initiatives || []).find((i) => i.id === t.initiative); return ini ? <span className="text-[10px] text-purple-500">{ini.name}</span> : null; })()}
+                      </div>
+                      <div className="flex items-center gap-1 mt-1.5">
+                        {(["in-motion", "new", "stalled", "blocked"] as const).map((m) => (
+                          <button
+                            key={m}
+                            onClick={() => {
+                              setData((d) => d ? { ...d, tasks: d.tasks.map((task) => task._id === t._id ? { ...task, momentum: m } : task) } : d);
+                              fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "updateTaskPriority", taskId: t._id, momentum: m }) });
+                            }}
+                            className={`text-[9px] px-1.5 py-0.5 rounded-full border transition-all ${t.momentum === m ? momentumColors[m] : "text-gray-300 border-gray-200 hover:border-gray-300"}`}
+                          >{m}</button>
+                        ))}
+                        <span className="text-gray-200 mx-0.5">|</span>
+                        {(["low", "medium", "high"] as const).map((imp) => (
+                          <button
+                            key={`i-${imp}`}
+                            onClick={() => {
+                              setData((d) => d ? { ...d, tasks: d.tasks.map((task) => task._id === t._id ? { ...task, impact: imp } : task) } : d);
+                              fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "updateTaskPriority", taskId: t._id, impact: imp }) });
+                            }}
+                            className={`text-[9px] px-1.5 py-0.5 rounded transition-all ${t.impact === imp ? impactColors[imp] + " font-medium" : "text-gray-300 hover:text-gray-500"}`}
+                          >{imp[0].toUpperCase()}</button>
+                        ))}
+                      </div>
+                    </div>
+                    <select
+                      value={t.status}
+                      onChange={(e) => changeTaskStatus(t._id, t.title, e.target.value)}
+                      className="text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0 border border-gray-200 cursor-pointer"
+                    >
+                      <option value="todo">todo</option>
+                      <option value="upcoming">upcoming</option>
+                      <option value="done">done</option>
+                    </select>
+                  </div>
+                );
+                return (
+                  <div className="space-y-4">
+                    {inMotion.length > 0 && (
+                      <div>
+                        <div className="flex items-center gap-2 mb-2">
+                          <div className="w-2 h-2 rounded-full bg-green-500" />
+                          <h4 className="text-xs font-semibold text-gray-700 uppercase tracking-wide">In Motion — protect this momentum</h4>
+                          <span className="text-[10px] text-gray-400">{inMotion.length}</span>
+                        </div>
+                        <div className="space-y-1.5">{inMotion.map(renderPriorityTask)}</div>
+                      </div>
+                    )}
+                    {blocked.length > 0 && (
+                      <div>
+                        <div className="flex items-center gap-2 mb-2">
+                          <div className="w-2 h-2 rounded-full bg-red-500" />
+                          <h4 className="text-xs font-semibold text-gray-700 uppercase tracking-wide">Blocked / Waiting</h4>
+                          <span className="text-[10px] text-gray-400">{blocked.length}</span>
+                        </div>
+                        <div className="space-y-1.5">{blocked.map(renderPriorityTask)}</div>
+                      </div>
+                    )}
+                    {newIdeas.length > 0 && (
+                      <div>
+                        <div className="flex items-center gap-2 mb-2">
+                          <div className="w-2 h-2 rounded-full bg-blue-500" />
+                          <h4 className="text-xs font-semibold text-gray-700 uppercase tracking-wide">New Ideas — evaluate vs. switching cost</h4>
+                          <span className="text-[10px] text-gray-400">{newIdeas.length}</span>
+                        </div>
+                        <div className="space-y-1.5">{newIdeas.map(renderPriorityTask)}</div>
+                      </div>
+                    )}
+                    {stalled.length > 0 && (
+                      <div>
+                        <div className="flex items-center gap-2 mb-2">
+                          <div className="w-2 h-2 rounded-full bg-yellow-500" />
+                          <h4 className="text-xs font-semibold text-gray-700 uppercase tracking-wide">Stalled — needs attention or deprioritize</h4>
+                          <span className="text-[10px] text-gray-400">{stalled.length}</span>
+                        </div>
+                        <div className="space-y-1.5">{stalled.map(renderPriorityTask)}</div>
+                      </div>
+                    )}
+                    {ranked.length === 0 && (
+                      <p className="text-sm text-gray-400 italic py-4 text-center">No active tasks to prioritize</p>
+                    )}
+                  </div>
+                );
+              })()}
+            </div>
+          ) : taskViewMode === "categories" && allCategories.length > 0 ? (
             <div>
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 mb-4">
                 {allCategories.map((cat) => {
@@ -3168,7 +3376,7 @@ export default function DashboardPage() {
               )}
             </>
           )}
-          <div className="space-y-2">
+          {taskViewMode !== "priorities" && <div className="space-y-2">
             {(taskViewMode === "categories" && expandedCategory
               ? activeTasks.filter((t) => (t.categories || []).includes(expandedCategory))
               : filteredTasks
@@ -3520,7 +3728,7 @@ export default function DashboardPage() {
             {(taskViewMode === "categories" && expandedCategory ? activeTasks.filter((t) => (t.categories || []).includes(expandedCategory)) : filteredTasks).length === 0 && (
               <p className="text-sm text-gray-400 italic py-4 text-center">No items</p>
             )}
-          </div>
+          </div>}
           {taskFilters.has("upcoming") && taskFilters.size === 1 && (
             <div className="mt-3">
               <button

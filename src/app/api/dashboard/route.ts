@@ -54,6 +54,8 @@ export async function GET(req: NextRequest) {
       lastReviewedAt: chat.lastReviewedAt || null,
       aiFeedEnabled: chat.aiFeedEnabled ?? false,
       aiFeed: (chat.aiFeed || []).map((f: { _id?: unknown; type: string; content: string; status?: string; createdAt: Date }) => ({ _id: String(f._id || ""), type: f.type, content: f.content, status: f.status || "new", createdAt: f.createdAt })).sort((a: { createdAt: Date }, b: { createdAt: Date }) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()),
+      priorityNarrative: chat.priorityNarrative || "",
+      lastPrioritizedAt: chat.lastPrioritizedAt || null,
       messageCount: chat.messages?.length || 0,
       dataSources: chat.dataSources || [],
       aiQuestions: (chat.aiQuestions || []).map((q: { id: string; category: string; question: string; answer: string; skipped?: boolean; answeredAt?: Date; createdAt: Date }) => ({
@@ -787,6 +789,194 @@ Rules:
     } catch {
       return NextResponse.json({ ok: false, error: "Failed to parse categories" });
     }
+  }
+
+  if (action === "prioritizeTasks") {
+    const chatDoc = await Chat.findOne({ telegramChatId: chatId });
+    const tasks = await Task.find({ telegramChatId: chatId, status: { $in: ["todo", "upcoming"] } }).lean();
+    if (!tasks.length) return NextResponse.json({ ok: true, narrative: "No active tasks to prioritize." });
+
+    const [people, doneTasks, activities, spendSummary] = await Promise.all([
+      Person.find({ telegramChatId: chatId }).lean(),
+      Task.find({ telegramChatId: chatId, status: "done" }).sort({ completedAt: -1 }).limit(15).lean(),
+      Activity.find({ telegramChatId: chatId }).sort({ createdAt: -1 }).limit(30).lean(),
+      getSpendSummary(chatId),
+    ]);
+
+    const initiatives = (chatDoc?.initiatives || []).filter((i: { status: string }) => i.status === "active");
+
+    const taskList = tasks.map((t) => {
+      let line = `ID:${t._id} | "${t.title}" | status:${t.status} | momentum:${t.momentum || "new"} | effort:${t.effort || "?"} | impact:${t.impact || "?"} | created:${new Date(t.createdAt).toISOString().split("T")[0]}`;
+      if (t.dueDate) line += ` | due:${new Date(t.dueDate).toISOString().split("T")[0]}`;
+      if (t.people?.length) line += ` | assigned:${t.people.join(",")}`;
+      if (t.initiative) {
+        const ini = initiatives.find((i: { id: string }) => i.id === t.initiative);
+        if (ini) line += ` | initiative:${(ini as { name: string }).name}`;
+      }
+      if (t.blockedBy) line += ` | blockedBy:${t.blockedBy}`;
+      if (t.waitingOn) line += ` | waitingOn:${t.waitingOn}`;
+      if (t.subtasks?.length) {
+        const done = t.subtasks.filter((s: { done: boolean }) => s.done).length;
+        line += ` | subtasks:${done}/${t.subtasks.length}done`;
+      }
+      if (t.categories?.length) line += ` | tags:${t.categories.join(",")}`;
+      return line;
+    }).join("\n");
+
+    const recentDone = doneTasks.map((t) => {
+      let line = `- "${t.title}"`;
+      if (t.completedAt) line += ` (done ${new Date(t.completedAt).toISOString().split("T")[0]})`;
+      if (t.people?.length) line += ` [${t.people.join(", ")}]`;
+      return line;
+    }).join("\n");
+
+    const peopleSummary = people.map((p) => {
+      const name = p.username || p.firstName;
+      if (!name) return null;
+      const assignedTasks = tasks.filter((t) => t.people?.some((tp: string) => tp.toLowerCase() === name.toLowerCase()));
+      let line = `${name}`;
+      if (p.role && p.role !== "null") line += ` (${p.role})`;
+      if (assignedTasks.length) line += ` — ${assignedTasks.length} active tasks`;
+      if (p.intentions?.length) line += ` | intentions: ${p.intentions.slice(0, 3).join(", ")}`;
+      if (p.resources) line += ` | resources: ${p.resources}`;
+      return line;
+    }).filter(Boolean).join("\n");
+
+    const recentMessages = (chatDoc?.messages || []).slice(-20);
+    const recentConversation = recentMessages.map((m: { telegramUsername?: string; firstName?: string; content: string }) =>
+      `${m.telegramUsername || m.firstName || "user"}: ${m.content}`
+    ).join("\n");
+
+    const recentActivity = activities.slice(0, 20).map((a) => {
+      const d = a as { type: string; title: string; detail?: string; actor?: string; createdAt: Date };
+      return `[${d.type}] ${d.title}${d.detail ? ` — ${d.detail}` : ""}${d.actor ? ` (${d.actor})` : ""} ${new Date(d.createdAt).toISOString().split("T")[0]}`;
+    }).join("\n");
+
+    const dumps = (chatDoc?.dumps || []).slice(-10).map((d: { text: string; category: string; subject: string }) =>
+      `[${d.category}${d.subject ? `:${d.subject}` : ""}] ${d.text.substring(0, 200)}`
+    ).join("\n");
+
+    const spendBlock = spendSummary
+      ? `Total API cost: $${spendSummary.totalCost?.toFixed(2) || "0"} | ${spendSummary.totalCalls || 0} calls | ${spendSummary.totalTokens || 0} tokens`
+      : "";
+
+    let dataSourceBlock = "";
+    const enabledEps = (chatDoc?.dataSources || []).filter((ds: { enabled: boolean }) => ds.enabled);
+    if (enabledEps.length) {
+      try {
+        const snaps = await DataSnapshot.find({ telegramChatId: chatId }).sort({ fetchedAt: -1 }).limit(5).lean();
+        if (snaps.length) {
+          dataSourceBlock = snaps.map((s) => {
+            const d = s as { sourceId: string; endpointId: string; data: unknown; fetchedAt: Date };
+            return `[${d.sourceId}/${d.endpointId}] ${JSON.stringify(d.data).substring(0, 500)}`;
+          }).join("\n");
+        }
+      } catch { /* data sources unavailable */ }
+    }
+
+    const activeJobs = await Job.find({ telegramChatId: chatId, status: "active" }).lean();
+    const automationBlock = activeJobs.length
+      ? activeJobs.map((j) => `- ${j.title}: ${j.description}`).join("\n")
+      : "";
+
+    const response = await aiChat([
+      { role: "system", content: `You are a ruthless prioritization engine for a team finding product-market fit. You see EVERYTHING: tasks, conversations, people, spend, metrics, automated processes, and recent momentum. Your job is to produce a clear, honest assessment.
+
+OUTPUT (valid JSON only):
+
+{
+  "narrative": "6-10 sentence priority narrative covering all dimensions below",
+  "tasks": [
+    { "id": "taskId", "priorityScore": 85, "momentum": "in-motion", "effort": "low", "impact": "high", "priorityReason": "..." },
+    ...
+  ]
+}
+
+THE NARRATIVE must cover these dimensions (use headers with **bold** markdown):
+- **What's Moving**: Tasks with real momentum — protect these, switching away has a cost
+- **What's Being Discussed**: Themes from recent conversation that aren't yet tasks, or that signal shifting priorities
+- **What's Blocked/Waiting**: Name what's stuck and what would unblock it
+- **Acknowledgement**: Call out what was recently completed and who did it — momentum compounds when recognized
+- **Delegation & Resources**: Who owns what? What's automated? Where's capacity free? Where are we stretched thin?
+- **Funding & Spend**: Are we burning efficiently? Any cost signals that should affect priority?
+- **Metrics & Signals**: Any data from connected sources that changes what we should focus on?
+- **Sharp Opportunities**: Time-sensitive or unusually high-leverage items — be specific about WHY now
+- **Defer List**: Name 2-3 things that should explicitly be put on ice and why (switching cost, low return, wrong timing)
+
+SCORING RULES for each task:
+- Tasks IN MOTION get a momentum boost — switching cost penalty for abandoning
+- Subtasks partially done = in-motion
+- Person actively assigned and working = in-motion
+- Blocked/waiting = scored lower UNLESS unblocking it is the #1 priority
+- New ideas compete against EXISTING momentum — need clearly higher impact to justify the switch
+- Time-sensitive (due dates, events) = urgency boost
+- Tasks that unblock OTHER tasks = multiplier
+- Quick wins (low effort + high impact) = rank high
+- Disconnected "nice to have" ideas = rank low
+- If recent conversation signals a pivot in priority, reflect that in scores
+- If metrics/data show something working or failing, factor it in
+
+Today is ${new Date().toISOString().split("T")[0]}.` },
+      { role: "user", content: `ACTIVE TASKS:\n${taskList}
+
+RECENTLY COMPLETED (acknowledge this work):\n${recentDone || "nothing recently"}
+
+TEAM & DELEGATION:\n${peopleSummary || "unknown team"}
+
+ACTIVE INITIATIVES:\n${initiatives.length ? initiatives.map((i: { name: string; description: string }) => `${i.name}: ${i.description}`).join("\n") : "none defined"}
+
+AUTOMATED PROCESSES / ACTIVE JOBS:\n${automationBlock || "none running"}
+
+RECENT CONVERSATION (what's being discussed):\n${recentConversation || "no recent messages"}
+
+RECENT ACTIVITY LOG:\n${recentActivity || "none"}
+
+NOTES & DUMPS (context, decisions, info):\n${dumps || "none"}
+
+FUNDING / SPEND:\n${spendBlock || "no spend data"}
+
+METRICS / DATA SOURCES:\n${dataSourceBlock || "no connected data sources"}
+
+TEAM ABILITIES:\n${chatDoc?.abilities || "unknown"}
+
+CONTEXT SUMMARY:\n${chatDoc?.contextSummary || "none"}` },
+    ], "openai/gpt-4o");
+
+    try {
+      const cleaned = response.replace(/```json?\n?/g, "").replace(/```/g, "").trim();
+      const result = JSON.parse(cleaned);
+      const narrative = result.narrative || "";
+      const taskUpdates = result.tasks || [];
+
+      const ops = taskUpdates.map((t: { id: string; priorityScore: number; momentum: string; effort: string; impact: string; priorityReason: string }) =>
+        Task.updateOne({ _id: t.id, telegramChatId: chatId }, { $set: {
+          priorityScore: t.priorityScore || 0,
+          momentum: t.momentum || "new",
+          effort: t.effort || "medium",
+          impact: t.impact || "medium",
+          priorityReason: t.priorityReason || "",
+        }})
+      );
+      await Promise.all([
+        ...ops,
+        Chat.updateOne({ telegramChatId: chatId }, { $set: { priorityNarrative: narrative, lastPrioritizedAt: new Date() } }),
+      ]);
+
+      return NextResponse.json({ ok: true, narrative, tasks: taskUpdates });
+    } catch {
+      return NextResponse.json({ ok: false, error: "Failed to parse priorities" });
+    }
+  }
+
+  if (action === "updateTaskPriority" && body.taskId) {
+    const update: Record<string, unknown> = {};
+    if (body.momentum) update.momentum = body.momentum;
+    if (body.effort) update.effort = body.effort;
+    if (body.impact) update.impact = body.impact;
+    if (body.blockedBy !== undefined) update.blockedBy = body.blockedBy;
+    if (body.waitingOn !== undefined) update.waitingOn = body.waitingOn;
+    await Task.updateOne({ _id: body.taskId, telegramChatId: chatId }, { $set: update });
+    return NextResponse.json({ ok: true });
   }
 
   if (action === "clearFeed") {
