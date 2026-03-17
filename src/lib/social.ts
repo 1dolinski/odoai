@@ -6,9 +6,16 @@ let _client: ReturnType<typeof createClient> | null = null;
 
 function getClient() {
   if (!_client) {
-    _client = createClient({ privateKey: process.env.APINOW_PRIVATE_KEY as `0x${string}` });
+    const pk = process.env.APINOW_PRIVATE_KEY;
+    if (!pk || !pk.startsWith("0x")) throw new Error("APINOW_PRIVATE_KEY not configured — set it in Vercel env vars");
+    _client = createClient({ privateKey: pk as `0x${string}` });
   }
   return _client;
+}
+
+export function isConfigured(): boolean {
+  const pk = process.env.APINOW_PRIVATE_KEY;
+  return !!pk && pk.startsWith("0x");
 }
 
 export type Platform = "tiktok" | "instagram" | "facebook" | "reddit";

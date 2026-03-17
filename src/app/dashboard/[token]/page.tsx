@@ -159,6 +159,7 @@ interface DashboardData {
   walletAddress: string;
   availableDataSources: { id: string; name: string; description: string; configured: boolean; endpoints: { id: string; description: string }[] }[];
   socialPlatforms: { id: string; label: string; endpointCount: number }[];
+  socialConfigured: boolean;
 }
 
 type AiStyle = "concise" | "detailed" | "casual" | "professional" | "technical";
@@ -2050,7 +2051,14 @@ export default function DashboardPage() {
           {showSocial && (
             <div className="mt-4 bg-white border border-gray-200 rounded-xl p-3 sm:p-5 shadow-sm">
               <div className="mb-4">
-                <h3 className="text-sm font-semibold text-gray-800">Social Media Query</h3>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-sm font-semibold text-gray-800">Social Media Query</h3>
+                  {data.socialConfigured ? (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-green-100 text-green-700 font-medium">Wallet connected</span>
+                  ) : (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-100 text-red-600 font-medium">APINOW_PRIVATE_KEY not set</span>
+                  )}
+                </div>
                 <p className="text-xs text-gray-500 mt-0.5">Pull social media data via connected wallet. $0.06/request (USDC on Base).</p>
               </div>
 

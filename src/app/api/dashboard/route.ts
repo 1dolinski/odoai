@@ -14,7 +14,7 @@ import { chat as aiChat } from "@/lib/openrouter";
 import { writeKnowledge, writePersonKnowledge, writePeopleSnapshot } from "@/lib/knowledge";
 import { getChatAdmins, sendMessage } from "@/lib/telegram";
 import { getAvailableSources, fetchEnabledEndpoints, formatDataForAI, persistSnapshots, getSnapshotHistory, DATA_SOURCE_REGISTRY, fetchEndpoint } from "@/lib/dataSources";
-import { getAllPlatforms, getEndpointsForPlatform, querySocial, type Platform } from "@/lib/social";
+import { getAllPlatforms, getEndpointsForPlatform, querySocial, isConfigured as isSocialConfigured, type Platform } from "@/lib/social";
 import DataSnapshot from "@/models/DataSnapshot";
 
 export async function GET(req: NextRequest) {
@@ -133,6 +133,7 @@ export async function GET(req: NextRequest) {
     walletAddress: process.env.WALLET_ADDRESS || "",
     availableDataSources: getAvailableSources(),
     socialPlatforms: getAllPlatforms(),
+    socialConfigured: isSocialConfigured(),
   });
 }
 
@@ -828,24 +829,31 @@ Be specific with numbers. Compare across time periods when historical data is av
   }
 
   if (action === "querySocial" && body.platform && body.endpoint && body.params) {
-    const result = await querySocial(body.platform as Platform, body.endpoint, body.params);
-    if (!result.error && result.data) {
-      await DataSnapshot.create({
-        telegramChatId: chatId,
-        sourceId: `social-${body.platform}`,
-        endpointId: body.endpoint,
-        data: { params: body.params, result: result.data },
-        fetchedAt: result.fetchedAt,
-      });
-      writeKnowledge(
-        chatId,
-        "context",
-        `social-${body.platform}-${body.endpoint}-${Date.now()}`,
-        `# Social Data: ${body.platform}/${body.endpoint}\nParams: ${JSON.stringify(body.params)}\nFetched: ${result.fetchedAt.toISOString()}\nCost: ${result.cost}\n\n${JSON.stringify(result.data, null, 2).substring(0, 4000)}`,
-        { source: `social-${body.platform}`, endpoint: body.endpoint }
-      ).catch(console.error);
+    if (!isSocialConfigured()) {
+      return NextResponse.json({ ok: false, error: "APINOW_PRIVATE_KEY not configured — add it to Vercel env vars (hex string starting with 0x)", cost: "$0.00", data: null, fetchedAt: new Date() });
     }
-    return NextResponse.json({ ok: true, ...result });
+    try {
+      const result = await querySocial(body.platform as Platform, body.endpoint, body.params);
+      if (!result.error && result.data) {
+        await DataSnapshot.create({
+          telegramChatId: chatId,
+          sourceId: `social-${body.platform}`,
+          endpointId: body.endpoint,
+          data: { params: body.params, result: result.data },
+          fetchedAt: result.fetchedAt,
+        });
+        writeKnowledge(
+          chatId,
+          "context",
+          `social-${body.platform}-${body.endpoint}-${Date.now()}`,
+          `# Social Data: ${body.platform}/${body.endpoint}\nParams: ${JSON.stringify(body.params)}\nFetched: ${result.fetchedAt.toISOString()}\nCost: ${result.cost}\n\n${JSON.stringify(result.data, null, 2).substring(0, 4000)}`,
+          { source: `social-${body.platform}`, endpoint: body.endpoint }
+        ).catch(console.error);
+      }
+      return NextResponse.json({ ok: true, ...result });
+    } catch (err) {
+      return NextResponse.json({ ok: false, error: String(err), cost: "$0.00", data: null, fetchedAt: new Date() });
+    }
   }
 
   if (action === "getSocialHistory" && body.platform && body.endpoint) {
