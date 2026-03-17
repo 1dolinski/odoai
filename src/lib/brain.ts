@@ -664,15 +664,17 @@ ${existingFeed || "nothing yet"}`,
     if (!Array.isArray(items)) return [];
     const valid = items.filter((i: { type?: string; content?: string }) => i.type && i.content).slice(0, 5);
 
-    const getKeywords = (s: string) => new Set(s.toLowerCase().replace(/[^a-z0-9\s]/g, "").split(/\s+/).filter((w) => w.length > 4));
-    const existingKeywordSets = recentFeedItems.map((f: { content: string }) => getKeywords(f.content));
-    const filtered = valid.filter((item: { content: string }) => {
-      const kw = getKeywords(item.content);
-      return !existingKeywordSets.some((existing: Set<string>) => {
-        const overlap = [...kw].filter((w) => existing.has(w)).length;
-        return overlap >= Math.min(4, Math.floor(kw.size * 0.5));
-      });
-    });
+    // Semantic dedup via QMD — drop items too similar to previously stored feed insights
+    const filtered: { type: string; content: string }[] = [];
+    for (const item of valid as { type: string; content: string }[]) {
+      try {
+        const hits = await qmdSearch(item.content, 3);
+        const isFeedDupe = hits.some((h) => h.score > 0.75 && h.title.includes("Feed Insights"));
+        if (!isFeedDupe) filtered.push(item);
+      } catch {
+        filtered.push(item);
+      }
+    }
 
     // Write insights back to QMD for future retrieval
     if (filtered.length) {
