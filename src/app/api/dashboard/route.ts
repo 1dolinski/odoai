@@ -50,7 +50,7 @@ export async function GET(req: NextRequest) {
       lastSyncAt: chat.lastSyncAt || null,
       lastReviewedAt: chat.lastReviewedAt || null,
       aiFeedEnabled: chat.aiFeedEnabled ?? false,
-      aiFeed: (chat.aiFeed || []).sort((a: { createdAt: Date }, b: { createdAt: Date }) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()),
+      aiFeed: (chat.aiFeed || []).map((f: { _id?: unknown; type: string; content: string; status?: string; createdAt: Date }) => ({ _id: String(f._id || ""), type: f.type, content: f.content, status: f.status || "new", createdAt: f.createdAt })).sort((a: { createdAt: Date }, b: { createdAt: Date }) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()),
       messageCount: chat.messages?.length || 0,
     },
     tasks,
@@ -474,11 +474,18 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  if (action === "feedItemStatus" && typeof body.feedIndex === "number" && body.status) {
-    await Chat.updateOne(
-      { telegramChatId: chatId },
-      { $set: { [`aiFeed.${body.feedIndex}.status`]: body.status } }
-    );
+  if (action === "feedItemStatus" && body.status) {
+    if (body.feedId) {
+      await Chat.updateOne(
+        { telegramChatId: chatId, "aiFeed._id": body.feedId },
+        { $set: { "aiFeed.$.status": body.status } }
+      );
+    } else if (typeof body.feedIndex === "number") {
+      await Chat.updateOne(
+        { telegramChatId: chatId },
+        { $set: { [`aiFeed.${body.feedIndex}.status`]: body.status } }
+      );
+    }
     return NextResponse.json({ ok: true });
   }
 

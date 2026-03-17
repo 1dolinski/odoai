@@ -134,7 +134,7 @@ interface DashboardData {
     lastSyncAt: string | null;
     lastReviewedAt: string | null;
     aiFeedEnabled: boolean;
-    aiFeed: { type: string; content: string; status?: string; createdAt: string }[];
+    aiFeed: { _id: string; type: string; content: string; status?: string; createdAt: string }[];
     watchSettings: WatchSettings;
     contextSummary: string;
     messageCount: number;
@@ -287,26 +287,27 @@ export default function DashboardPage() {
     const item = data.chat.aiFeed[i];
     if (!item) return;
 
+    const fid = item._id;
     if (action === "seen") {
-      setData((d) => d ? { ...d, chat: { ...d.chat, aiFeed: d.chat.aiFeed.map((f, fi) => fi === i ? { ...f, status: "seen" } : f) } } : d);
-      fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "feedItemStatus", feedIndex: i, status: "seen" }) });
+      setData((d) => d ? { ...d, chat: { ...d.chat, aiFeed: d.chat.aiFeed.map((f) => f._id === fid ? { ...f, status: "seen" } : f) } } : d);
+      fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "feedItemStatus", feedId: fid, status: "seen" }) });
     } else if (action === "todo") {
-      setData((d) => d ? { ...d, chat: { ...d.chat, aiFeed: d.chat.aiFeed.map((f, fi) => fi === i ? { ...f, status: "actioned" } : f) } } : d);
+      setData((d) => d ? { ...d, chat: { ...d.chat, aiFeed: d.chat.aiFeed.map((f) => f._id === fid ? { ...f, status: "actioned" } : f) } } : d);
       await Promise.all([
         fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "addTask", task: { title: item.content.length > 80 ? item.content.slice(0, 80) + "..." : item.content, status: "todo", description: item.content } }) }),
-        fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "feedItemStatus", feedIndex: i, status: "actioned" }) }),
+        fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "feedItemStatus", feedId: fid, status: "actioned" }) }),
       ]);
       fetchData();
     } else if (action === "ask") {
       setFeedQuestion((prev) => prev?.index === i ? null : { index: i, text: "" });
     } else if (action === "done") {
-      setData((d) => d ? { ...d, chat: { ...d.chat, aiFeed: d.chat.aiFeed.map((f, fi) => fi === i ? { ...f, status: "actioned" } : f) } } : d);
-      fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "feedItemStatus", feedIndex: i, status: "actioned" }) });
+      setData((d) => d ? { ...d, chat: { ...d.chat, aiFeed: d.chat.aiFeed.map((f) => f._id === fid ? { ...f, status: "actioned" } : f) } } : d);
+      fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "feedItemStatus", feedId: fid, status: "actioned" }) });
     } else if (action === "doneCtx") {
       const ctx = prompt("What happened? Add context:");
       if (ctx !== null && ctx.trim()) {
-        setData((d) => d ? { ...d, chat: { ...d.chat, aiFeed: d.chat.aiFeed.map((f, fi) => fi === i ? { ...f, status: "actioned" } : f) } } : d);
-        fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "feedItemStatus", feedIndex: i, status: "actioned" }) });
+        setData((d) => d ? { ...d, chat: { ...d.chat, aiFeed: d.chat.aiFeed.map((f) => f._id === fid ? { ...f, status: "actioned" } : f) } } : d);
+        fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "feedItemStatus", feedId: fid, status: "actioned" }) });
         fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "feedDoneWithContext", feedContent: item.content, feedType: item.type, context: ctx.trim() }) });
       }
     }
@@ -621,7 +622,7 @@ export default function DashboardPage() {
       const json = await res.json();
       if (json.items?.length) {
         const now = new Date().toISOString();
-        const newEntries = json.items.map((i: { type: string; content: string }) => ({ type: i.type, content: i.content, createdAt: now }));
+        const newEntries = json.items.map((i: { type: string; content: string }) => ({ _id: `tmp-${Date.now()}-${Math.random().toString(36).slice(2)}`, type: i.type, content: i.content, status: "new", createdAt: now }));
         setData((d) => d ? { ...d, chat: { ...d.chat, aiFeed: [...newEntries, ...d.chat.aiFeed] } } : d);
       }
       setFeedAnswers({});
@@ -939,17 +940,17 @@ export default function DashboardPage() {
                             <div className="flex items-center gap-2 mt-2">
                               <button
                                 onClick={async () => {
-                                  setData((d) => d ? { ...d, chat: { ...d.chat, aiFeed: d.chat.aiFeed.map((f, fi) => fi === i ? { ...f, status: "seen" } : f) } } : d);
-                                  fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "feedItemStatus", feedIndex: i, status: "seen" }) });
+                                  setData((d) => d ? { ...d, chat: { ...d.chat, aiFeed: d.chat.aiFeed.map((f) => f._id === item._id ? { ...f, status: "seen" } : f) } } : d);
+                                  fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "feedItemStatus", feedId: item._id, status: "seen" }) });
                                 }}
                                 className="text-[10px] text-gray-400 hover:text-gray-600 font-medium transition-colors"
                               >✓ Seen</button>
                               <button
                                 onClick={async () => {
-                                  setData((d) => d ? { ...d, chat: { ...d.chat, aiFeed: d.chat.aiFeed.map((f, fi) => fi === i ? { ...f, status: "actioned" } : f) } } : d);
+                                  setData((d) => d ? { ...d, chat: { ...d.chat, aiFeed: d.chat.aiFeed.map((f) => f._id === item._id ? { ...f, status: "actioned" } : f) } } : d);
                                   await Promise.all([
                                     fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "addTask", task: { title: item.content.length > 80 ? item.content.slice(0, 80) + "..." : item.content, status: "todo", description: item.content } }) }),
-                                    fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "feedItemStatus", feedIndex: i, status: "actioned" }) }),
+                                    fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "feedItemStatus", feedId: item._id, status: "actioned" }) }),
                                   ]);
                                   fetchData();
                                 }}
@@ -963,8 +964,8 @@ export default function DashboardPage() {
                                 onClick={async () => {
                                   const ctx = prompt("What happened? Add context:");
                                   if (ctx !== null && ctx.trim()) {
-                                    setData((d) => d ? { ...d, chat: { ...d.chat, aiFeed: d.chat.aiFeed.map((f, fi) => fi === i ? { ...f, status: "actioned" } : f) } } : d);
-                                    fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "feedItemStatus", feedIndex: i, status: "actioned" }) });
+                                    setData((d) => d ? { ...d, chat: { ...d.chat, aiFeed: d.chat.aiFeed.map((f) => f._id === item._id ? { ...f, status: "actioned" } : f) } } : d);
+                                    fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "feedItemStatus", feedId: item._id, status: "actioned" }) });
                                     fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "feedDoneWithContext", feedContent: item.content, feedType: item.type, context: ctx.trim() }) });
                                   }
                                 }}
