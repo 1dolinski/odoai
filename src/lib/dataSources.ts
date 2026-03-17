@@ -36,7 +36,7 @@ export const DATA_SOURCE_REGISTRY: DataSourceDefinition[] = [
   {
     id: "boughtlook",
     name: "BoughtLook",
-    baseUrl: "http://boughtlook.com",
+    baseUrl: "https://www.boughtlook.com",
     envKey: "BOUGHT_LOOK_API_KEY",
     authHeader: "Bearer",
     description: "E-commerce fashion platform — users, generations, finds, looklists, shares, engagement, revenue, cron health",
