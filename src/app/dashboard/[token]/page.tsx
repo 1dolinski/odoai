@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { useParams } from "next/navigation";
+import { parseISO, format } from "date-fns";
 
 interface Subtask {
   id: string;
@@ -2104,20 +2105,20 @@ export default function DashboardPage() {
                           <input
                             type="date"
                             autoFocus
-                            defaultValue={t.dueDate ? new Date(t.dueDate).toISOString().split("T")[0] : ""}
+                            defaultValue={t.dueDate ? (t.dueDate.length === 10 ? t.dueDate : t.dueDate.substring(0, 10)) : ""}
                             onBlur={(e) => changeTaskDate(t._id, e.target.value)}
                             onKeyDown={(e) => {
                               if (e.key === "Enter") changeTaskDate(t._id, (e.target as HTMLInputElement).value);
                               if (e.key === "Escape") setEditingDateId(null);
                             }}
-                            className="text-xs border border-gray-300 rounded px-1 py-0.5"
+                            className="text-xs border border-gray-300 rounded px-1 py-0.5 w-[110px] h-[22px] leading-none"
                           />
                         ) : (
                           <button
                             onClick={() => setEditingDateId(t._id)}
-                            className={`text-xs ${t.dueDate ? "text-orange-500 hover:text-orange-600" : "text-gray-300 hover:text-gray-500"}`}
+                            className={`text-xs leading-none ${t.dueDate ? "text-orange-500 hover:text-orange-600" : "text-gray-300 hover:text-gray-500"}`}
                           >
-                            {t.dueDate ? `due ${new Date(t.dueDate).toLocaleDateString("en-US", { timeZone: "America/New_York", month: "short", day: "numeric" })}` : "+ date"}
+                            {t.dueDate ? `due ${format(parseISO(typeof t.dueDate === "string" && t.dueDate.length === 10 ? t.dueDate + "T12:00:00" : t.dueDate), "MMM d")}` : "+ date"}
                           </button>
                         )}
                       </div>
