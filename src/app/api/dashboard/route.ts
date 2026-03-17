@@ -495,6 +495,35 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true });
   }
 
+  if (action === "categorizeTasks") {
+    const tasks = await Task.find({ telegramChatId: chatId }).lean();
+    if (!tasks.length) return NextResponse.json({ ok: true, categories: {} });
+    const taskList = tasks.map((t) => ({ id: String((t as { _id: unknown })._id), title: (t as { title: string }).title, existing: (t as { categories?: string[] }).categories || [] }));
+    const response = await aiChat([
+      { role: "system", content: `You categorize tasks into short, lowercase topic tags. Each task can have 1-3 tags. Use consistent naming — merge similar concepts (e.g. "motogp" not "moto gp", "payments" not "payment"). Prefer broad categories that group multiple tasks.
+
+Respond ONLY with valid JSON: { "taskId": ["tag1", "tag2"], ... }
+
+Rules:
+- Tags are 1-2 words, lowercase, no special chars
+- Reuse tags across tasks when topics overlap
+- Common patterns: project names, functional areas (logistics, marketing, finance), themes
+- Keep total unique tags under 8-10 for the whole set` },
+      { role: "user", content: `Tasks:\n${taskList.map((t) => `${t.id}: ${t.title}`).join("\n")}` },
+    ], "openai/gpt-4o-mini");
+    try {
+      const cleaned = response.replace(/```json?\n?/g, "").replace(/```/g, "").trim();
+      const mapping = JSON.parse(cleaned);
+      const ops = Object.entries(mapping).map(([id, cats]) =>
+        Task.updateOne({ _id: id }, { $set: { categories: cats } })
+      );
+      await Promise.all(ops);
+      return NextResponse.json({ ok: true, mapping });
+    } catch {
+      return NextResponse.json({ ok: false, error: "Failed to parse categories" });
+    }
+  }
+
   if (action === "clearFeed") {
     await Chat.updateOne({ telegramChatId: chatId }, { $set: { aiFeed: [] } });
     return NextResponse.json({ ok: true });

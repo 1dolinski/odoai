@@ -20,6 +20,7 @@ interface Task {
   title: string;
   description?: string;
   status: "todo" | "upcoming" | "done";
+  categories?: string[];
   dueDate?: string;
   people?: string[];
   initiative?: string;
@@ -215,6 +216,8 @@ export default function DashboardPage() {
     }
     return new Set(["todo", "upcoming", "done"]);
   });
+  const [categoryFilters, setCategoryFilters] = useState<Set<string>>(new Set());
+  const [categorizing, setCategorizing] = useState(false);
   const [showCalendar, setShowCalendar] = useState(false);
   const [syncingMembers, setSyncingMembers] = useState(false);
   const [personDumpId, setPersonDumpId] = useState<string | null>(null);
@@ -673,7 +676,9 @@ export default function DashboardPage() {
   })) as (Task & { _isCheck?: boolean; _checkId?: string; _checkResult?: string })[];
 
   const allTasks = [...data.tasks.map((t) => ({ ...t, _isCheck: false, _checkId: "", _checkResult: "" })), ...checkTasks];
-  const filteredTasks = taskFilters.size === 3 ? allTasks : allTasks.filter((t) => taskFilters.has(t.status));
+  const allCategories = [...new Set(allTasks.flatMap((t) => t.categories || []))].sort();
+  const statusFiltered = taskFilters.size === 3 ? allTasks : allTasks.filter((t) => taskFilters.has(t.status));
+  const filteredTasks = categoryFilters.size === 0 ? statusFiltered : statusFiltered.filter((t) => (t.categories || []).some((c) => categoryFilters.has(c)));
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 via-white to-gray-100 text-gray-900">
@@ -1841,39 +1846,80 @@ export default function DashboardPage() {
 
         {/* Task Board */}
         <section className="mb-10">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-semibold text-gray-800">Tasks</h2>
-            <div className="flex gap-1 bg-gray-100 rounded-lg p-1">
-              {([
-                { key: "todo", label: "Todo", count: allTasks.filter((t) => t.status === "todo").length },
-                { key: "upcoming", label: "Upcoming", count: allTasks.filter((t) => t.status === "upcoming").length },
-                { key: "done", label: "Done", count: allTasks.filter((t) => t.status === "done").length },
-              ] as { key: string; label: string; count: number }[]).map((f) => {
-                const active = taskFilters.has(f.key);
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-lg font-semibold text-gray-800">Tasks <span className="text-sm font-normal text-gray-400">({filteredTasks.length})</span></h2>
+            <div className="flex items-center gap-2">
+              <div className="flex gap-1 bg-gray-100 rounded-lg p-1">
+                {([
+                  { key: "todo", label: "Todo", count: allTasks.filter((t) => t.status === "todo").length },
+                  { key: "upcoming", label: "Upcoming", count: allTasks.filter((t) => t.status === "upcoming").length },
+                  { key: "done", label: "Done", count: allTasks.filter((t) => t.status === "done").length },
+                ] as { key: string; label: string; count: number }[]).map((f) => {
+                  const active = taskFilters.has(f.key);
+                  return (
+                    <button
+                      key={f.key}
+                      onClick={() => {
+                        setTaskFilters((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(f.key)) { if (next.size > 1) next.delete(f.key); }
+                          else next.add(f.key);
+                          localStorage.setItem("taskFilters", JSON.stringify([...next]));
+                          return next;
+                        });
+                      }}
+                      className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
+                        active
+                          ? "bg-white text-gray-900 shadow-sm"
+                          : "text-gray-500 hover:text-gray-700"
+                      }`}
+                    >
+                      {f.label} ({f.count})
+                    </button>
+                  );
+                })}
+              </div>
+              <button
+                disabled={categorizing}
+                onClick={async () => {
+                  setCategorizing(true);
+                  await fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "categorizeTasks" }) });
+                  await fetchData();
+                  setCategorizing(false);
+                }}
+                className="text-[10px] text-gray-400 hover:text-gray-600 font-medium transition-colors disabled:opacity-50"
+              >{categorizing ? "..." : "⟳ Categorize"}</button>
+            </div>
+          </div>
+          {allCategories.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 mb-3">
+              {categoryFilters.size > 0 && (
+                <button
+                  onClick={() => setCategoryFilters(new Set())}
+                  className="px-2.5 py-1 rounded-full text-[11px] font-medium bg-gray-900 text-white"
+                >All</button>
+              )}
+              {allCategories.map((cat) => {
+                const count = statusFiltered.filter((t) => (t.categories || []).includes(cat)).length;
+                const active = categoryFilters.has(cat);
                 return (
                   <button
-                    key={f.key}
-                    onClick={() => {
-                      setTaskFilters((prev) => {
-                        const next = new Set(prev);
-                        if (next.has(f.key)) { if (next.size > 1) next.delete(f.key); }
-                        else next.add(f.key);
-                        localStorage.setItem("taskFilters", JSON.stringify([...next]));
-                        return next;
-                      });
-                    }}
-                    className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
+                    key={cat}
+                    onClick={() => setCategoryFilters((prev) => {
+                      const next = new Set(prev);
+                      if (next.has(cat)) next.delete(cat); else next.add(cat);
+                      return next;
+                    })}
+                    className={`px-2.5 py-1 rounded-full text-[11px] font-medium transition-all ${
                       active
-                        ? "bg-white text-gray-900 shadow-sm"
-                        : "text-gray-500 hover:text-gray-700"
+                        ? "bg-indigo-600 text-white shadow-sm"
+                        : "bg-gray-100 text-gray-600 hover:bg-gray-200"
                     }`}
-                  >
-                    {f.label} ({f.count})
-                  </button>
+                  >{cat} <span className={active ? "text-indigo-200" : "text-gray-400"}>{count}</span></button>
                 );
               })}
             </div>
-          </div>
+          )}
           <div className="space-y-2">
             {filteredTasks.map((t) => {
               const statusColors: Record<string, string> = {
@@ -1949,6 +1995,13 @@ export default function DashboardPage() {
                             {t.subtasks.filter((s) => s.done).length}/{t.subtasks.length} steps
                           </span>
                         )}
+                        {t.categories && t.categories.length > 0 && t.categories.map((cat) => (
+                          <button
+                            key={cat}
+                            onClick={(e) => { e.stopPropagation(); setCategoryFilters((prev) => { const next = new Set(prev); if (next.has(cat)) next.delete(cat); else next.add(cat); return next; }); }}
+                            className="inline-flex items-center text-[10px] font-medium bg-gray-100 text-gray-500 border border-gray-200 rounded-full px-1.5 py-0.5 ml-0.5 hover:bg-indigo-50 hover:text-indigo-600 hover:border-indigo-200 transition-colors cursor-pointer"
+                          >{cat}</button>
+                        ))}
                       </div>
                       <div className="flex items-center gap-2 mt-0.5">
                         {t.createdByUsername && (
