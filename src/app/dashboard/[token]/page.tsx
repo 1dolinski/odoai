@@ -196,6 +196,50 @@ const WATCH_ITEMS: { key: keyof WatchSettings; label: string; desc: string }[] =
   { key: "opportunities", label: "Opportunities", desc: "Spot ways to be better, faster, cheaper" },
 ];
 
+function timeAgo(dateStr: string): string {
+  const ms = Date.now() - new Date(dateStr).getTime();
+  const sec = Math.floor(ms / 1000);
+  if (sec < 60) return "just now";
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const days = Math.floor(hr / 24);
+  return `${days}d ago`;
+}
+
+function renderJsonWithLinks(obj: unknown): React.ReactNode {
+  const json = JSON.stringify(obj, null, 2);
+  const urlRe = /https?:\/\/[^\s"',\]]+/g;
+  const shortcodeRe = /"shortcode"\s*:\s*"([A-Za-z0-9_-]+)"/g;
+  const parts: (string | React.ReactNode)[] = [];
+  let last = 0;
+  const allMatches: { index: number; length: number; node: React.ReactNode }[] = [];
+
+  let m: RegExpExecArray | null;
+  while ((m = urlRe.exec(json)) !== null) {
+    const href = m[0].replace(/[)\]}]+$/, "");
+    allMatches.push({ index: m.index, length: m[0].length, node: <a key={`u${m.index}`} href={href} target="_blank" rel="noopener noreferrer" className="text-indigo-600 hover:underline">{m[0]}</a> });
+  }
+  while ((m = shortcodeRe.exec(json)) !== null) {
+    const code = m[1];
+    const overlap = allMatches.some((a) => m!.index < a.index + a.length && m!.index + m![0].length > a.index);
+    if (!overlap) {
+      const display = m[0];
+      const igUrl = `https://www.instagram.com/p/${code}/`;
+      allMatches.push({ index: m.index, length: m[0].length, node: <span key={`s${m.index}`}>&quot;shortcode&quot;: &quot;<a href={igUrl} target="_blank" rel="noopener noreferrer" className="text-indigo-600 hover:underline">{code}</a>&quot;</span> });
+    }
+  }
+  allMatches.sort((a, b) => a.index - b.index);
+  for (const match of allMatches) {
+    if (match.index > last) parts.push(json.slice(last, match.index));
+    parts.push(match.node);
+    last = match.index + match.length;
+  }
+  if (last < json.length) parts.push(json.slice(last));
+  return <>{parts}</>;
+}
+
 export default function DashboardPage() {
   const { token } = useParams<{ token: string }>();
   const [data, setData] = useState<DashboardData | null>(null);
@@ -341,6 +385,21 @@ export default function DashboardPage() {
     if (showSocial && token) refreshSocialSnapshots();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showSocial, token]);
+
+  useEffect(() => {
+    if (showFeed && token) {
+      refreshSocialSnapshots();
+      fetch("/api/dashboard", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token, action: "getSnapshotCounts" }),
+      })
+        .then((r) => r.json())
+        .then((j) => setDsSnapCounts(j.counts || []))
+        .catch(() => {});
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showFeed, token]);
 
   const visibleFeedIndices = data ? data.chat.aiFeed.map((f, i) => ({ i, status: f.status })).filter((x) => x.status !== "seen" && x.status !== "actioned").map((x) => x.i) : [];
 
@@ -940,6 +999,31 @@ export default function DashboardPage() {
                   </button>
                 </div>
               </div>
+              {(socialSnapshots.length > 0 || dsSnapCounts.length > 0) && (
+                <div className="flex flex-wrap gap-1.5 mb-3">
+                  {socialSnapshots.filter((s) => s.pollStatus === "finished").map((s) => {
+                    const platform = s.sourceId.replace("social-", "");
+                    const label = platform.charAt(0).toUpperCase() + platform.slice(1);
+                    const handle = s.params?.handle || s.params?.profile_id || s.params?.query || "";
+                    const ago = timeAgo(s.latest);
+                    const isStale = Date.now() - new Date(s.latest).getTime() > 24 * 60 * 60 * 1000;
+                    return (
+                      <span key={`${s.sourceId}-${s.endpointId}`} className={`inline-flex items-center gap-1 text-[10px] px-2 py-1 rounded-full font-medium ${isStale ? "bg-amber-50 text-amber-700 border border-amber-200" : "bg-green-50 text-green-700 border border-green-200"}`}>
+                        {label} {s.endpointId}{handle ? ` @${handle}` : ""} — {ago}
+                      </span>
+                    );
+                  })}
+                  {dsSnapCounts.map((d) => {
+                    const ago = timeAgo(d.latest);
+                    const isStale = Date.now() - new Date(d.latest).getTime() > 24 * 60 * 60 * 1000;
+                    return (
+                      <span key={`${d.sourceId}-${d.endpointId}`} className={`inline-flex items-center gap-1 text-[10px] px-2 py-1 rounded-full font-medium ${isStale ? "bg-amber-50 text-amber-700 border border-amber-200" : "bg-blue-50 text-blue-700 border border-blue-200"}`}>
+                        {d.sourceId}/{d.endpointId} — {ago}
+                      </span>
+                    );
+                  })}
+                </div>
+              )}
               <div className="mb-4">
                 <div className="flex gap-2">
                   <input
@@ -2418,7 +2502,7 @@ export default function DashboardPage() {
                     </div>
                   )}
                   <div className="max-h-[400px] overflow-y-auto bg-gray-50 rounded-lg p-3">
-                    <pre className="text-[11px] text-gray-700 whitespace-pre-wrap break-all">{JSON.stringify(socialResult.data, null, 2)}</pre>
+                    <pre className="text-[11px] text-gray-700 whitespace-pre-wrap break-all">{renderJsonWithLinks(socialResult.data)}</pre>
                   </div>
                 </div>
               )}
@@ -2430,7 +2514,7 @@ export default function DashboardPage() {
                     {socialHistory.map((h, i) => (
                       <div key={i} className="bg-gray-50 rounded-lg p-2">
                         <p className="text-[10px] text-gray-400 mb-1">{new Date(h.fetchedAt).toLocaleString()}</p>
-                        <pre className="text-[10px] text-gray-600 whitespace-pre-wrap break-all">{JSON.stringify(h.data, null, 2).substring(0, 500)}{JSON.stringify(h.data).length > 500 ? "…" : ""}</pre>
+                        <pre className="text-[10px] text-gray-600 whitespace-pre-wrap break-all">{renderJsonWithLinks(h.data)}</pre>
                       </div>
                     ))}
                   </div>
