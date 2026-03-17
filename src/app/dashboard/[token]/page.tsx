@@ -294,7 +294,7 @@ export default function DashboardPage() {
     } else if (action === "todo") {
       setData((d) => d ? { ...d, chat: { ...d.chat, aiFeed: d.chat.aiFeed.map((f) => f._id === fid ? { ...f, status: "actioned" } : f) } } : d);
       await Promise.all([
-        fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "addTask", task: { title: item.content.length > 80 ? item.content.slice(0, 80) + "..." : item.content, status: "todo", description: item.content } }) }),
+        fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "addTask", task: { title: item.content, status: "todo", description: `Source: AI feed (${item.type})`, createdByUsername: "odoai" } }) }),
         fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "feedItemStatus", feedId: fid, status: "actioned" }) }),
       ]);
       fetchData();
@@ -949,7 +949,7 @@ export default function DashboardPage() {
                                 onClick={async () => {
                                   setData((d) => d ? { ...d, chat: { ...d.chat, aiFeed: d.chat.aiFeed.map((f) => f._id === item._id ? { ...f, status: "actioned" } : f) } } : d);
                                   await Promise.all([
-                                    fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "addTask", task: { title: item.content.length > 80 ? item.content.slice(0, 80) + "..." : item.content, status: "todo", description: item.content } }) }),
+                                    fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "addTask", task: { title: item.content, status: "todo", description: `Source: AI feed (${item.type})`, createdByUsername: "odoai" } }) }),
                                     fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "feedItemStatus", feedId: item._id, status: "actioned" }) }),
                                   ]);
                                   fetchData();

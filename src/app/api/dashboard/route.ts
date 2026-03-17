@@ -328,13 +328,14 @@ export async function POST(req: NextRequest) {
   }
 
   if (action === "addTask" && body.task) {
-    const { title, status, dueDate, people, initiative } = body.task;
+    const { title, status, dueDate, people, initiative, description, createdByUsername } = body.task;
     if (!title) return NextResponse.json({ error: "title required" }, { status: 400 });
     const taskData: Record<string, unknown> = {
       status: ["todo", "upcoming", "done"].includes(status) ? status : "todo",
       createdBy: "dashboard",
-      createdByUsername: "dashboard",
+      createdByUsername: createdByUsername || "dashboard",
     };
+    if (description) taskData.description = description;
     if (dueDate && /\d{4}-\d{2}-\d{2}/.test(dueDate)) taskData.dueDate = new Date(dueDate);
     if (status === "done") taskData.completedAt = new Date();
     if (Array.isArray(people) && people.length) taskData.people = people;
