@@ -278,7 +278,7 @@ export default function DashboardPage() {
 
   const visibleFeedIndices = data ? data.chat.aiFeed.map((f, i) => ({ i, status: f.status })).filter((x) => x.status !== "seen" && x.status !== "actioned").map((x) => x.i) : [];
 
-  const feedAction = useCallback((action: "seen" | "todo" | "ask" | "done") => {
+  const feedAction = useCallback(async (action: "seen" | "todo" | "ask" | "done") => {
     if (!data || focusedFeedIdx < 0) return;
     const pos = focusedFeedIndices();
     if (pos === -1) return;
@@ -292,8 +292,10 @@ export default function DashboardPage() {
       fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "feedItemStatus", feedIndex: i, status: "seen" }) });
     } else if (action === "todo") {
       setData((d) => d ? { ...d, chat: { ...d.chat, aiFeed: d.chat.aiFeed.map((f, fi) => fi === i ? { ...f, status: "actioned" } : f) } } : d);
-      fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "addTask", task: { title: item.content.length > 80 ? item.content.slice(0, 80) + "..." : item.content, status: "todo", description: item.content } }) });
-      fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "feedItemStatus", feedIndex: i, status: "actioned" }) });
+      await Promise.all([
+        fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "addTask", task: { title: item.content.length > 80 ? item.content.slice(0, 80) + "..." : item.content, status: "todo", description: item.content } }) }),
+        fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "feedItemStatus", feedIndex: i, status: "actioned" }) }),
+      ]);
       fetchData();
     } else if (action === "ask") {
       setFeedQuestion((prev) => prev?.index === i ? null : { index: i, text: "" });
@@ -939,8 +941,10 @@ export default function DashboardPage() {
                               <button
                                 onClick={async () => {
                                   setData((d) => d ? { ...d, chat: { ...d.chat, aiFeed: d.chat.aiFeed.map((f, fi) => fi === i ? { ...f, status: "actioned" } : f) } } : d);
-                                  await fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "addTask", task: { title: item.content.length > 80 ? item.content.slice(0, 80) + "..." : item.content, status: "todo", description: item.content } }) });
-                                  fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "feedItemStatus", feedIndex: i, status: "actioned" }) });
+                                  await Promise.all([
+                                    fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "addTask", task: { title: item.content.length > 80 ? item.content.slice(0, 80) + "..." : item.content, status: "todo", description: item.content } }) }),
+                                    fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "feedItemStatus", feedIndex: i, status: "actioned" }) }),
+                                  ]);
                                   fetchData();
                                 }}
                                 className="text-[10px] text-indigo-500 hover:text-indigo-700 font-medium transition-colors"
