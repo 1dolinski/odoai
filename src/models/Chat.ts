@@ -44,6 +44,13 @@ export interface IInitiative {
   createdAt: Date;
 }
 
+export interface IChatDataSource {
+  sourceId: string;
+  enabled: boolean;
+  lastFetchAt?: Date;
+  cachedData?: Record<string, unknown>;
+}
+
 export interface IChat extends Document {
   telegramChatId: string;
   chatTitle?: string;
@@ -63,6 +70,7 @@ export interface IChat extends Document {
   lastReviewedAt: Date;
   aiFeedEnabled: boolean;
   aiFeed: { type: string; content: string; status: string; createdAt: Date }[];
+  dataSources: IChatDataSource[];
   messagesSinceSummary: number;
   createdAt: Date;
   updatedAt: Date;
@@ -111,6 +119,7 @@ const ChatSchema = new Schema<IChat>(
     lastReviewedAt: { type: Date },
     aiFeedEnabled: { type: Boolean, default: false },
     aiFeed: [{ type: { type: String }, content: String, status: { type: String, enum: ["new", "seen", "actioned"], default: "new" }, createdAt: { type: Date, default: Date.now } }],
+    dataSources: { type: [{ sourceId: String, enabled: { type: Boolean, default: true }, lastFetchAt: Date, cachedData: Schema.Types.Mixed }], default: [] },
     messagesSinceSummary: { type: Number, default: 0 },
   },
   { timestamps: true }

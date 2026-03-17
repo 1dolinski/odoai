@@ -13,6 +13,7 @@ import { autoExtract, maybeUpdateContext, deepProcessDump, generateAiFeed } from
 import { chat as aiChat } from "@/lib/openrouter";
 import { writeKnowledge, writePersonKnowledge, writePeopleSnapshot } from "@/lib/knowledge";
 import { getChatAdmins, sendMessage } from "@/lib/telegram";
+import { getAvailableSources, fetchDataForChat, formatDataForAI, DATA_SOURCE_REGISTRY, fetchEndpoint } from "@/lib/dataSources";
 
 export async function GET(req: NextRequest) {
   await connectDB();
@@ -52,6 +53,7 @@ export async function GET(req: NextRequest) {
       aiFeedEnabled: chat.aiFeedEnabled ?? false,
       aiFeed: (chat.aiFeed || []).map((f: { _id?: unknown; type: string; content: string; status?: string; createdAt: Date }) => ({ _id: String(f._id || ""), type: f.type, content: f.content, status: f.status || "new", createdAt: f.createdAt })).sort((a: { createdAt: Date }, b: { createdAt: Date }) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()),
       messageCount: chat.messages?.length || 0,
+      dataSources: chat.dataSources || [],
     },
     tasks,
     initiatives: chat.initiatives || [],
@@ -127,6 +129,7 @@ export async function GET(req: NextRequest) {
     spend: spendSummary,
     recentSpends,
     walletAddress: process.env.WALLET_ADDRESS || "",
+    availableDataSources: getAvailableSources(),
   });
 }
 
@@ -699,6 +702,96 @@ Rules:
     task.subtasks = (task.subtasks || []).filter((s: { id: string }) => s.id !== body.subtaskId);
     await task.save();
     return NextResponse.json({ ok: true, subtasks: task.subtasks });
+  }
+
+  if (action === "enableDataSource" && body.sourceId) {
+    const sourceId = body.sourceId as string;
+    const exists = DATA_SOURCE_REGISTRY.find((s) => s.id === sourceId);
+    if (!exists) return NextResponse.json({ error: "unknown source" }, { status: 400 });
+    const chatDoc = await Chat.findOne({ telegramChatId: chatId });
+    if (!chatDoc) return NextResponse.json({ error: "chat not found" }, { status: 404 });
+    const existing = (chatDoc.dataSources || []).find((ds: { sourceId: string }) => ds.sourceId === sourceId);
+    if (existing) {
+      await Chat.updateOne(
+        { telegramChatId: chatId, "dataSources.sourceId": sourceId },
+        { $set: { "dataSources.$.enabled": true } }
+      );
+    } else {
+      await Chat.updateOne(
+        { telegramChatId: chatId },
+        { $push: { dataSources: { sourceId, enabled: true } } }
+      );
+    }
+    return NextResponse.json({ ok: true });
+  }
+
+  if (action === "disableDataSource" && body.sourceId) {
+    await Chat.updateOne(
+      { telegramChatId: chatId, "dataSources.sourceId": body.sourceId },
+      { $set: { "dataSources.$.enabled": false } }
+    );
+    return NextResponse.json({ ok: true });
+  }
+
+  if (action === "fetchDataSources") {
+    const chatDoc = await Chat.findOne({ telegramChatId: chatId });
+    const enabledSources = (chatDoc?.dataSources || [])
+      .filter((ds: { enabled: boolean }) => ds.enabled)
+      .map((ds: { sourceId: string }) => ds.sourceId);
+    if (!enabledSources.length) return NextResponse.json({ ok: true, data: [], formatted: "" });
+    const results = await fetchDataForChat(enabledSources);
+    const formatted = formatDataForAI(results);
+    const cacheUpdate: Record<string, unknown> = {};
+    for (const r of results) {
+      if (!r.error && r.data) {
+        const allDs = chatDoc?.dataSources || [];
+        const idx = allDs.findIndex((ds: { sourceId: string }) => ds.sourceId === r.sourceId);
+        if (idx >= 0) {
+          cacheUpdate[`dataSources.${idx}.lastFetchAt`] = r.fetchedAt;
+          cacheUpdate[`dataSources.${idx}.cachedData`] = { ...((allDs[idx] as { cachedData?: Record<string, unknown> }).cachedData || {}), [r.endpointId]: r.data };
+        }
+      }
+    }
+    if (Object.keys(cacheUpdate).length) {
+      await Chat.updateOne({ telegramChatId: chatId }, { $set: cacheUpdate });
+    }
+    return NextResponse.json({ ok: true, data: results, formatted });
+  }
+
+  if (action === "fetchDataSourceEndpoint" && body.sourceId && body.endpointId) {
+    const source = DATA_SOURCE_REGISTRY.find((s) => s.id === body.sourceId);
+    if (!source) return NextResponse.json({ error: "unknown source" }, { status: 400 });
+    const endpoint = source.endpoints.find((e) => e.id === body.endpointId);
+    if (!endpoint) return NextResponse.json({ error: "unknown endpoint" }, { status: 400 });
+    const result = await fetchEndpoint(source, endpoint, body.params);
+    return NextResponse.json({ ok: true, ...result });
+  }
+
+  if (action === "analyzeDataSources") {
+    const chatDoc = await Chat.findOne({ telegramChatId: chatId });
+    const enabledSources = (chatDoc?.dataSources || [])
+      .filter((ds: { enabled: boolean }) => ds.enabled)
+      .map((ds: { sourceId: string }) => ds.sourceId);
+    if (!enabledSources.length) return NextResponse.json({ ok: true, insights: "No data sources enabled." });
+    const results = await fetchDataForChat(enabledSources);
+    const formatted = formatDataForAI(results);
+    if (!formatted) return NextResponse.json({ ok: true, insights: "No data available from sources." });
+    const analysis = await aiChat([
+      {
+        role: "system",
+        content: `You are a business analyst AI. Analyze the following live data from connected platforms and produce actionable insights. Focus on:
+- Key metrics and their trends (week-over-week, month-over-month)
+- Anomalies or concerning patterns
+- Growth opportunities
+- Revenue and engagement highlights
+- User behavior patterns
+- Things that need immediate attention
+
+Be specific with numbers. Keep it concise but thorough. Use bullet points.${chatDoc?.contextSummary ? `\n\nTeam context: ${chatDoc.contextSummary}` : ""}`,
+      },
+      { role: "user", content: `Live data:\n${formatted}` },
+    ], "openai/gpt-4o-mini");
+    return NextResponse.json({ ok: true, insights: analysis });
   }
 
   return NextResponse.json({ error: "unknown action" }, { status: 400 });

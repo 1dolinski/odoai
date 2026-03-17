@@ -1,5 +1,6 @@
 import { chat as aiChat } from "@/lib/openrouter";
 import { qmdSearch, writeKnowledge, writeDump, writeContextSummary, writePeopleSnapshot, writePersonKnowledge, writeTasksSnapshot, formatQMDResults } from "@/lib/knowledge";
+import { fetchDataForChat, formatDataForAI } from "@/lib/dataSources";
 import Chat, { WATCH_DEFAULTS } from "@/models/Chat";
 import Task from "@/models/Task";
 import Person from "@/models/Person";
@@ -43,6 +44,33 @@ function isSimilarTask(a: string, b: string): boolean {
   const smaller = Math.min(wa.size, wb.size);
   if (smaller > 0 && intersection.length / smaller >= 0.75) return true;
   return false;
+}
+
+async function getDataSourceContext(chatDoc: { dataSources?: { sourceId: string; enabled: boolean; lastFetchAt?: Date; cachedData?: Record<string, unknown> }[] } | null): Promise<string> {
+  if (!chatDoc?.dataSources?.length) return "";
+  const enabled = chatDoc.dataSources.filter((ds) => ds.enabled);
+  if (!enabled.length) return "";
+
+  const CACHE_TTL_MS = 10 * 60 * 1000;
+  const needsFresh = enabled.some(
+    (ds) => !ds.lastFetchAt || Date.now() - new Date(ds.lastFetchAt).getTime() > CACHE_TTL_MS
+  );
+
+  if (!needsFresh) {
+    const cached = enabled
+      .filter((ds) => ds.cachedData)
+      .map((ds) => `[${ds.sourceId}]\n${JSON.stringify(ds.cachedData, null, 2)}`)
+      .join("\n\n");
+    return cached ? `\nDATA SOURCES (live business data):\n${cached}` : "";
+  }
+
+  try {
+    const results = await fetchDataForChat(enabled.map((ds) => ds.sourceId));
+    const formatted = formatDataForAI(results);
+    return formatted ? `\nDATA SOURCES (live business data):\n${formatted}` : "";
+  } catch {
+    return "";
+  }
 }
 
 export async function buildSystemPrompt(chatId: string, userQuery?: string): Promise<string> {
@@ -114,6 +142,8 @@ export async function buildSystemPrompt(chatId: string, userQuery?: string): Pro
     }
   }
 
+  const dataSourceBlock = await getDataSourceContext(chatDoc);
+
   const watchLines = [
     watch.deadlines && "deadlines/dates",
     watch.blockers && "blockers/stuck points",
@@ -150,7 +180,7 @@ ${taskBlock}
 
 ACTIVE JOBS:
 ${jobBlock}
-${knowledgeBlock}
+${knowledgeBlock}${dataSourceBlock}
 WATCHING FOR: ${watchLines.join(", ")}
 
 WHEN MENTIONED OR IN DM:
@@ -623,10 +653,34 @@ export async function generateAiFeed(chatId: string): Promise<{ type: string; co
     } catch { /* QMD unavailable */ }
   }
 
+  let dataSourceContext = "";
+  const enabledSources = (chatDoc.dataSources || []).filter((ds: { enabled: boolean }) => ds.enabled);
+  if (enabledSources.length) {
+    try {
+      const sourceIds = enabledSources.map((ds: { sourceId: string }) => ds.sourceId);
+      const dsResults = await fetchDataForChat(sourceIds);
+      dataSourceContext = formatDataForAI(dsResults);
+      const cacheUpdate: Record<string, unknown> = {};
+      for (const r of dsResults) {
+        if (!r.error && r.data) {
+          const idx = enabledSources.findIndex((ds: { sourceId: string }) => ds.sourceId === r.sourceId);
+          if (idx >= 0) {
+            const dsIndex = (chatDoc.dataSources || []).indexOf(enabledSources[idx]);
+            cacheUpdate[`dataSources.${dsIndex}.lastFetchAt`] = r.fetchedAt;
+            cacheUpdate[`dataSources.${dsIndex}.cachedData`] = { [r.endpointId]: r.data };
+          }
+        }
+      }
+      if (Object.keys(cacheUpdate).length) {
+        Chat.updateOne({ telegramChatId: chatId }, { $set: cacheUpdate }).catch(console.error);
+      }
+    } catch { /* data sources unavailable */ }
+  }
+
   const response = await aiChat([
     {
       role: "system",
-      content: `You are an AI assistant reviewing a team's chat, tasks, people, knowledge base, and initiatives. Generate actionable feed items that are timely, relevant, and leverage everything you know.
+      content: `You are an AI assistant reviewing a team's chat, tasks, people, knowledge base, initiatives, and live business data from connected data sources. Generate actionable feed items that are timely, relevant, and leverage everything you know — including trends, anomalies, and opportunities visible in the data sources.
 
 Respond ONLY with valid JSON array. Each item: {"type": "cleanup"|"suggestion"|"checkin"|"insight"|"reminder"|"shout", "content": "..."}
 
@@ -654,7 +708,7 @@ ${existingFeed || "nothing yet"}`,
     },
     {
       role: "user",
-      content: `RECENT CHAT:\n${transcript || "no recent messages"}\n\nOPEN TASKS:\n${taskSummary}\n\nDONE TASKS (${doneTasks.length}):\n${doneTasks.slice(-5).map((t) => (t as { title: string }).title).join(", ") || "none"}\n\nPEOPLE:\n${peopleSummary}${initiativeBlock ? `\n\nACTIVE INITIATIVES:\n${initiativeBlock}` : ""}${abilitiesBlock ? `\n\nTEAM ABILITIES:\n${abilitiesBlock}` : ""}${dumps ? `\n\nRECENT DUMPS/NOTES:\n${dumps}` : ""}${qmdContext ? `\n\nKNOWLEDGE BASE (semantic memory — relevant stored info):\n${qmdContext}` : ""}\n\nCONTEXT: ${chatDoc.contextSummary || "none"}`,
+      content: `RECENT CHAT:\n${transcript || "no recent messages"}\n\nOPEN TASKS:\n${taskSummary}\n\nDONE TASKS (${doneTasks.length}):\n${doneTasks.slice(-5).map((t) => (t as { title: string }).title).join(", ") || "none"}\n\nPEOPLE:\n${peopleSummary}${initiativeBlock ? `\n\nACTIVE INITIATIVES:\n${initiativeBlock}` : ""}${abilitiesBlock ? `\n\nTEAM ABILITIES:\n${abilitiesBlock}` : ""}${dumps ? `\n\nRECENT DUMPS/NOTES:\n${dumps}` : ""}${qmdContext ? `\n\nKNOWLEDGE BASE (semantic memory — relevant stored info):\n${qmdContext}` : ""}${dataSourceContext ? `\n\nLIVE DATA SOURCES (business metrics, activity feeds — look for trends, anomalies, opportunities):\n${dataSourceContext}` : ""}\n\nCONTEXT: ${chatDoc.contextSummary || "none"}`,
     },
   ], "openai/gpt-4o-mini");
 
