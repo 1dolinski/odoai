@@ -380,6 +380,18 @@ export default function DashboardPage() {
   const [actionSaving, setActionSaving] = useState(false);
   const [actionDone, setActionDone] = useState("");
 
+  const [showWorkMode, setShowWorkMode] = useState(false);
+  const [workModePersonId, setWorkModePersonId] = useState<string>("");
+  const [workModeLoading, setWorkModeLoading] = useState(false);
+  const [workModeData, setWorkModeData] = useState<{
+    story: string;
+    suggestedTaskIds: string[];
+    ideationPrompt: string;
+    businessContext: string;
+    teamUpdates: string[];
+    immediateValue: string;
+  } | null>(null);
+
   const fetchData = useCallback(async () => {
     const res = await fetch(`/api/dashboard?token=${token}`);
     if (!res.ok) {
@@ -994,6 +1006,7 @@ export default function DashboardPage() {
         <section className="mb-10">
           <div className="flex flex-wrap items-center gap-2">
             {([
+              { key: "workMode", label: "Work Mode", state: showWorkMode, set: setShowWorkMode },
               { key: "aiQuestions", label: `AI Questions${data.chat.aiQuestions?.length ? ` (${data.chat.aiQuestions.filter((q) => !q.answer && !q.skipped).length})` : ""}`, state: showAiQuestions, set: setShowAiQuestions },
               { key: "menu", label: `Menu${data.chat.menu?.length ? ` (${data.chat.menu.length})` : ""}`, state: showMenu, set: setShowMenu },
               { key: "feed", label: "AI Feed", state: showFeed, set: setShowFeed },
@@ -1012,19 +1025,157 @@ export default function DashboardPage() {
                 key={btn.key}
                 onClick={() => {
                   const next = !btn.state;
-                  setShowFeed(false); setShowPeople(false); setShowInitiatives(false); setShowContext(false); setShowDump(false); setShowGuidance(false); setShowActions(false); setShowWatch(false); setShowWallet(false); setShowAbilities(false); setShowDataSources(false); setShowSocial(false); setShowAiQuestions(false); setShowMenu(false);
+                  setShowFeed(false); setShowPeople(false); setShowInitiatives(false); setShowContext(false); setShowDump(false); setShowGuidance(false); setShowActions(false); setShowWatch(false); setShowWallet(false); setShowAbilities(false); setShowDataSources(false); setShowSocial(false); setShowAiQuestions(false); setShowMenu(false); setShowWorkMode(false);
                   btn.set(next);
                 }}
                 className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all border ${
                   btn.state
-                    ? btn.key === "aiQuestions" ? "bg-indigo-600 text-white border-indigo-600 shadow-sm" : btn.key === "menu" ? "bg-emerald-600 text-white border-emerald-600 shadow-sm" : "bg-gray-900 text-white border-gray-900"
-                    : btn.key === "aiQuestions" ? "bg-indigo-50 text-indigo-700 border-indigo-200 hover:border-indigo-400 hover:bg-indigo-100" : btn.key === "menu" ? "bg-emerald-50 text-emerald-700 border-emerald-200 hover:border-emerald-400 hover:bg-emerald-100" : "bg-white text-gray-600 border-gray-200 hover:border-gray-400"
+                    ? btn.key === "workMode" ? "bg-indigo-600 text-white border-indigo-600 shadow-sm" : btn.key === "aiQuestions" ? "bg-indigo-600 text-white border-indigo-600 shadow-sm" : btn.key === "menu" ? "bg-emerald-600 text-white border-emerald-600 shadow-sm" : "bg-gray-900 text-white border-gray-900"
+                    : btn.key === "workMode" ? "bg-indigo-50 text-indigo-700 border-indigo-200 hover:border-indigo-400 hover:bg-indigo-100" : btn.key === "aiQuestions" ? "bg-indigo-50 text-indigo-700 border-indigo-200 hover:border-indigo-400 hover:bg-indigo-100" : btn.key === "menu" ? "bg-emerald-50 text-emerald-700 border-emerald-200 hover:border-emerald-400 hover:bg-emerald-100" : "bg-white text-gray-600 border-gray-200 hover:border-gray-400"
                 }`}
               >
-                {btn.key === "aiQuestions" && <span className="mr-1">✦</span>}{btn.key === "menu" && <span className="mr-1">☰</span>}{btn.label}
+                {btn.key === "workMode" && <span className="mr-1">⚡</span>}{btn.key === "aiQuestions" && <span className="mr-1">✦</span>}{btn.key === "menu" && <span className="mr-1">☰</span>}{btn.label}
               </button>
             ))}
           </div>
+          {showWorkMode && (
+            <div className="mt-4 bg-white border border-indigo-200 rounded-xl p-4 sm:p-6 shadow-sm">
+              <div className="flex flex-col sm:flex-row justify-between items-start gap-4 mb-6">
+                <div>
+                  <h3 className="text-lg font-bold text-gray-900 flex items-center gap-2">
+                    <span className="text-xl">⚡</span> Work Mode
+                  </h3>
+                  <p className="text-sm text-gray-500 mt-1">
+                    Select who you are to get a dynamic, personalized briefing on what matters right now.
+                  </p>
+                </div>
+                <div className="flex items-center gap-2 w-full sm:w-auto">
+                  <select
+                    value={workModePersonId}
+                    onChange={(e) => setWorkModePersonId(e.target.value)}
+                    className="flex-1 sm:w-48 text-sm bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-gray-700 focus:ring-2 focus:ring-indigo-300 outline-none"
+                  >
+                    <option value="">Select yourself...</option>
+                    {data.people.map(p => (
+                      <option key={p._id} value={p._id}>{p.username || p.firstName || "Unknown"}</option>
+                    ))}
+                  </select>
+                  <button
+                    disabled={!workModePersonId || workModeLoading}
+                    onClick={async () => {
+                      setWorkModeLoading(true);
+                      try {
+                        const res = await fetch("/api/dashboard", {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ token, action: "generateWorkMode", personId: workModePersonId })
+                        });
+                        const json = await res.json();
+                        if (json.ok && json.workMode) {
+                          setWorkModeData(json.workMode);
+                        } else {
+                          alert(json.error || "Failed to generate work mode");
+                        }
+                      } catch (e) {
+                        alert("Error generating work mode");
+                      }
+                      setWorkModeLoading(false);
+                    }}
+                    className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50 transition-colors whitespace-nowrap"
+                  >
+                    {workModeLoading ? "Generating..." : "Enter Mode"}
+                  </button>
+                </div>
+              </div>
+
+              {workModeLoading && (
+                <div className="py-12 flex flex-col items-center justify-center text-indigo-500 animate-pulse">
+                  <svg className="w-8 h-8 mb-3 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2" /></svg>
+                  <p className="text-sm font-medium">Analyzing current state and compiling your brief...</p>
+                </div>
+              )}
+
+              {!workModeLoading && workModeData && (
+                <div className="space-y-6">
+                  {/* The Story */}
+                  <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-5">
+                    <h4 className="text-sm font-bold text-indigo-900 mb-2 uppercase tracking-wider">Why it makes sense for you to work on this</h4>
+                    <p className="text-indigo-800 text-sm leading-relaxed">{workModeData.story}</p>
+                  </div>
+
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                    {/* Todos to focus on */}
+                    <div className="bg-white border border-gray-200 rounded-xl p-4 shadow-sm">
+                      <h4 className="font-semibold text-gray-800 mb-3 flex items-center gap-2">
+                        <span>🎯</span> Suggested Focus
+                      </h4>
+                      {workModeData.suggestedTaskIds && workModeData.suggestedTaskIds.length > 0 ? (
+                        <div className="space-y-2">
+                          {workModeData.suggestedTaskIds.map(tid => {
+                            const t = data.tasks.find(x => x._id === tid);
+                            if (!t) return null;
+                            return (
+                              <div key={tid} className="p-3 bg-gray-50 border border-gray-100 rounded-lg">
+                                <p className="text-sm font-medium text-gray-800">{t.title}</p>
+                                {t.description && <p className="text-xs text-gray-500 mt-1 line-clamp-2">{t.description}</p>}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <p className="text-sm text-gray-500 italic">No specific tasks to suggest right now. Check the main task list!</p>
+                      )}
+                    </div>
+
+                    {/* Immediate Value & Business Context */}
+                    <div className="space-y-4">
+                      <div className="bg-emerald-50 border border-emerald-100 rounded-xl p-4">
+                        <h4 className="font-semibold text-emerald-900 mb-2 flex items-center gap-2">
+                          <span>🚀</span> Immediate Value
+                        </h4>
+                        <p className="text-sm text-emerald-800">{workModeData.immediateValue}</p>
+                      </div>
+
+                      <div className="bg-amber-50 border border-amber-100 rounded-xl p-4">
+                        <h4 className="font-semibold text-amber-900 mb-2 flex items-center gap-2">
+                          <span>💡</span> Ideate
+                        </h4>
+                        <p className="text-sm text-amber-800">{workModeData.ideationPrompt}</p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                    {/* Team Updates */}
+                    <div className="bg-blue-50 border border-blue-100 rounded-xl p-4">
+                      <h4 className="font-semibold text-blue-900 mb-3 flex items-center gap-2">
+                        <span>👥</span> Team Updates
+                      </h4>
+                      {workModeData.teamUpdates && workModeData.teamUpdates.length > 0 ? (
+                        <ul className="space-y-2">
+                          {workModeData.teamUpdates.map((update, i) => (
+                            <li key={i} className="text-sm text-blue-800 flex items-start gap-2">
+                              <span className="text-blue-400 mt-0.5">•</span> {update}
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p className="text-sm text-blue-600 italic">No major team updates right now.</p>
+                      )}
+                    </div>
+
+                    {/* Business Context */}
+                    <div className="bg-purple-50 border border-purple-100 rounded-xl p-4">
+                      <h4 className="font-semibold text-purple-900 mb-2 flex items-center gap-2">
+                        <span>🏢</span> Look at the Business
+                      </h4>
+                      <p className="text-sm text-purple-800">{workModeData.businessContext}</p>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
           {showAiQuestions && (() => {
             const allQ = data.chat.aiQuestions || [];
             const activeQ = allQ.filter((q) => !q.answer && !q.skipped);

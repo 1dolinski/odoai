@@ -1028,6 +1028,94 @@ CONTEXT SUMMARY:\n${chatDoc?.contextSummary || "none"}` },
     return NextResponse.json({ ok: true });
   }
 
+  if (action === "generateWorkMode" && body.personId) {
+    const chatDoc = await Chat.findOne({ telegramChatId: chatId });
+    if (!chatDoc) return NextResponse.json({ error: "chat not found" }, { status: 404 });
+
+    const [tasks, people, activitiesData] = await Promise.all([
+      Task.find({ telegramChatId: chatId }).lean(),
+      Person.find({ telegramChatId: chatId }).lean(),
+      Activity.find({ telegramChatId: chatId }).sort({ createdAt: -1 }).limit(30).lean(),
+    ]);
+
+    const person = people.find((p) => p._id.toString() === body.personId);
+    if (!person) return NextResponse.json({ error: "person not found" }, { status: 404 });
+
+    const openTasks = tasks.filter((t) => t.status !== "done");
+    const myTasks = openTasks.filter((t) => {
+      const p = t.people || [];
+      return p.includes(person.username) || p.includes(person.firstName) || p.includes(person.telegramUserId);
+    });
+
+    const recentMessages = (chatDoc.messages || []).slice(-30);
+    const transcript = recentMessages.map((m: { telegramUsername?: string; firstName?: string; content: string }) =>
+      `${m.telegramUsername || m.firstName || "user"}: ${m.content}`
+    ).join("\n");
+
+    const peopleSummary = people.map((p) => {
+      const name = p.username || p.firstName;
+      if (!name) return null;
+      let line = `${name}`;
+      if (p.role && p.role !== "null") line += ` (${p.role})`;
+      return line;
+    }).filter(Boolean).join("\n");
+
+    const initiatives = (chatDoc.initiatives || []).filter((i: { status: string }) => i.status === "active");
+
+    const response = await aiChat([
+      {
+        role: "system",
+        content: `You are an AI assistant helping a team member get into "Work Mode". 
+Your job is to read the current business state, the person's specific tasks, and the team's overall direction, and generate a dynamic, compelling briefing that tells a story of why their work matters right now and what they should focus on.
+
+Respond ONLY with valid JSON:
+{
+  "story": "A 2-3 sentence narrative directly addressing the member, explaining why their role and specific current tasks are crucial for the business's current momentum.",
+  "suggestedTaskIds": ["id1", "id2"], // IDs of 1-3 tasks they should focus on today from their assigned tasks or unassigned ones they could take
+  "ideationPrompt": "A creative prompt or question for them to think about, based on current initiatives or team bottlenecks.",
+  "businessContext": "A 1-2 sentence high-level view of what the whole business is focused on right now.",
+  "teamUpdates": ["1 sentence update on what another team member is doing or needs help with"],
+  "immediateValue": "One specific, highly actionable quick win they could do right now to drive immediate value."
+}
+
+CRITICAL RULES:
+- Make it conversational and empowering. Address them by name if known.
+- Only suggest task IDs that actually exist in the provided active tasks list.
+- Keep everything concise.
+`
+      },
+      {
+        role: "user",
+        content: `MEMBER ENTERING WORK MODE:
+Name: ${person.username || person.firstName || "Unknown"}
+Role/Context: ${person.role || "Team member"}
+
+THEIR SPECIFIC TASKS:
+${myTasks.length ? myTasks.map(t => `[ID: ${t._id}] ${t.title}`).join("\n") : "None explicitly assigned"}
+
+ALL ACTIVE TASKS (for context or grabbing unassigned work):
+${openTasks.map(t => `[ID: ${t._id}] ${t.title} (Assigned: ${t.people?.join(",") || "none"})`).join("\n")}
+
+TEAM MEMBERS:
+${peopleSummary}
+
+INITIATIVES:
+${initiatives.map((i: any) => `${i.name}: ${i.description}`).join("\n")}
+
+RECENT CHAT CONTEXT:
+${transcript}`
+      }
+    ], "openai/gpt-4o");
+
+    try {
+      const cleaned = response.replace(/```json?\n?/g, "").replace(/```/g, "").trim();
+      const result = JSON.parse(cleaned);
+      return NextResponse.json({ ok: true, workMode: result });
+    } catch {
+      return NextResponse.json({ ok: false, error: "Failed to parse Work Mode generation" });
+    }
+  }
+
   if (action === "researchOffers") {
     const chatDoc = await Chat.findOne({ telegramChatId: chatId });
     if (!chatDoc) return NextResponse.json({ error: "chat not found" }, { status: 404 });
