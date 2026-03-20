@@ -57,19 +57,22 @@ export async function GET(req: NextRequest) {
       priorityNarrative: chat.priorityNarrative || "",
       leveragePlay: chat.leveragePlay || "",
       lastPrioritizedAt: chat.lastPrioritizedAt || null,
-      offers: (chat.offers || []).map((o: { id: string; name: string; description: string; pricePoint: string; targetBuyer: string; whyNow: string; deliveryMethod: string; costToDeliver: string; revenueEstimate: string; confidenceScore: number; confidenceReason: string; validationNotes: string; standoutActions?: string[]; status: string; iteration: number; createdAt: Date; updatedAt: Date }) => ({
+      offers: (chat.offers || []).map((o: { id: string; name: string; description: string; pricePoint: string; targetBuyer: string; whyNow: string; deliveryMethod: string; costToDeliver: string; revenueEstimate: string; confidenceScore: number; confidenceReason: string; validationNotes: string; standoutActions?: string[]; chatSignals?: string[]; teamPing?: string; status: string; iteration: number; createdAt: Date; updatedAt: Date }) => ({
         id: o.id, name: o.name, description: o.description, pricePoint: o.pricePoint,
         targetBuyer: o.targetBuyer, whyNow: o.whyNow, deliveryMethod: o.deliveryMethod,
         costToDeliver: o.costToDeliver, revenueEstimate: o.revenueEstimate,
         confidenceScore: o.confidenceScore, confidenceReason: o.confidenceReason,
         validationNotes: o.validationNotes,
         standoutActions: Array.isArray(o.standoutActions) ? o.standoutActions : [],
+        chatSignals: Array.isArray(o.chatSignals) ? o.chatSignals : [],
+        teamPing: typeof o.teamPing === "string" ? o.teamPing : "",
         status: o.status, iteration: o.iteration,
         createdAt: o.createdAt, updatedAt: o.updatedAt,
       })),
       offerIteration: chat.offerIteration || 0,
-      offerResearchLog: (chat.offerResearchLog || []).slice(-10).map((l: { id: string; iteration: number; action: string; result: string; keptOffers: string[]; discardedOffers: string[]; newOffers: string[]; createdAt: Date }) => ({
+      offerResearchLog: (chat.offerResearchLog || []).slice(-10).map((l: { id: string; iteration: number; action: string; result: string; conversationCadence?: string[]; keptOffers: string[]; discardedOffers: string[]; newOffers: string[]; createdAt: Date }) => ({
         id: l.id, iteration: l.iteration, action: l.action, result: l.result,
+        conversationCadence: Array.isArray(l.conversationCadence) ? l.conversationCadence : [],
         keptOffers: l.keptOffers, discardedOffers: l.discardedOffers, newOffers: l.newOffers, createdAt: l.createdAt,
       })),
       messageCount: chat.messages?.length || 0,
@@ -1211,10 +1214,13 @@ FOR EACH OFFER, provide:
 - confidenceReason: 1 sentence — what evidence supports/weakens this
 - validationNotes: ONE focused test — the single next experiment to increase confidence (hypothesis + how you'll know it worked)
 - standoutActions: array of exactly 3-5 SHORT imperative bullets — concrete things to do so this offer wins in-market (distribution, proof, packaging, partnerships, ops), NOT generic advice. Must go beyond validationNotes (e.g. validation = "get 3 quotes from buyers"; standout = "publish case study", "lock sponsor LOI template", etc.)
+- chatSignals: 2-4 SHORT bullets — specific signals you'd see in the team's Telegram/group chat when this offer is THRIVING (e.g. named buyer commits, dates locked, pricing agreed, assets requested). NOT generic "good engagement" — tie to this offer.
+- teamPing: ONE paste-ready paragraph (2-4 sentences, casual tone) the team can drop in chat to align on this offer: what matters this week, who owns what, one clear ask. No markdown.
 - status: "hypothesis" (new/untested) | "validating" (being tested) | "validated" (strong evidence) | "rejected" (doesn't work)
 
 ALSO OUTPUT:
 - researchSummary: 2-4 sentences about what this iteration discovered, what changed, what's getting sharper
+- conversationCadence: exactly 3 SHORT bullets — how the group chat should run THIS WEEK so all offers stay real (cadence: standups, decisions to pin, what to post after key events). Ground in their actual context (e.g. MotoGP weekend).
 - keptOffers: ids of offers kept from previous iteration
 - discardedOffers: ids of offers rejected and why
 - newOffers: ids of newly generated offers
@@ -1231,7 +1237,8 @@ RULES:
 Respond ONLY with valid JSON:
 {
   "researchSummary": "...",
-  "offers": [{ id, name, description, pricePoint, targetBuyer, whyNow, deliveryMethod, costToDeliver, revenueEstimate, confidenceScore, confidenceReason, validationNotes, standoutActions, status }],
+  "conversationCadence": ["...", "...", "..."],
+  "offers": [{ id, name, description, pricePoint, targetBuyer, whyNow, deliveryMethod, costToDeliver, revenueEstimate, confidenceScore, confidenceReason, validationNotes, standoutActions, chatSignals, teamPing, status }],
   "keptOffers": ["id1"],
   "discardedOffers": [{"id": "id2", "reason": "..."}],
   "newOffers": ["id3", "id4"]
@@ -1268,29 +1275,31 @@ ${prevLogBlock ? `PREVIOUS RESEARCH LOG:\n${prevLogBlock}` : ""}` },
       const cleaned = response.replace(/```json?\n?/g, "").replace(/```/g, "").trim();
       const result = JSON.parse(cleaned);
 
-      const normalizeStandoutActions = (raw: unknown): string[] => {
+      const normalizeStringList = (raw: unknown, max: number): string[] => {
         if (raw == null) return [];
         if (Array.isArray(raw)) {
-          return raw.map((x) => String(x).trim()).filter(Boolean).slice(0, 5);
+          return raw.map((x) => String(x).trim()).filter(Boolean).slice(0, max);
         }
         if (typeof raw === "string") {
           return raw
             .split(/\n|;/)
             .map((s) => s.replace(/^\s*\d+[\.\)]\s*/, "").trim())
             .filter(Boolean)
-            .slice(0, 5);
+            .slice(0, max);
         }
         return [];
       };
 
-      const offers = (result.offers || []).map((o: { id?: string; name: string; description: string; pricePoint: string; targetBuyer: string; whyNow: string; deliveryMethod: string; costToDeliver: string; revenueEstimate: string; confidenceScore: number; confidenceReason: string; validationNotes: string; standoutActions?: unknown; status: string }) => ({
+      const offers = (result.offers || []).map((o: { id?: string; name: string; description: string; pricePoint: string; targetBuyer: string; whyNow: string; deliveryMethod: string; costToDeliver: string; revenueEstimate: string; confidenceScore: number; confidenceReason: string; validationNotes: string; standoutActions?: unknown; chatSignals?: unknown; teamPing?: string; status: string }) => ({
         id: o.id || `offer_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
         name: o.name, description: o.description, pricePoint: o.pricePoint,
         targetBuyer: o.targetBuyer, whyNow: o.whyNow, deliveryMethod: o.deliveryMethod,
         costToDeliver: o.costToDeliver, revenueEstimate: o.revenueEstimate,
         confidenceScore: o.confidenceScore || 0, confidenceReason: o.confidenceReason || "",
         validationNotes: o.validationNotes || "",
-        standoutActions: normalizeStandoutActions(o.standoutActions),
+        standoutActions: normalizeStringList(o.standoutActions, 5),
+        chatSignals: normalizeStringList(o.chatSignals, 4),
+        teamPing: typeof o.teamPing === "string" ? o.teamPing.trim().slice(0, 1200) : "",
         status: o.status || "hypothesis", iteration,
         createdAt: new Date(), updatedAt: new Date(),
       }));
@@ -1300,6 +1309,7 @@ ${prevLogBlock ? `PREVIOUS RESEARCH LOG:\n${prevLogBlock}` : ""}` },
         iteration,
         action: iteration === 1 ? "initial_generation" : "iteration",
         result: result.researchSummary || "",
+        conversationCadence: normalizeStringList(result.conversationCadence, 3),
         keptOffers: result.keptOffers || [],
         discardedOffers: (result.discardedOffers || []).map((d: { id: string } | string) => typeof d === "string" ? d : d.id),
         newOffers: result.newOffers || [],

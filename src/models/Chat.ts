@@ -87,6 +87,10 @@ export interface IOffer {
   validationNotes: string;
   /** 3–5 concrete moves to execute so the offer wins (beyond the next validation test). */
   standoutActions: string[];
+  /** What you should hear/see in team chat when this offer is actually thriving. */
+  chatSignals: string[];
+  /** One short message to paste in Telegram to align owners and next steps. */
+  teamPing: string;
   status: "hypothesis" | "validating" | "validated" | "rejected" | "live";
   iteration: number;
   createdAt: Date;
@@ -98,6 +102,8 @@ export interface IOfferResearchLog {
   iteration: number;
   action: string;
   result: string;
+  /** How to keep the group chat aligned and high-signal this iteration. */
+  conversationCadence: string[];
   keptOffers: string[];
   discardedOffers: string[];
   newOffers: string[];
@@ -194,12 +200,15 @@ const ChatSchema = new Schema<IChat>(
       confidenceScore: { type: Number, default: 0 }, confidenceReason: { type: String, default: "" },
       validationNotes: { type: String, default: "" },
       standoutActions: { type: [String], default: [] },
+      chatSignals: { type: [String], default: [] },
+      teamPing: { type: String, default: "" },
       status: { type: String, enum: ["hypothesis", "validating", "validated", "rejected", "live"], default: "hypothesis" },
       iteration: { type: Number, default: 1 },
       createdAt: { type: Date, default: Date.now }, updatedAt: { type: Date, default: Date.now },
     }], default: [] },
     offerResearchLog: { type: [{
       id: String, iteration: Number, action: String, result: String,
+      conversationCadence: { type: [String], default: [] },
       keptOffers: [String], discardedOffers: [String], newOffers: [String],
       createdAt: { type: Date, default: Date.now },
     }], default: [] },

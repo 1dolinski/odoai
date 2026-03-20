@@ -42,6 +42,26 @@ interface Task {
   createdAt: string;
 }
 
+function offerRelatedTasks(offer: { id: string; name: string }, tasks: Task[]): Task[] {
+  const stop = new Set(["the", "and", "for", "with", "from", "this", "that", "offer", "based", "data"]);
+  const words = offer.name
+    .toLowerCase()
+    .split(/\W+/)
+    .filter((w) => w.length > 2 && !stop.has(w));
+  if (!words.length) return [];
+  return tasks
+    .filter((t) => {
+      const hay = `${t.title} ${t.description || ""}`.toLowerCase();
+      return words.some((w) => hay.includes(w));
+    })
+    .slice(0, 6);
+}
+
+function truncateTaskTitle(s: string, max: number) {
+  const t = s.trim();
+  return t.length <= max ? t : `${t.slice(0, max - 1)}…`;
+}
+
 interface Initiative {
   id: string;
   name: string;
@@ -161,12 +181,15 @@ interface DashboardData {
       costToDeliver: string; revenueEstimate: string;
       confidenceScore: number; confidenceReason: string; validationNotes: string;
       standoutActions: string[];
+      chatSignals: string[];
+      teamPing: string;
       status: "hypothesis" | "validating" | "validated" | "rejected" | "live";
       iteration: number; createdAt: string; updatedAt: string;
     }[];
     offerIteration: number;
     offerResearchLog: {
       id: string; iteration: number; action: string; result: string;
+      conversationCadence: string[];
       keptOffers: string[]; discardedOffers: string[]; newOffers: string[];
       createdAt: string;
     }[];
@@ -307,6 +330,7 @@ export default function DashboardPage() {
   });
   const [prioritizing, setPrioritizing] = useState(false);
   const [researchingOffers, setResearchingOffers] = useState(false);
+  const [offerCopyFlash, setOfferCopyFlash] = useState<string | null>(null);
   const [expandedCategory, setExpandedCategory] = useState<string | null>(null);
   const [showCalendar, setShowCalendar] = useState(false);
   const [syncingMembers, setSyncingMembers] = useState(false);
@@ -1071,17 +1095,38 @@ export default function DashboardPage() {
                 </div>
               )}
 
-              {data.chat.offerResearchLog.length > 0 && !researchingOffers && (
-                <div className="mb-3 bg-gray-50 border border-gray-100 rounded-lg px-3 py-2">
-                  <p className="text-xs text-gray-600">{data.chat.offerResearchLog[data.chat.offerResearchLog.length - 1]?.result}</p>
-                </div>
-              )}
+              {data.chat.offerResearchLog.length > 0 && !researchingOffers && (() => {
+                const lastOfferLog = data.chat.offerResearchLog[data.chat.offerResearchLog.length - 1];
+                const cadence = lastOfferLog?.conversationCadence?.length ? lastOfferLog.conversationCadence : [];
+                if (!cadence.length && !lastOfferLog?.result) return null;
+                return (
+                  <div className="mb-3 space-y-2">
+                    {cadence.length > 0 && (
+                      <div className="bg-teal-50 border border-teal-100 rounded-lg px-3 py-2">
+                        <p className="text-[9px] font-semibold uppercase tracking-wide text-teal-800 mb-1.5">Keep the chat thriving this week</p>
+                        <ul className="text-xs text-teal-900 space-y-1 list-disc list-inside leading-snug">
+                          {cadence.map((line, i) => (
+                            <li key={i}>{line}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    {lastOfferLog?.result && (
+                      <div className="bg-gray-50 border border-gray-100 rounded-lg px-3 py-2">
+                        <p className="text-[9px] font-semibold uppercase tracking-wide text-gray-500 mb-1">Iteration recap</p>
+                        <p className="text-xs text-gray-600">{lastOfferLog.result}</p>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
 
               {data.chat.offers.length > 0 && !researchingOffers && (
                 <div className="space-y-2.5">
                   {[...data.chat.offers]
                     .sort((a, b) => b.confidenceScore - a.confidenceScore)
                     .map((o) => {
+                      const relatedTasks = offerRelatedTasks(o, data.tasks);
                       const statusColors: Record<string, string> = {
                         hypothesis: "bg-blue-100 text-blue-700 border-blue-200",
                         validating: "bg-yellow-100 text-yellow-700 border-yellow-200",
@@ -1115,6 +1160,108 @@ export default function DashboardPage() {
                               {o.validationNotes && (
                                 <p className="text-[10px] text-indigo-500 mt-0.5">Next validation: {o.validationNotes}</p>
                               )}
+                              {o.chatSignals?.length > 0 && (
+                                <div className="mt-1.5 rounded-md bg-slate-50 border border-slate-100 px-2 py-1.5">
+                                  <p className="text-[9px] font-semibold uppercase tracking-wide text-slate-600 mb-1">Signals the chat is working</p>
+                                  <ul className="text-[10px] text-slate-800 space-y-0.5 list-disc list-inside">
+                                    {o.chatSignals.map((sig, i) => (
+                                      <li key={i}>{sig}</li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              )}
+                              {o.teamPing?.trim() && (
+                                <div className="mt-1.5 rounded-md border border-violet-100 bg-violet-50/80 px-2 py-1.5">
+                                  <div className="flex items-start justify-between gap-2">
+                                    <div className="min-w-0 flex-1">
+                                      <p className="text-[9px] font-semibold uppercase tracking-wide text-violet-800 mb-0.5">Paste in Telegram</p>
+                                      <p className="text-[10px] text-violet-950 whitespace-pre-wrap leading-snug">{o.teamPing}</p>
+                                    </div>
+                                    <button
+                                      type="button"
+                                      onClick={async () => {
+                                        try {
+                                          await navigator.clipboard.writeText(o.teamPing);
+                                          setOfferCopyFlash(o.id);
+                                          setTimeout(() => setOfferCopyFlash((x) => (x === o.id ? null : x)), 2000);
+                                        } catch {
+                                          setOfferCopyFlash(null);
+                                        }
+                                      }}
+                                      className="shrink-0 text-[9px] font-medium px-2 py-0.5 rounded-md bg-violet-600 text-white hover:bg-violet-700"
+                                    >
+                                      {offerCopyFlash === o.id ? "Copied" : "Copy"}
+                                    </button>
+                                  </div>
+                                </div>
+                              )}
+                              {relatedTasks.length > 0 && (
+                                <div className="mt-1.5 flex flex-wrap items-center gap-1">
+                                  <span className="text-[9px] font-semibold uppercase text-gray-500">Tasks</span>
+                                  {relatedTasks.map((t) => (
+                                    <span
+                                      key={t._id}
+                                      className={`text-[9px] px-1.5 py-0.5 rounded border ${
+                                        t.status === "done" ? "bg-gray-100 text-gray-500 border-gray-200 line-through" : "bg-white text-gray-700 border-gray-200"
+                                      }`}
+                                      title={t.title}
+                                    >
+                                      {truncateTaskTitle(t.title, 36)}
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
+                              <div className="mt-1.5 flex flex-wrap gap-1">
+                                {o.validationNotes?.trim() && o.status !== "rejected" && (
+                                  <button
+                                    type="button"
+                                    onClick={async () => {
+                                      await fetch("/api/dashboard", {
+                                        method: "POST",
+                                        headers: { "Content-Type": "application/json" },
+                                        body: JSON.stringify({
+                                          token,
+                                          action: "addTask",
+                                          task: {
+                                            title: truncateTaskTitle(`[Offer] ${o.name} — validate`, 120),
+                                            status: "todo",
+                                            description: `Offer research · id: ${o.id}\n\nNext validation:\n${o.validationNotes}`,
+                                          },
+                                        }),
+                                      });
+                                      fetchData();
+                                    }}
+                                    className="text-[9px] font-medium px-2 py-0.5 rounded-md border border-indigo-200 bg-indigo-50 text-indigo-800 hover:bg-indigo-100"
+                                  >
+                                    + Task: validation
+                                  </button>
+                                )}
+                                {o.standoutActions?.map((action, si) => (
+                                  <button
+                                    key={si}
+                                    type="button"
+                                    onClick={async () => {
+                                      await fetch("/api/dashboard", {
+                                        method: "POST",
+                                        headers: { "Content-Type": "application/json" },
+                                        body: JSON.stringify({
+                                          token,
+                                          action: "addTask",
+                                          task: {
+                                            title: truncateTaskTitle(`[Offer] ${o.name}: ${action}`, 120),
+                                            status: "todo",
+                                            description: `Offer research · id: ${o.id}\n\nStandout move:\n${action}`,
+                                          },
+                                        }),
+                                      });
+                                      fetchData();
+                                    }}
+                                    className="text-[9px] font-medium px-2 py-0.5 rounded-md border border-gray-200 bg-white text-gray-700 hover:bg-gray-50"
+                                  >
+                                    + {si + 1}
+                                  </button>
+                                ))}
+                              </div>
                               {o.standoutActions?.length > 0 && (
                                 <div className="mt-1.5 pt-1.5 border-t border-gray-100">
                                   <p className="text-[9px] font-semibold uppercase tracking-wide text-gray-500 mb-1">Make it stand out</p>
