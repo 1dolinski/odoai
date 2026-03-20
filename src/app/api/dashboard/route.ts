@@ -57,13 +57,16 @@ export async function GET(req: NextRequest) {
       priorityNarrative: chat.priorityNarrative || "",
       leveragePlay: chat.leveragePlay || "",
       lastPrioritizedAt: chat.lastPrioritizedAt || null,
-      offers: (chat.offers || []).map((o: { id: string; name: string; description: string; pricePoint: string; targetBuyer: string; whyNow: string; deliveryMethod: string; costToDeliver: string; revenueEstimate: string; confidenceScore: number; confidenceReason: string; validationNotes: string; standoutActions?: string[]; chatSignals?: string[]; teamPing?: string; status: string; iteration: number; createdAt: Date; updatedAt: Date }) => ({
+      offers: (chat.offers || []).map((o: { id: string; name: string; description: string; pricePoint: string; targetBuyer: string; whyNow: string; deliveryMethod: string; costToDeliver: string; revenueEstimate: string; confidenceScore: number; confidenceReason: string; validationNotes: string; meatAndPotatoes?: string[]; teamLeverage?: string[]; standoutActions?: string[]; creativePlays?: string[]; chatSignals?: string[]; teamPing?: string; status: string; iteration: number; createdAt: Date; updatedAt: Date }) => ({
         id: o.id, name: o.name, description: o.description, pricePoint: o.pricePoint,
         targetBuyer: o.targetBuyer, whyNow: o.whyNow, deliveryMethod: o.deliveryMethod,
         costToDeliver: o.costToDeliver, revenueEstimate: o.revenueEstimate,
         confidenceScore: o.confidenceScore, confidenceReason: o.confidenceReason,
         validationNotes: o.validationNotes,
+        meatAndPotatoes: Array.isArray(o.meatAndPotatoes) ? o.meatAndPotatoes : [],
+        teamLeverage: Array.isArray(o.teamLeverage) ? o.teamLeverage : [],
         standoutActions: Array.isArray(o.standoutActions) ? o.standoutActions : [],
+        creativePlays: Array.isArray(o.creativePlays) ? o.creativePlays : [],
         chatSignals: Array.isArray(o.chatSignals) ? o.chatSignals : [],
         teamPing: typeof o.teamPing === "string" ? o.teamPing : "",
         status: o.status, iteration: o.iteration,
@@ -1213,7 +1216,10 @@ FOR EACH OFFER, provide:
 - confidenceScore: 1-100 based on evidence strength
 - confidenceReason: 1 sentence — what evidence supports/weakens this
 - validationNotes: ONE focused test — the single next experiment to increase confidence (hypothesis + how you'll know it worked)
-- standoutActions: array of exactly 3-5 SHORT imperative bullets — concrete things to do so this offer wins in-market (distribution, proof, packaging, partnerships, ops), NOT generic advice. Must go beyond validationNotes (e.g. validation = "get 3 quotes from buyers"; standout = "publish case study", "lock sponsor LOI template", etc.)
+- meatAndPotatoes: exactly 2-3 SHORT bullets — the non-negotiable core buyers actually get (deliverable spine: what ships on the day, what's in scope). No adjectives, no strategy — just the substance.
+- teamLeverage: 2-4 SHORT bullets — how THIS team wins on this offer. Reference real first names or @usernames from the TEAM list when possible ("Taynara: …"); if unknown, tie to roles from ABILITIES. Each bullet = who + what they own.
+- standoutActions: exactly 3-5 SHORT imperative bullets — EXECUTION / ops only (logistics, runbooks, contracts, metrics capture, handoffs, QA, follow-up). NOT creative ideas — those go in creativePlays. Must differ from validationNotes.
+- creativePlays: 2-4 SHORT imperative bullets — differentiated / creative moves (story angle, partnership twist, content stunt, VIP experience detail, PR hook). Must not repeat standoutActions.
 - chatSignals: 2-4 SHORT bullets — specific signals you'd see in the team's Telegram/group chat when this offer is THRIVING (e.g. named buyer commits, dates locked, pricing agreed, assets requested). NOT generic "good engagement" — tie to this offer.
 - teamPing: ONE paste-ready paragraph (2-4 sentences, casual tone) the team can drop in chat to align on this offer: what matters this week, who owns what, one clear ask. No markdown.
 - status: "hypothesis" (new/untested) | "validating" (being tested) | "validated" (strong evidence) | "rejected" (doesn't work)
@@ -1238,7 +1244,7 @@ Respond ONLY with valid JSON:
 {
   "researchSummary": "...",
   "conversationCadence": ["...", "...", "..."],
-  "offers": [{ id, name, description, pricePoint, targetBuyer, whyNow, deliveryMethod, costToDeliver, revenueEstimate, confidenceScore, confidenceReason, validationNotes, standoutActions, chatSignals, teamPing, status }],
+  "offers": [{ id, name, description, pricePoint, targetBuyer, whyNow, deliveryMethod, costToDeliver, revenueEstimate, confidenceScore, confidenceReason, validationNotes, meatAndPotatoes, teamLeverage, standoutActions, creativePlays, chatSignals, teamPing, status }],
   "keptOffers": ["id1"],
   "discardedOffers": [{"id": "id2", "reason": "..."}],
   "newOffers": ["id3", "id4"]
@@ -1290,14 +1296,17 @@ ${prevLogBlock ? `PREVIOUS RESEARCH LOG:\n${prevLogBlock}` : ""}` },
         return [];
       };
 
-      const offers = (result.offers || []).map((o: { id?: string; name: string; description: string; pricePoint: string; targetBuyer: string; whyNow: string; deliveryMethod: string; costToDeliver: string; revenueEstimate: string; confidenceScore: number; confidenceReason: string; validationNotes: string; standoutActions?: unknown; chatSignals?: unknown; teamPing?: string; status: string }) => ({
+      const offers = (result.offers || []).map((o: { id?: string; name: string; description: string; pricePoint: string; targetBuyer: string; whyNow: string; deliveryMethod: string; costToDeliver: string; revenueEstimate: string; confidenceScore: number; confidenceReason: string; validationNotes: string; meatAndPotatoes?: unknown; teamLeverage?: unknown; standoutActions?: unknown; creativePlays?: unknown; chatSignals?: unknown; teamPing?: string; status: string }) => ({
         id: o.id || `offer_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
         name: o.name, description: o.description, pricePoint: o.pricePoint,
         targetBuyer: o.targetBuyer, whyNow: o.whyNow, deliveryMethod: o.deliveryMethod,
         costToDeliver: o.costToDeliver, revenueEstimate: o.revenueEstimate,
         confidenceScore: o.confidenceScore || 0, confidenceReason: o.confidenceReason || "",
         validationNotes: o.validationNotes || "",
+        meatAndPotatoes: normalizeStringList(o.meatAndPotatoes, 3),
+        teamLeverage: normalizeStringList(o.teamLeverage, 4),
         standoutActions: normalizeStringList(o.standoutActions, 5),
+        creativePlays: normalizeStringList(o.creativePlays, 4),
         chatSignals: normalizeStringList(o.chatSignals, 4),
         teamPing: typeof o.teamPing === "string" ? o.teamPing.trim().slice(0, 1200) : "",
         status: o.status || "hypothesis", iteration,

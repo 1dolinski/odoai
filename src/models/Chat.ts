@@ -85,8 +85,14 @@ export interface IOffer {
   confidenceScore: number;
   confidenceReason: string;
   validationNotes: string;
-  /** 3–5 concrete moves to execute so the offer wins (beyond the next validation test). */
+  /** Non‑negotiable core of what gets delivered (the spine of the offer). */
+  meatAndPotatoes: string[];
+  /** How named people / roles from the team plug in (from context). */
+  teamLeverage: string[];
+  /** 3–5 operational execution moves (logistics, proof, handoffs, ops). */
   standoutActions: string[];
+  /** 2–4 differentiated / creative moves (story, partnerships, wow moments). */
+  creativePlays: string[];
   /** What you should hear/see in team chat when this offer is actually thriving. */
   chatSignals: string[];
   /** One short message to paste in Telegram to align owners and next steps. */
@@ -199,7 +205,10 @@ const ChatSchema = new Schema<IChat>(
       costToDeliver: { type: String, default: "" }, revenueEstimate: { type: String, default: "" },
       confidenceScore: { type: Number, default: 0 }, confidenceReason: { type: String, default: "" },
       validationNotes: { type: String, default: "" },
+      meatAndPotatoes: { type: [String], default: [] },
+      teamLeverage: { type: [String], default: [] },
       standoutActions: { type: [String], default: [] },
+      creativePlays: { type: [String], default: [] },
       chatSignals: { type: [String], default: [] },
       teamPing: { type: String, default: "" },
       status: { type: String, enum: ["hypothesis", "validating", "validated", "rejected", "live"], default: "hypothesis" },

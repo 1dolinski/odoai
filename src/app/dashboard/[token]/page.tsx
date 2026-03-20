@@ -179,8 +179,11 @@ interface DashboardData {
       id: string; name: string; description: string; pricePoint: string;
       targetBuyer: string; whyNow: string; deliveryMethod: string;
       costToDeliver: string; revenueEstimate: string;
-      confidenceScore: number; confidenceReason: string; validationNotes: string;
+      confidenceScore: number; confidenceReason: string;       validationNotes: string;
+      meatAndPotatoes: string[];
+      teamLeverage: string[];
       standoutActions: string[];
+      creativePlays: string[];
       chatSignals: string[];
       teamPing: string;
       status: "hypothesis" | "validating" | "validated" | "rejected" | "live";
@@ -426,6 +429,27 @@ export default function DashboardPage() {
     }
     setData(await res.json());
   }, [token]);
+
+  /** Creates a todo tied to an offer (same pipeline as Quick Actions → add task). */
+  const addOfferResearchTask = useCallback(
+    async (offerName: string, offerId: string, shortLabel: string, detail: string) => {
+      await fetch("/api/dashboard", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          token,
+          action: "addTask",
+          task: {
+            title: truncateTaskTitle(`[Offer] ${offerName} — ${shortLabel}`, 120),
+            status: "todo",
+            description: `Offer research · id: ${offerId}\n\n${detail}`,
+          },
+        }),
+      });
+      fetchData();
+    },
+    [token, fetchData]
+  );
 
   useEffect(() => {
     fetchData();
@@ -1088,6 +1112,11 @@ export default function DashboardPage() {
                   className="text-[11px] font-medium px-3 py-1.5 rounded-lg transition-all disabled:opacity-50 bg-emerald-600 text-white hover:bg-emerald-700"
                 >{researchingOffers ? "Researching..." : data.chat.offers.length > 0 ? "Iterate" : "Generate Offers"}</button>
               </div>
+              {data.chat.offers.length > 0 && (
+                <p className="text-[10px] text-gray-500 mb-3 leading-snug">
+                  <span className="font-medium text-gray-600">Add to tasks</span> — buttons create todos (deduped by title) like Quick Actions. Use them to ship validation steps, ops, and creative moves without retyping.
+                </p>
+              )}
 
               {researchingOffers && (
                 <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-4 text-center animate-pulse mb-3">
@@ -1155,10 +1184,93 @@ export default function DashboardPage() {
                                 {o.costToDeliver && <span className="text-red-500">Cost: {o.costToDeliver}</span>}
                                 {o.revenueEstimate && <span className="text-green-600">Rev: {o.revenueEstimate}</span>}
                               </div>
+                              {o.meatAndPotatoes?.length > 0 && (
+                                <div className="mt-1.5 rounded-md bg-amber-50/90 border border-amber-100 px-2 py-1.5">
+                                  <p className="text-[9px] font-semibold uppercase tracking-wide text-amber-900 mb-1">Meat & potatoes</p>
+                                  <p className="text-[9px] text-amber-800/90 mb-1 leading-snug">What actually ships — scope buyers can feel on the day.</p>
+                                  <ul className="text-[10px] text-amber-950 space-y-0.5 list-disc list-inside leading-snug">
+                                    {o.meatAndPotatoes.map((line, i) => (
+                                      <li key={i}>{line}</li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              )}
+                              {o.teamLeverage?.length > 0 && (
+                                <div className="mt-1.5 rounded-md bg-sky-50 border border-sky-100 px-2 py-1.5">
+                                  <p className="text-[9px] font-semibold uppercase tracking-wide text-sky-900 mb-1">Leverage the team</p>
+                                  <p className="text-[9px] text-sky-800/90 mb-1 leading-snug">Who does what with the skills you already have.</p>
+                                  <ul className="text-[10px] text-sky-950 space-y-0.5 list-disc list-inside leading-snug">
+                                    {o.teamLeverage.map((line, i) => (
+                                      <li key={i}>{line}</li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              )}
                               {o.whyNow && <p className="text-[10px] text-amber-600 mt-1">Why now: {o.whyNow}</p>}
                               {o.confidenceReason && <p className="text-[10px] text-gray-400 mt-0.5">{o.confidenceReason}</p>}
-                              {o.validationNotes && (
-                                <p className="text-[10px] text-indigo-500 mt-0.5">Next validation: {o.validationNotes}</p>
+                              {o.validationNotes?.trim() && (
+                                <div className="mt-1.5 flex gap-2 items-start rounded-md border border-indigo-100 bg-indigo-50/60 px-2 py-1.5">
+                                  <div className="flex-1 min-w-0">
+                                    <p className="text-[9px] font-semibold uppercase tracking-wide text-indigo-800 mb-0.5">Next validation</p>
+                                    <p className="text-[10px] text-indigo-950 leading-snug">{o.validationNotes}</p>
+                                  </div>
+                                  {o.status !== "rejected" && (
+                                    <button
+                                      type="button"
+                                      title="Creates a todo; title is deduped if you click twice"
+                                      onClick={() => addOfferResearchTask(o.name, o.id, "validation", `Next validation:\n${o.validationNotes}`)}
+                                      className="shrink-0 text-[9px] font-medium px-2 py-1 rounded-md bg-indigo-600 text-white hover:bg-indigo-700"
+                                    >
+                                      Add task
+                                    </button>
+                                  )}
+                                </div>
+                              )}
+                              {o.standoutActions?.length > 0 && (
+                                <div className="mt-1.5 pt-1.5 border-t border-gray-100">
+                                  <p className="text-[9px] font-semibold uppercase tracking-wide text-gray-600 mb-0.5">Execution</p>
+                                  <p className="text-[9px] text-gray-500 mb-1 leading-snug">Ops, logistics, proof, handoffs — the boring stuff that wins.</p>
+                                  <ul className="space-y-1">
+                                    {o.standoutActions.map((action, i) => (
+                                      <li key={i} className="flex gap-2 items-start text-[10px] text-gray-800">
+                                        <span className="flex-1 min-w-0 leading-snug"><span className="font-semibold text-gray-400 mr-1">{i + 1}.</span>{action}</span>
+                                        {o.status !== "rejected" && (
+                                          <button
+                                            type="button"
+                                            title="Add this line as a task"
+                                            onClick={() => addOfferResearchTask(o.name, o.id, `ops ${i + 1}`, `Execution:\n${action}`)}
+                                            className="shrink-0 text-[9px] font-medium px-1.5 py-0.5 rounded border border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
+                                          >
+                                            Add
+                                          </button>
+                                        )}
+                                      </li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              )}
+                              {o.creativePlays?.length > 0 && (
+                                <div className="mt-1.5 pt-1.5 border-t border-fuchsia-100">
+                                  <p className="text-[9px] font-semibold uppercase tracking-wide text-fuchsia-800 mb-0.5">Creative & differentiation</p>
+                                  <p className="text-[9px] text-fuchsia-700/90 mb-1 leading-snug">Story, partnerships, wow — not the same as execution above.</p>
+                                  <ul className="space-y-1">
+                                    {o.creativePlays.map((play, i) => (
+                                      <li key={i} className="flex gap-2 items-start text-[10px] text-fuchsia-950">
+                                        <span className="flex-1 min-w-0 leading-snug"><span className="font-semibold text-fuchsia-500 mr-1">{i + 1}.</span>{play}</span>
+                                        {o.status !== "rejected" && (
+                                          <button
+                                            type="button"
+                                            title="Add this line as a task"
+                                            onClick={() => addOfferResearchTask(o.name, o.id, `creative ${i + 1}`, `Creative play:\n${play}`)}
+                                            className="shrink-0 text-[9px] font-medium px-1.5 py-0.5 rounded border border-fuchsia-200 bg-fuchsia-50 text-fuchsia-900 hover:bg-fuchsia-100"
+                                          >
+                                            Add
+                                          </button>
+                                        )}
+                                      </li>
+                                    ))}
+                                  </ul>
+                                </div>
                               )}
                               {o.chatSignals?.length > 0 && (
                                 <div className="mt-1.5 rounded-md bg-slate-50 border border-slate-100 px-2 py-1.5">
@@ -1197,7 +1309,7 @@ export default function DashboardPage() {
                               )}
                               {relatedTasks.length > 0 && (
                                 <div className="mt-1.5 flex flex-wrap items-center gap-1">
-                                  <span className="text-[9px] font-semibold uppercase text-gray-500">Tasks</span>
+                                  <span className="text-[9px] font-semibold uppercase text-gray-500">Linked tasks</span>
                                   {relatedTasks.map((t) => (
                                     <span
                                       key={t._id}
@@ -1209,67 +1321,6 @@ export default function DashboardPage() {
                                       {truncateTaskTitle(t.title, 36)}
                                     </span>
                                   ))}
-                                </div>
-                              )}
-                              <div className="mt-1.5 flex flex-wrap gap-1">
-                                {o.validationNotes?.trim() && o.status !== "rejected" && (
-                                  <button
-                                    type="button"
-                                    onClick={async () => {
-                                      await fetch("/api/dashboard", {
-                                        method: "POST",
-                                        headers: { "Content-Type": "application/json" },
-                                        body: JSON.stringify({
-                                          token,
-                                          action: "addTask",
-                                          task: {
-                                            title: truncateTaskTitle(`[Offer] ${o.name} — validate`, 120),
-                                            status: "todo",
-                                            description: `Offer research · id: ${o.id}\n\nNext validation:\n${o.validationNotes}`,
-                                          },
-                                        }),
-                                      });
-                                      fetchData();
-                                    }}
-                                    className="text-[9px] font-medium px-2 py-0.5 rounded-md border border-indigo-200 bg-indigo-50 text-indigo-800 hover:bg-indigo-100"
-                                  >
-                                    + Task: validation
-                                  </button>
-                                )}
-                                {o.standoutActions?.map((action, si) => (
-                                  <button
-                                    key={si}
-                                    type="button"
-                                    onClick={async () => {
-                                      await fetch("/api/dashboard", {
-                                        method: "POST",
-                                        headers: { "Content-Type": "application/json" },
-                                        body: JSON.stringify({
-                                          token,
-                                          action: "addTask",
-                                          task: {
-                                            title: truncateTaskTitle(`[Offer] ${o.name}: ${action}`, 120),
-                                            status: "todo",
-                                            description: `Offer research · id: ${o.id}\n\nStandout move:\n${action}`,
-                                          },
-                                        }),
-                                      });
-                                      fetchData();
-                                    }}
-                                    className="text-[9px] font-medium px-2 py-0.5 rounded-md border border-gray-200 bg-white text-gray-700 hover:bg-gray-50"
-                                  >
-                                    + {si + 1}
-                                  </button>
-                                ))}
-                              </div>
-                              {o.standoutActions?.length > 0 && (
-                                <div className="mt-1.5 pt-1.5 border-t border-gray-100">
-                                  <p className="text-[9px] font-semibold uppercase tracking-wide text-gray-500 mb-1">Make it stand out</p>
-                                  <ol className="list-decimal list-inside space-y-0.5 text-[10px] text-gray-700 leading-snug">
-                                    {o.standoutActions.map((action, i) => (
-                                      <li key={i}>{action}</li>
-                                    ))}
-                                  </ol>
                                 </div>
                               )}
                               <div className="flex items-center gap-1 mt-1.5">
