@@ -57,12 +57,14 @@ export async function GET(req: NextRequest) {
       priorityNarrative: chat.priorityNarrative || "",
       leveragePlay: chat.leveragePlay || "",
       lastPrioritizedAt: chat.lastPrioritizedAt || null,
-      offers: (chat.offers || []).map((o: { id: string; name: string; description: string; pricePoint: string; targetBuyer: string; whyNow: string; deliveryMethod: string; costToDeliver: string; revenueEstimate: string; confidenceScore: number; confidenceReason: string; validationNotes: string; status: string; iteration: number; createdAt: Date; updatedAt: Date }) => ({
+      offers: (chat.offers || []).map((o: { id: string; name: string; description: string; pricePoint: string; targetBuyer: string; whyNow: string; deliveryMethod: string; costToDeliver: string; revenueEstimate: string; confidenceScore: number; confidenceReason: string; validationNotes: string; standoutActions?: string[]; status: string; iteration: number; createdAt: Date; updatedAt: Date }) => ({
         id: o.id, name: o.name, description: o.description, pricePoint: o.pricePoint,
         targetBuyer: o.targetBuyer, whyNow: o.whyNow, deliveryMethod: o.deliveryMethod,
         costToDeliver: o.costToDeliver, revenueEstimate: o.revenueEstimate,
         confidenceScore: o.confidenceScore, confidenceReason: o.confidenceReason,
-        validationNotes: o.validationNotes, status: o.status, iteration: o.iteration,
+        validationNotes: o.validationNotes,
+        standoutActions: Array.isArray(o.standoutActions) ? o.standoutActions : [],
+        status: o.status, iteration: o.iteration,
         createdAt: o.createdAt, updatedAt: o.updatedAt,
       })),
       offerIteration: chat.offerIteration || 0,
@@ -1174,9 +1176,12 @@ ${transcript}`
     } catch { /* unavailable */ }
 
     const existingOffersBlock = existingOffers.length
-      ? existingOffers.map((o: { id: string; name: string; status: string; confidenceScore: number; validationNotes: string; iteration: number }) =>
-        `[${o.status}|iter${o.iteration}|conf:${o.confidenceScore}] "${o.name}"${o.validationNotes ? ` — ${o.validationNotes}` : ""}`
-      ).join("\n")
+      ? existingOffers.map((o: { id: string; name: string; status: string; confidenceScore: number; validationNotes: string; standoutActions?: string[]; iteration: number }) => {
+        const moves = Array.isArray(o.standoutActions) && o.standoutActions.length
+          ? ` | standout: ${o.standoutActions.join(" · ")}`
+          : "";
+        return `[${o.status}|iter${o.iteration}|conf:${o.confidenceScore}] "${o.name}"${o.validationNotes ? ` — next test: ${o.validationNotes}` : ""}${moves}`;
+      }).join("\n")
       : "";
 
     const prevLogBlock = prevLog.length
@@ -1204,7 +1209,8 @@ FOR EACH OFFER, provide:
 - revenueEstimate: realistic monthly/quarterly revenue potential
 - confidenceScore: 1-100 based on evidence strength
 - confidenceReason: 1 sentence — what evidence supports/weakens this
-- validationNotes: what you'd want to test next to increase confidence
+- validationNotes: ONE focused test — the single next experiment to increase confidence (hypothesis + how you'll know it worked)
+- standoutActions: array of exactly 3-5 SHORT imperative bullets — concrete things to do so this offer wins in-market (distribution, proof, packaging, partnerships, ops), NOT generic advice. Must go beyond validationNotes (e.g. validation = "get 3 quotes from buyers"; standout = "publish case study", "lock sponsor LOI template", etc.)
 - status: "hypothesis" (new/untested) | "validating" (being tested) | "validated" (strong evidence) | "rejected" (doesn't work)
 
 ALSO OUTPUT:
@@ -1225,7 +1231,7 @@ RULES:
 Respond ONLY with valid JSON:
 {
   "researchSummary": "...",
-  "offers": [{ id, name, description, pricePoint, targetBuyer, whyNow, deliveryMethod, costToDeliver, revenueEstimate, confidenceScore, confidenceReason, validationNotes, status }],
+  "offers": [{ id, name, description, pricePoint, targetBuyer, whyNow, deliveryMethod, costToDeliver, revenueEstimate, confidenceScore, confidenceReason, validationNotes, standoutActions, status }],
   "keptOffers": ["id1"],
   "discardedOffers": [{"id": "id2", "reason": "..."}],
   "newOffers": ["id3", "id4"]
@@ -1262,13 +1268,29 @@ ${prevLogBlock ? `PREVIOUS RESEARCH LOG:\n${prevLogBlock}` : ""}` },
       const cleaned = response.replace(/```json?\n?/g, "").replace(/```/g, "").trim();
       const result = JSON.parse(cleaned);
 
-      const offers = (result.offers || []).map((o: { id?: string; name: string; description: string; pricePoint: string; targetBuyer: string; whyNow: string; deliveryMethod: string; costToDeliver: string; revenueEstimate: string; confidenceScore: number; confidenceReason: string; validationNotes: string; status: string }) => ({
+      const normalizeStandoutActions = (raw: unknown): string[] => {
+        if (raw == null) return [];
+        if (Array.isArray(raw)) {
+          return raw.map((x) => String(x).trim()).filter(Boolean).slice(0, 5);
+        }
+        if (typeof raw === "string") {
+          return raw
+            .split(/\n|;/)
+            .map((s) => s.replace(/^\s*\d+[\.\)]\s*/, "").trim())
+            .filter(Boolean)
+            .slice(0, 5);
+        }
+        return [];
+      };
+
+      const offers = (result.offers || []).map((o: { id?: string; name: string; description: string; pricePoint: string; targetBuyer: string; whyNow: string; deliveryMethod: string; costToDeliver: string; revenueEstimate: string; confidenceScore: number; confidenceReason: string; validationNotes: string; standoutActions?: unknown; status: string }) => ({
         id: o.id || `offer_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
         name: o.name, description: o.description, pricePoint: o.pricePoint,
         targetBuyer: o.targetBuyer, whyNow: o.whyNow, deliveryMethod: o.deliveryMethod,
         costToDeliver: o.costToDeliver, revenueEstimate: o.revenueEstimate,
         confidenceScore: o.confidenceScore || 0, confidenceReason: o.confidenceReason || "",
         validationNotes: o.validationNotes || "",
+        standoutActions: normalizeStandoutActions(o.standoutActions),
         status: o.status || "hypothesis", iteration,
         createdAt: new Date(), updatedAt: new Date(),
       }));

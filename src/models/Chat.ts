@@ -85,6 +85,8 @@ export interface IOffer {
   confidenceScore: number;
   confidenceReason: string;
   validationNotes: string;
+  /** 3–5 concrete moves to execute so the offer wins (beyond the next validation test). */
+  standoutActions: string[];
   status: "hypothesis" | "validating" | "validated" | "rejected" | "live";
   iteration: number;
   createdAt: Date;
@@ -191,6 +193,7 @@ const ChatSchema = new Schema<IChat>(
       costToDeliver: { type: String, default: "" }, revenueEstimate: { type: String, default: "" },
       confidenceScore: { type: Number, default: 0 }, confidenceReason: { type: String, default: "" },
       validationNotes: { type: String, default: "" },
+      standoutActions: { type: [String], default: [] },
       status: { type: String, enum: ["hypothesis", "validating", "validated", "rejected", "live"], default: "hypothesis" },
       iteration: { type: Number, default: 1 },
       createdAt: { type: Date, default: Date.now }, updatedAt: { type: Date, default: Date.now },

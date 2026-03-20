@@ -160,6 +160,7 @@ interface DashboardData {
       targetBuyer: string; whyNow: string; deliveryMethod: string;
       costToDeliver: string; revenueEstimate: string;
       confidenceScore: number; confidenceReason: string; validationNotes: string;
+      standoutActions: string[];
       status: "hypothesis" | "validating" | "validated" | "rejected" | "live";
       iteration: number; createdAt: string; updatedAt: string;
     }[];
@@ -1113,6 +1114,16 @@ export default function DashboardPage() {
                               {o.confidenceReason && <p className="text-[10px] text-gray-400 mt-0.5">{o.confidenceReason}</p>}
                               {o.validationNotes && (
                                 <p className="text-[10px] text-indigo-500 mt-0.5">Next validation: {o.validationNotes}</p>
+                              )}
+                              {o.standoutActions?.length > 0 && (
+                                <div className="mt-1.5 pt-1.5 border-t border-gray-100">
+                                  <p className="text-[9px] font-semibold uppercase tracking-wide text-gray-500 mb-1">Make it stand out</p>
+                                  <ol className="list-decimal list-inside space-y-0.5 text-[10px] text-gray-700 leading-snug">
+                                    {o.standoutActions.map((action, i) => (
+                                      <li key={i}>{action}</li>
+                                    ))}
+                                  </ol>
+                                </div>
                               )}
                               <div className="flex items-center gap-1 mt-1.5">
                                 {(["hypothesis", "validating", "validated", "live", "rejected"] as const).map((s) => (
