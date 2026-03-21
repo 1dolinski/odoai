@@ -39,10 +39,12 @@ interface Task {
   waitingOn?: string;
   priorityScore?: number;
   priorityReason?: string;
-  /** do | delegate | automate | delete — triage bucket */
-  actionLane?: "" | "do" | "delegate" | "automate" | "delete";
+  /** Triage bucket — prefer delete → automate → delegate → do */
+  actionLane?: "" | "delete" | "automate" | "delegate" | "do";
   /** AI / user-facing why this lane */
   actionLaneReason?: string;
+  /** Effort / loss / reward + lenses (IF_DELETE, IF_AUTOMATE, …) from AI */
+  actionLanePlan?: string;
   createdAt: string;
 }
 
@@ -287,14 +289,22 @@ const WATCH_ITEMS: { key: keyof WatchSettings; label: string; desc: string }[] =
   { key: "opportunities", label: "Opportunities", desc: "Spot ways to be better, faster, cheaper" },
 ];
 
-const ACTION_LANES = ["do", "delegate", "automate", "delete"] as const;
+/** Triage order for AI + UI: delete → automate → delegate → do */
+const ACTION_LANES = ["delete", "automate", "delegate", "do"] as const;
 type ActionLaneId = (typeof ACTION_LANES)[number];
 
 const LANE_LABELS: Record<ActionLaneId, { title: string; hint: string }> = {
-  do: { title: "Do", hint: "Ship now — DMs, brands, comments, posts, assets" },
-  delegate: { title: "Delegate", hint: "Better owner elsewhere" },
-  automate: { title: "Automate", hint: "Bot, script, template, schedule" },
-  delete: { title: "Delete", hint: "Drop — low value or duplicate" },
+  delete: { title: "Delete", hint: "Drop first — free capacity for higher leverage" },
+  automate: { title: "Automate", hint: "Cron, script, build vs buy a tool" },
+  delegate: { title: "Delegate", hint: "Team, Upwork, vendor, bounded friend/family" },
+  do: { title: "Do", hint: "Last resort — you ship it personally" },
+};
+
+const LANE_PILL_ABBR: Record<ActionLaneId, string> = {
+  delete: "Drop",
+  automate: "Auto",
+  delegate: "Deleg",
+  do: "Do",
 };
 
 function normalizedActionLane(t: Task): ActionLaneId | "" {
@@ -412,7 +422,7 @@ export default function DashboardPage() {
   const [laneModalBusy, setLaneModalBusy] = useState(false);
   const [laneModalExplainBusy, setLaneModalExplainBusy] = useState(false);
   const [laneModalError, setLaneModalError] = useState<string | null>(null);
-  const [laneModalSuggestion, setLaneModalSuggestion] = useState<{ lane: ActionLaneId; reason: string } | null>(null);
+  const [laneModalSuggestion, setLaneModalSuggestion] = useState<{ lane: ActionLaneId; reason: string; plan: string } | null>(null);
   const [taskViewMode, setTaskViewMode] = useState<"list" | "categories" | "priorities" | "lanes">(() => {
     if (typeof window !== "undefined") {
       const cached = localStorage.getItem("taskViewMode");
@@ -1120,7 +1130,7 @@ export default function DashboardPage() {
     })
     .sort((a, b) => (b.priorityScore ?? 0) - (a.priorityScore ?? 0));
 
-  const LANE_SECTION_ORDER = ["do", "delegate", "automate", "delete", "unset"] as const;
+  const LANE_SECTION_ORDER = ["delete", "automate", "delegate", "do", "unset"] as const;
 
   const coachLaneDo = activeTasks.filter((t) => normalizedActionLane(t) === "do").length;
   const coachLaneDelegate = activeTasks.filter((t) => normalizedActionLane(t) === "delegate").length;
@@ -1193,7 +1203,11 @@ export default function DashboardPage() {
       } else {
         setLaneModalMessages((m) => [...m, { role: "assistant", content: j.reply }]);
         if (j.suggestedLane && (ACTION_LANES as readonly string[]).includes(j.suggestedLane)) {
-          setLaneModalSuggestion({ lane: j.suggestedLane as ActionLaneId, reason: String(j.suggestedReason || "") });
+          setLaneModalSuggestion({
+            lane: j.suggestedLane as ActionLaneId,
+            reason: String(j.suggestedReason || ""),
+            plan: String(j.suggestedPlan || "").replace(/\r\n/g, "\n").trim(),
+          });
         }
       }
     } catch {
@@ -1206,13 +1220,15 @@ export default function DashboardPage() {
 
   function applyLaneSuggestion() {
     if (!laneModalTaskId || !laneModalSuggestion || !data) return;
-    const { lane, reason } = laneModalSuggestion;
+    const { lane, reason, plan } = laneModalSuggestion;
     setData((d) =>
       d
         ? {
             ...d,
             tasks: d.tasks.map((task) =>
-              task._id === laneModalTaskId ? { ...task, actionLane: lane, actionLaneReason: reason || undefined } : task
+              task._id === laneModalTaskId
+                ? { ...task, actionLane: lane, actionLaneReason: reason || undefined, actionLanePlan: plan || undefined }
+                : task
             ),
           }
         : d
@@ -1226,6 +1242,7 @@ export default function DashboardPage() {
         taskId: laneModalTaskId,
         actionLane: lane,
         actionLaneReason: reason || "",
+        actionLanePlan: plan || "",
       }),
     });
     setLaneModalSuggestion(null);
@@ -4393,15 +4410,15 @@ export default function DashboardPage() {
                                 type="button"
                                 onClick={() => {
                                   const next = normalizedActionLane(t) === lane ? "" : lane;
-                                  setData((d) => d ? { ...d, tasks: d.tasks.map((task) => task._id === t._id ? { ...task, actionLane: next || undefined, actionLaneReason: "" } : task) } : d);
-                                  fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "updateTaskPriority", taskId: t._id, actionLane: next, actionLaneReason: "" }) });
+                                  setData((d) => d ? { ...d, tasks: d.tasks.map((task) => task._id === t._id ? { ...task, actionLane: next || undefined, actionLaneReason: "", actionLanePlan: "" } : task) } : d);
+                                  fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "updateTaskPriority", taskId: t._id, actionLane: next, actionLaneReason: "", actionLanePlan: "" }) });
                                 }}
                                 title={LANE_LABELS[lane].hint}
                                 className={`text-[9px] px-1.5 py-0.5 rounded-full border transition-all ${
                                   normalizedActionLane(t) === lane ? "bg-emerald-700 text-white border-emerald-700" : "text-gray-300 border-gray-200 hover:border-gray-300"
                                 }`}
                               >
-                                {lane === "do" ? "Do" : lane === "delegate" ? "Deleg" : lane === "automate" ? "Auto" : "Drop"}
+                                {LANE_PILL_ABBR[lane]}
                               </button>
                             ))}
                             <button
@@ -4656,8 +4673,8 @@ export default function DashboardPage() {
                                   const next = normalizedActionLane(t) === lane ? "" : lane;
                                   const id = t._id;
                                   if (String(id).startsWith("check-")) return;
-                                  setData((d) => d ? { ...d, tasks: d.tasks.map((task) => task._id === id ? { ...task, actionLane: next || undefined, actionLaneReason: "" } : task) } : d);
-                                  fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "updateTaskPriority", taskId: id, actionLane: next, actionLaneReason: "" }) });
+                                  setData((d) => d ? { ...d, tasks: d.tasks.map((task) => task._id === id ? { ...task, actionLane: next || undefined, actionLaneReason: "", actionLanePlan: "" } : task) } : d);
+                                  fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "updateTaskPriority", taskId: id, actionLane: next, actionLaneReason: "", actionLanePlan: "" }) });
                                 }}
                                 disabled={String(t._id).startsWith("check-")}
                                 className={`text-[10px] font-semibold px-2 py-0.5 rounded-md border transition-colors disabled:opacity-40 ${
@@ -4805,8 +4822,8 @@ export default function DashboardPage() {
                               type="button"
                               onClick={() => {
                                 const next = normalizedActionLane(t) === lane ? "" : lane;
-                                setData((d) => d ? { ...d, tasks: d.tasks.map((task) => task._id === t._id ? { ...task, actionLane: next || undefined, actionLaneReason: "" } : task) } : d);
-                                fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "updateTaskPriority", taskId: t._id, actionLane: next, actionLaneReason: "" }) });
+                                setData((d) => d ? { ...d, tasks: d.tasks.map((task) => task._id === t._id ? { ...task, actionLane: next || undefined, actionLaneReason: "", actionLanePlan: "" } : task) } : d);
+                                fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "updateTaskPriority", taskId: t._id, actionLane: next, actionLaneReason: "", actionLanePlan: "" }) });
                               }}
                               className={`text-[9px] font-semibold px-1.5 py-0.5 rounded-md border transition-colors ${
                                 normalizedActionLane(t) === lane
@@ -5282,8 +5299,8 @@ export default function DashboardPage() {
                           type="button"
                           onClick={() => {
                             const next = normalizedActionLane(t) === lane ? "" : lane;
-                            setData((d) => d ? { ...d, tasks: d.tasks.map((task) => task._id === t._id ? { ...task, actionLane: next || undefined, actionLaneReason: "" } : task) } : d);
-                            fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "updateTaskPriority", taskId: t._id, actionLane: next, actionLaneReason: "" }) });
+                            setData((d) => d ? { ...d, tasks: d.tasks.map((task) => task._id === t._id ? { ...task, actionLane: next || undefined, actionLaneReason: "", actionLanePlan: "" } : task) } : d);
+                            fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "updateTaskPriority", taskId: t._id, actionLane: next, actionLaneReason: "", actionLanePlan: "" }) });
                           }}
                           className={`text-[10px] font-semibold px-2 py-0.5 rounded-md border transition-colors ${
                             normalizedActionLane(t) === lane
@@ -5558,7 +5575,7 @@ export default function DashboardPage() {
             onClick={() => setLaneModalTaskId(null)}
           >
             <div
-              className="bg-white rounded-xl shadow-2xl w-full max-w-lg max-h-[88vh] overflow-hidden flex flex-col border border-gray-200"
+              className="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[88vh] overflow-hidden flex flex-col border border-gray-200"
               onClick={(e) => e.stopPropagation()}
             >
               <div className="px-4 py-3 border-b border-gray-100 flex items-start justify-between gap-2">
@@ -5569,6 +5586,7 @@ export default function DashboardPage() {
                     <span className="font-semibold text-gray-700">
                       {normalizedActionLane(laneModalTask) ? LANE_LABELS[normalizedActionLane(laneModalTask) as ActionLaneId].title : "Unset"}
                     </span>
+                    <span className="text-gray-400"> · triage order: delete → automate → delegate → do</span>
                   </p>
                 </div>
                 <button
@@ -5598,6 +5616,15 @@ export default function DashboardPage() {
                           ? "Regenerate explanation"
                           : "Get explanation"}
                     </button>
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-1">Triage plan</div>
+                  <p className="text-[11px] text-gray-500 mb-1 leading-snug">
+                    Effort / loss / reward and lenses (delete alternative, automate options, delegate paths). Updates when you run <strong>Analyze Priorities</strong> or <strong>AI: sort into lanes</strong>.
+                  </p>
+                  <div className="max-h-52 overflow-y-auto rounded-lg border border-gray-100 bg-gray-50/90 px-2.5 py-2 text-[11px] text-gray-800 whitespace-pre-wrap leading-relaxed font-mono">
+                    {(laneModalTask.actionLanePlan || "").trim() || "No plan yet — run lane AI or full prioritize."}
                   </div>
                 </div>
                 <div className="border-t border-gray-100 pt-3">
@@ -5651,7 +5678,7 @@ export default function DashboardPage() {
                       onClick={applyLaneSuggestion}
                       className="text-[11px] font-semibold px-3 py-1.5 rounded-lg bg-emerald-700 text-white hover:bg-emerald-800 shrink-0"
                     >
-                      Apply lane + reason
+                      Apply lane + plan
                     </button>
                   </div>
                 )}

@@ -42,6 +42,8 @@ export interface ITask extends Document {
   actionLane: ActionLane | "";
   /** Why this lane (from AI classify / prioritize / explain). */
   actionLaneReason: string;
+  /** How to think/act on this lane: effort, loss, reward, alternatives (delete→automate→delegate→do framework). */
+  actionLanePlan: string;
   costEstimate: string;
   revenueEstimate: string;
   blockedBy: string;
@@ -73,6 +75,7 @@ const TaskSchema = new Schema<ITask>(
     executionType: { type: String, enum: ["automated", "human", "hybrid"], default: "human" },
     actionLane: { type: String, enum: ["", "do", "delegate", "automate", "delete"], default: "" },
     actionLaneReason: { type: String, default: "" },
+    actionLanePlan: { type: String, default: "" },
     costEstimate: { type: String, default: "" },
     revenueEstimate: { type: String, default: "" },
     blockedBy: { type: String, default: "" },

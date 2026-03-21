@@ -833,18 +833,45 @@ Rules:
     const response = await aiChat([
       {
         role: "system",
-        content: `You triage each open task into exactly ONE lane (4-bucket execution hygiene):
+        content: `You triage each open task into exactly ONE lane. **Decision order (mandatory):** consider options in this sequence — **delete → automate → delegate → do** — and pick the **first** bucket that honestly fits. Default bias: eliminate waste and automation before defaulting to human execution.
 
-- **do** — Concrete work someone should do soon: DMs, outreach, comments on accounts, posts, generating images/video, emails, calls, shipping small deliverables, brand pitches, follow-ups. "Meat and potatoes" execution.
-- **delegate** — Should be owned by someone else, another role, vendor, or partner — not the right person here.
-- **automate** — Repeatable or machine-ownable: scripts, bots, scheduled jobs, templates, CI, reminders, bulk generation after setup.
-- **delete** — Low value, duplicate, obsolete, or explicitly should NOT be done — candidate to remove or consciously drop.
+Lanes:
+- **delete** — Low value, duplicate, obsolete, or should NOT be done; conscious drop.
+- **automate** — Repeatable / machine-ownable: cron, script, Zapier/Make, custom small tool, or **buy** a SaaS; one-time setup OK.
+- **delegate** — Better owner: teammate, **Upwork/contractor**, vendor, or when appropriate **friend/family** for a bounded favor — not you by default.
+- **do** — **Last resort:** you (or assignee) should personally execute soon — concrete work that truly needs a human now.
 
-Respond ONLY with valid JSON. Each task id maps to an object with lane + reason (reason = 1-2 sentences, plain text, for the human reading the board).
+Respond ONLY with valid JSON. Each task id maps to an object:
+- "lane": "delete"|"automate"|"delegate"|"do"
+- "reason": 1–2 sentences, plain text (short board summary).
+- "plan": longer plain text (max ~2500 chars) with these sections and headers on their own lines:
 
-Format: { "<mongoTaskId>": { "lane": "do"|"delegate"|"automate"|"delete", "reason": "why this lane" }, ... }
+TRIAGE_ORDER:
+(one line: you evaluated delete→automate→delegate→do and chose ___ because …)
 
-Legacy format also accepted: { "<id>": "do" } — then reason will be empty.
+EFFORT_LOSS_REWARD:
+- Effort if this stays on a human: …
+- Loss / risk if we pick the wrong lane: …
+- Reward if we execute the chosen lane: …
+
+IF_DELETE:
+(If lane is delete: what higher-leverage work to do instead. If not delete: what we’d protect by *not* doing this personally.)
+
+IF_AUTOMATE:
+(Concrete options: e.g. cron, webhook, internal script, build vs **buy** tool, rough setup time/cost.)
+
+IF_DELEGATE:
+(Internal people by name/role if inferable, else **Upwork**/contractor profile, or trusted friend/family — be practical.)
+
+IF_DO:
+(Only if lane is do: why personal execution now and what “done” looks like. Otherwise write “N/A — lane is not do.”)
+
+NEXT_STEP:
+(one concrete next action)
+
+Format: { "<mongoTaskId>": { "lane": "…", "reason": "…", "plan": "…" }, ... }
+
+Legacy: { "<id>": "do" } — then reason and plan empty.
 
 Every task id from the user list must appear exactly once.`,
       },
@@ -862,16 +889,21 @@ Every task id from the user list must appear exactly once.`,
         if (!mongoose.Types.ObjectId.isValid(id)) continue;
         let lane = "";
         let reason = "";
+        let plan = "";
         if (typeof raw === "string" && valid.has(raw)) {
           lane = raw;
         } else if (raw && typeof raw === "object" && "lane" in raw) {
           const l = String((raw as { lane: string }).lane);
           if (valid.has(l)) lane = l;
           reason = String((raw as { reason?: string }).reason || "").replace(/\s+/g, " ").trim().slice(0, 800);
+          plan = String((raw as { plan?: string }).plan || "").replace(/\r\n/g, "\n").trim().slice(0, 3500);
         }
         if (!lane) continue;
         ops.push(
-          Task.updateOne({ _id: id, telegramChatId: chatId }, { $set: { actionLane: lane, actionLaneReason: reason } })
+          Task.updateOne(
+            { _id: id, telegramChatId: chatId },
+            { $set: { actionLane: lane, actionLaneReason: reason, actionLanePlan: plan } }
+          )
         );
       }
       await Promise.all(ops);
@@ -891,6 +923,7 @@ Every task id from the user list must appear exactly once.`,
       description?: string;
       actionLane?: string;
       actionLaneReason?: string;
+      actionLanePlan?: string;
       categories?: string[];
       momentum?: string;
       status?: string;
@@ -901,13 +934,16 @@ Every task id from the user list must appear exactly once.`,
       return NextResponse.json({ ok: true, source: "stored", explanation: stored });
     }
     const lane = doc.actionLane && validLanes.has(doc.actionLane) ? doc.actionLane : "unset";
+    const planOnFile = String(doc.actionLanePlan || "").trim().slice(0, 2000);
     const response = await aiChat(
       [
         {
           role: "system",
           content: `You explain why a task was placed in an execution lane (or why it is unset).
 
-Lanes: **do** = ship soon (concrete work); **delegate** = someone else should own; **automate** = repeatable / machine; **delete** = drop or not worth doing.
+Triage mindset: options are considered **delete → automate → delegate → do**; **do** is last resort.
+
+Lanes: **delete** = drop; **automate** = script/cron/buy tool; **delegate** = team/Upwork/friend; **do** = personal execution now.
 
 Return ONLY valid JSON: { "explanation": "2-5 sentences, plain text, honest if the lane might be wrong" }
 Max 700 characters in explanation.`,
@@ -919,7 +955,9 @@ Title: ${doc.title}
 Description: ${(doc.description || "").replace(/\s+/g, " ").slice(0, 500)}
 Categories: ${(doc.categories || []).join(", ") || "none"}
 Momentum: ${doc.momentum || "new"}
-Status: ${doc.status || ""}`,
+Status: ${doc.status || ""}
+Existing triage plan on file (may be empty):
+${planOnFile || "(none)"}`,
         },
       ],
       "openai/gpt-4o-mini"
@@ -944,6 +982,7 @@ Status: ${doc.status || ""}`,
       description?: string;
       actionLane?: string;
       actionLaneReason?: string;
+      actionLanePlan?: string;
       categories?: string[];
       momentum?: string;
     };
@@ -957,7 +996,7 @@ Status: ${doc.status || ""}`,
       : [];
 
     const lane = doc.actionLane && validLanes.has(doc.actionLane) ? doc.actionLane : "(unset)";
-    const sys = `You help a teammate discuss a task's lane: do / delegate / automate / delete.
+    const sys = `You help a teammate discuss a task's lane. Triage order to consider: **delete → automate → delegate → do** (do is last resort).
 
 TASK:
 Title: ${doc.title}
@@ -966,17 +1005,19 @@ Categories: ${(doc.categories || []).join(", ") || "none"}
 Momentum: ${doc.momentum || "new"}
 Current lane: ${lane}
 Official lane reason on file: ${String(doc.actionLaneReason || "").slice(0, 600) || "none"}
+Official triage plan on file: ${String(doc.actionLanePlan || "").slice(0, 1200) || "none"}
 
 The user may disagree or propose a better lane. Be concise and practical.
 
 Return ONLY valid JSON:
 {
   "reply": "2-6 sentences, conversational",
-  "suggestedLane": "" | "do" | "delegate" | "automate" | "delete",
-  "suggestedReason": "if suggestedLane is set, 1-2 sentences to store as the new official reason; else empty string"
+  "suggestedLane": "" | "delete" | "automate" | "delegate" | "do",
+  "suggestedReason": "if suggestedLane is set, 1-2 sentences for the board; else empty",
+  "suggestedPlan": "if suggestedLane is set, multi-line triage plan (same section style as prioritize: TRIAGE_ORDER, EFFORT_LOSS_REWARD, IF_DELETE, IF_AUTOMATE, IF_DELEGATE, IF_DO, NEXT_STEP); max ~2000 chars; else empty string"
 }
 
-If you agree the current lane is fine, set suggestedLane to "" and suggestedReason to "". If you recommend a change, set both.`;
+If you agree the current lane is fine, set suggestedLane, suggestedReason, and suggestedPlan to "". If you recommend a change, set all three appropriately.`;
 
     const messages: { role: "system" | "user" | "assistant"; content: string }[] = [{ role: "system", content: sys }];
     for (const h of history) {
@@ -987,15 +1028,17 @@ If you agree the current lane is fine, set suggestedLane to "" and suggestedReas
     const response = await aiChat(messages, "openai/gpt-4o-mini");
     try {
       const c = response.replace(/```json?\n?/g, "").replace(/```/g, "").trim();
-      const j = JSON.parse(c) as { reply?: string; suggestedLane?: string; suggestedReason?: string };
+      const j = JSON.parse(c) as { reply?: string; suggestedLane?: string; suggestedReason?: string; suggestedPlan?: string };
       const reply = String(j.reply || "Let’s pick a lane that matches how you’ll actually execute this.").slice(0, 4000);
       let suggestedLane = "";
       let suggestedReason = "";
+      let suggestedPlan = "";
       if (j.suggestedLane && validLanes.has(j.suggestedLane)) {
         suggestedLane = j.suggestedLane;
         suggestedReason = String(j.suggestedReason || "").replace(/\s+/g, " ").trim().slice(0, 800);
+        suggestedPlan = String(j.suggestedPlan || "").replace(/\r\n/g, "\n").trim().slice(0, 3500);
       }
-      return NextResponse.json({ ok: true, reply, suggestedLane, suggestedReason });
+      return NextResponse.json({ ok: true, reply, suggestedLane, suggestedReason, suggestedPlan });
     } catch {
       return NextResponse.json({ ok: false, error: "Failed to parse coach reply" });
     }
@@ -1611,10 +1654,12 @@ OUTPUT (valid JSON only):
   "narrative": "multi-paragraph priority narrative covering all dimensions below",
   "leveragePlay": "The leverage play paragraph",
   "tasks": [
-    { "id": "taskId", "priorityScore": 85, "momentum": "in-motion", "effort": "low", "impact": "high", "executionType": "human", "actionLane": "do", "actionLaneReason": "1-2 sentences: why this lane for this specific task", "costEstimate": "$50/mo or 2hrs/week", "revenueEstimate": "$2k/mo potential", "priorityReason": "..." },
+    { "id": "taskId", "priorityScore": 85, "momentum": "in-motion", "effort": "low", "impact": "high", "executionType": "human", "actionLane": "delete", "actionLaneReason": "1-2 sentences: short board summary for chosen lane", "actionLanePlan": "multi-section plan text (see below)", "costEstimate": "$50/mo or 2hrs/week", "revenueEstimate": "$2k/mo potential", "priorityReason": "..." },
     ...
   ]
 }
+
+LANE TRIAGE (mandatory mental order): **delete → automate → delegate → do**. For each task, mentally ask in that order which bucket fits first. Prefer dropping waste, then automating, then delegating; **do** is last resort for work that truly needs the assignee’s hands now.
 
 FOR EACH TASK, assign:
 - priorityScore: 1-100 (100 = do this first)
@@ -1622,8 +1667,32 @@ FOR EACH TASK, assign:
 - effort: "low" | "medium" | "high"
 - impact: "low" | "medium" | "high"
 - executionType: "automated" (runs itself — crons, bots, scripts, CI/CD, scheduled jobs) | "human" (needs someone's time and attention) | "hybrid" (automated process but needs human setup, review, or maintenance)
-- actionLane: exactly one of "do" | "delegate" | "automate" | "delete" — same definitions as triage: **do** = meat-and-potatoes execution you should ship soon; **delegate** = better owner elsewhere; **automate** = machine-repeatable; **delete** = drop or not worth doing. Align with executionType (automated tasks usually "automate" unless a human must do a one-off before scripting).
-- actionLaneReason: required whenever actionLane is set — 1-2 short sentences the assignee can read on the board explaining why THAT lane (not generic).
+- actionLane: exactly one of "delete" | "automate" | "delegate" | "do" — definitions: **delete** = drop / not worth it; **automate** = cron, script, Zapier/Make, build small tool, or **buy** SaaS; **delegate** = teammate, **Upwork**/contractor, vendor, or bounded **friend/family** help; **do** = must be done personally soon.
+- actionLaneReason: required whenever actionLane is set — 1-2 short sentences for the board (not generic).
+- actionLanePlan: required whenever actionLane is set — plain text, max ~2500 chars, with these section headers on their own lines:
+
+TRIAGE_ORDER:
+(one line: evaluated delete→automate→delegate→do; chose ___ because …)
+
+EFFORT_LOSS_REWARD:
+- Effort if this stays on a human: …
+- Loss/risk if wrong lane: …
+- Reward if chosen lane succeeds: …
+
+IF_DELETE:
+(If delete: higher-leverage alternative. Else: what we protect by not doing this personally.)
+
+IF_AUTOMATE:
+(Cron vs script vs buy tool — concrete options, rough setup.)
+
+IF_DELEGATE:
+(Internal names/roles if known, else Upwork-style hire, or friend/family.)
+
+IF_DO:
+(If do: why personal now + definition of done. Else: "N/A — lane is not do.")
+
+NEXT_STEP:
+(one concrete action)
 - costEstimate: what it costs to execute — be specific. "$0" for free automated tasks, "2hrs/week" for human time, "$200/mo + 1hr setup" for tools/subscriptions. Use real numbers when data is available.
 - revenueEstimate: what value or revenue this could generate — "$0" for pure ops/maintenance, "saves 5hrs/week" for efficiency, "$5k/mo" for revenue-generating tasks. Be honest — not everything makes money, and that's fine. Flag things that are cost centers vs revenue drivers.
 - priorityReason: 1 sentence explaining ranking
@@ -1701,7 +1770,20 @@ CONTEXT SUMMARY:\n${chatDoc?.contextSummary || "none"}` },
       const taskUpdates = result.tasks || [];
 
       const lanes = new Set(["do", "delegate", "automate", "delete"]);
-      const ops = taskUpdates.map((t: { id: string; priorityScore: number; momentum: string; effort: string; impact: string; executionType?: string; actionLane?: string; actionLaneReason?: string; costEstimate?: string; revenueEstimate?: string; priorityReason: string }) => {
+      const ops = taskUpdates.map((t: {
+        id: string;
+        priorityScore: number;
+        momentum: string;
+        effort: string;
+        impact: string;
+        executionType?: string;
+        actionLane?: string;
+        actionLaneReason?: string;
+        actionLanePlan?: string;
+        costEstimate?: string;
+        revenueEstimate?: string;
+        priorityReason: string;
+      }) => {
         const set: Record<string, unknown> = {
           priorityScore: t.priorityScore || 0,
           momentum: t.momentum || "new",
@@ -1717,6 +1799,8 @@ CONTEXT SUMMARY:\n${chatDoc?.contextSummary || "none"}` },
           if (t.actionLaneReason && String(t.actionLaneReason).trim()) {
             set.actionLaneReason = String(t.actionLaneReason).replace(/\s+/g, " ").trim().slice(0, 800);
           }
+          const plan = String(t.actionLanePlan ?? "").replace(/\r\n/g, "\n").trim().slice(0, 3500);
+          set.actionLanePlan = plan;
         }
         return Task.updateOne({ _id: t.id, telegramChatId: chatId }, { $set: set });
       });
@@ -1744,6 +1828,9 @@ CONTEXT SUMMARY:\n${chatDoc?.contextSummary || "none"}` },
     }
     if (body.actionLaneReason !== undefined) {
       update.actionLaneReason = String(body.actionLaneReason ?? "").replace(/\s+/g, " ").trim().slice(0, 800);
+    }
+    if (body.actionLanePlan !== undefined) {
+      update.actionLanePlan = String(body.actionLanePlan ?? "").replace(/\r\n/g, "\n").trim().slice(0, 3500);
     }
     if (body.costEstimate !== undefined) update.costEstimate = body.costEstimate;
     if (body.revenueEstimate !== undefined) update.revenueEstimate = body.revenueEstimate;
