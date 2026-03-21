@@ -40,6 +40,8 @@ export interface ITask extends Document {
   executionType: ExecutionType;
   /** Empty string = not classified yet */
   actionLane: ActionLane | "";
+  /** Why this lane (from AI classify / prioritize / explain). */
+  actionLaneReason: string;
   costEstimate: string;
   revenueEstimate: string;
   blockedBy: string;
@@ -70,6 +72,7 @@ const TaskSchema = new Schema<ITask>(
     impact: { type: String, enum: ["low", "medium", "high"], default: "medium" },
     executionType: { type: String, enum: ["automated", "human", "hybrid"], default: "human" },
     actionLane: { type: String, enum: ["", "do", "delegate", "automate", "delete"], default: "" },
+    actionLaneReason: { type: String, default: "" },
     costEstimate: { type: String, default: "" },
     revenueEstimate: { type: String, default: "" },
     blockedBy: { type: String, default: "" },

@@ -840,7 +840,12 @@ Rules:
 - **automate** — Repeatable or machine-ownable: scripts, bots, scheduled jobs, templates, CI, reminders, bulk generation after setup.
 - **delete** — Low value, duplicate, obsolete, or explicitly should NOT be done — candidate to remove or consciously drop.
 
-Respond ONLY with valid JSON: { "<mongoTaskId>": "do"|"delegate"|"automate"|"delete", ... }
+Respond ONLY with valid JSON. Each task id maps to an object with lane + reason (reason = 1-2 sentences, plain text, for the human reading the board).
+
+Format: { "<mongoTaskId>": { "lane": "do"|"delegate"|"automate"|"delete", "reason": "why this lane" }, ... }
+
+Legacy format also accepted: { "<id>": "do" } — then reason will be empty.
+
 Every task id from the user list must appear exactly once.`,
       },
       {
@@ -850,15 +855,149 @@ Every task id from the user list must appear exactly once.`,
     ], "openai/gpt-4o-mini");
     try {
       const cleaned = response.replace(/```json?\n?/g, "").replace(/```/g, "").trim();
-      const mapping = JSON.parse(cleaned) as Record<string, string>;
+      const mapping = JSON.parse(cleaned) as Record<string, unknown>;
       const valid = new Set(["do", "delegate", "automate", "delete"]);
-      const ops = Object.entries(mapping)
-        .filter(([id, lane]) => valid.has(lane) && mongoose.Types.ObjectId.isValid(id))
-        .map(([id, lane]) => Task.updateOne({ _id: id, telegramChatId: chatId }, { $set: { actionLane: lane } }));
+      const ops: Promise<unknown>[] = [];
+      for (const [id, raw] of Object.entries(mapping)) {
+        if (!mongoose.Types.ObjectId.isValid(id)) continue;
+        let lane = "";
+        let reason = "";
+        if (typeof raw === "string" && valid.has(raw)) {
+          lane = raw;
+        } else if (raw && typeof raw === "object" && "lane" in raw) {
+          const l = String((raw as { lane: string }).lane);
+          if (valid.has(l)) lane = l;
+          reason = String((raw as { reason?: string }).reason || "").replace(/\s+/g, " ").trim().slice(0, 800);
+        }
+        if (!lane) continue;
+        ops.push(
+          Task.updateOne({ _id: id, telegramChatId: chatId }, { $set: { actionLane: lane, actionLaneReason: reason } })
+        );
+      }
       await Promise.all(ops);
       return NextResponse.json({ ok: true, mapping });
     } catch {
       return NextResponse.json({ ok: false, error: "Failed to parse lane classification" });
+    }
+  }
+
+  const validLanes = new Set(["do", "delegate", "automate", "delete"]);
+
+  if (action === "explainTaskLane" && body.taskId) {
+    const t = await Task.findOne({ _id: body.taskId, telegramChatId: chatId }).lean();
+    if (!t) return NextResponse.json({ ok: false, error: "task not found" }, { status: 404 });
+    const doc = t as {
+      title: string;
+      description?: string;
+      actionLane?: string;
+      actionLaneReason?: string;
+      categories?: string[];
+      momentum?: string;
+      status?: string;
+    };
+    const force = body.regenerate === true;
+    const stored = String(doc.actionLaneReason || "").trim();
+    if (stored && !force) {
+      return NextResponse.json({ ok: true, source: "stored", explanation: stored });
+    }
+    const lane = doc.actionLane && validLanes.has(doc.actionLane) ? doc.actionLane : "unset";
+    const response = await aiChat(
+      [
+        {
+          role: "system",
+          content: `You explain why a task was placed in an execution lane (or why it is unset).
+
+Lanes: **do** = ship soon (concrete work); **delegate** = someone else should own; **automate** = repeatable / machine; **delete** = drop or not worth doing.
+
+Return ONLY valid JSON: { "explanation": "2-5 sentences, plain text, honest if the lane might be wrong" }
+Max 700 characters in explanation.`,
+        },
+        {
+          role: "user",
+          content: `Current lane: ${lane}
+Title: ${doc.title}
+Description: ${(doc.description || "").replace(/\s+/g, " ").slice(0, 500)}
+Categories: ${(doc.categories || []).join(", ") || "none"}
+Momentum: ${doc.momentum || "new"}
+Status: ${doc.status || ""}`,
+        },
+      ],
+      "openai/gpt-4o-mini"
+    );
+    try {
+      const c = response.replace(/```json?\n?/g, "").replace(/```/g, "").trim();
+      const j = JSON.parse(c) as { explanation?: string };
+      const explanation = String(j.explanation || "").replace(/\s+/g, " ").trim().slice(0, 800);
+      if (!explanation) return NextResponse.json({ ok: false, error: "Empty explanation" });
+      await Task.updateOne({ _id: body.taskId, telegramChatId: chatId }, { $set: { actionLaneReason: explanation } });
+      return NextResponse.json({ ok: true, source: "generated", explanation });
+    } catch {
+      return NextResponse.json({ ok: false, error: "Failed to parse explanation" });
+    }
+  }
+
+  if (action === "chatTaskLane" && body.taskId && typeof body.message === "string") {
+    const t = await Task.findOne({ _id: body.taskId, telegramChatId: chatId }).lean();
+    if (!t) return NextResponse.json({ ok: false, error: "task not found" }, { status: 404 });
+    const doc = t as {
+      title: string;
+      description?: string;
+      actionLane?: string;
+      actionLaneReason?: string;
+      categories?: string[];
+      momentum?: string;
+    };
+    const message = body.message.trim();
+    if (!message) return NextResponse.json({ ok: false, error: "message required" }, { status: 400 });
+    const history = Array.isArray(body.history)
+      ? (body.history as { role?: string; content?: string }[])
+          .filter((h) => h && (h.role === "user" || h.role === "assistant") && typeof h.content === "string")
+          .slice(-14)
+          .map((h) => ({ role: h.role as "user" | "assistant", content: h.content!.slice(0, 4000) }))
+      : [];
+
+    const lane = doc.actionLane && validLanes.has(doc.actionLane) ? doc.actionLane : "(unset)";
+    const sys = `You help a teammate discuss a task's lane: do / delegate / automate / delete.
+
+TASK:
+Title: ${doc.title}
+Description: ${(doc.description || "").slice(0, 600)}
+Categories: ${(doc.categories || []).join(", ") || "none"}
+Momentum: ${doc.momentum || "new"}
+Current lane: ${lane}
+Official lane reason on file: ${String(doc.actionLaneReason || "").slice(0, 600) || "none"}
+
+The user may disagree or propose a better lane. Be concise and practical.
+
+Return ONLY valid JSON:
+{
+  "reply": "2-6 sentences, conversational",
+  "suggestedLane": "" | "do" | "delegate" | "automate" | "delete",
+  "suggestedReason": "if suggestedLane is set, 1-2 sentences to store as the new official reason; else empty string"
+}
+
+If you agree the current lane is fine, set suggestedLane to "" and suggestedReason to "". If you recommend a change, set both.`;
+
+    const messages: { role: "system" | "user" | "assistant"; content: string }[] = [{ role: "system", content: sys }];
+    for (const h of history) {
+      messages.push({ role: h.role, content: h.content });
+    }
+    messages.push({ role: "user", content: message });
+
+    const response = await aiChat(messages, "openai/gpt-4o-mini");
+    try {
+      const c = response.replace(/```json?\n?/g, "").replace(/```/g, "").trim();
+      const j = JSON.parse(c) as { reply?: string; suggestedLane?: string; suggestedReason?: string };
+      const reply = String(j.reply || "Let’s pick a lane that matches how you’ll actually execute this.").slice(0, 4000);
+      let suggestedLane = "";
+      let suggestedReason = "";
+      if (j.suggestedLane && validLanes.has(j.suggestedLane)) {
+        suggestedLane = j.suggestedLane;
+        suggestedReason = String(j.suggestedReason || "").replace(/\s+/g, " ").trim().slice(0, 800);
+      }
+      return NextResponse.json({ ok: true, reply, suggestedLane, suggestedReason });
+    } catch {
+      return NextResponse.json({ ok: false, error: "Failed to parse coach reply" });
     }
   }
 
@@ -928,9 +1067,17 @@ Return ONLY valid JSON:
   "viewExplained": "1-2 sentences: what this view is for.",
   "guidance": "2-5 sentences: how to work here; use time of day in ET (morning=plan/review, midday=execute, late afternoon=ship, evening=wrap); reference recent activity when it helps.",
   "recommendedAction": "short imperative, e.g. Classify tasks into lanes",
-  "recommendedDetail": "one sentence why that next step fits now"
+  "recommendedDetail": "one sentence why that next step fits now",
+  "suggestedExecuteKind": "prioritize" | "lanes" | "messaging_drafts" | "none"
 }
-Plain text inside strings, no markdown.`,
+
+suggestedExecuteKind — pick ONE for the primary CTA the dashboard will show:
+- "prioritize" if the best next step is to score/rank tasks, analyze priorities, momentum, impact, or "what to do first".
+- "lanes" if the best next step is bucketing tasks into do/delegate/automate/delete or cleaning lane hygiene.
+- "messaging_drafts" if the best next step is DMs, emails, outreach, follow-ups, pinging people, or writing to someone.
+- "none" if there is no clear one-click AI action (e.g. purely reflective advice) or the step is manual-only.
+
+If both prioritize and lanes could apply, prefer "prioritize" unless the copy is explicitly about the four lanes.`,
           },
           { role: "user", content: userBlock },
         ],
@@ -940,6 +1087,9 @@ Plain text inside strings, no markdown.`,
       try {
         const cleaned = response.replace(/```json?\n?/g, "").replace(/```/g, "").trim();
         const parsed = JSON.parse(cleaned) as Record<string, string>;
+        const rawKind = String(parsed.suggestedExecuteKind || "none").toLowerCase();
+        const suggestedExecuteKind =
+          rawKind === "prioritize" || rawKind === "lanes" || rawKind === "messaging_drafts" ? rawKind : "none";
         return NextResponse.json({
           ok: true,
           viewTitle: String(parsed.viewTitle || "Dashboard"),
@@ -947,6 +1097,7 @@ Plain text inside strings, no markdown.`,
           guidance: String(parsed.guidance || ""),
           recommendedAction: String(parsed.recommendedAction || ""),
           recommendedDetail: String(parsed.recommendedDetail || ""),
+          suggestedExecuteKind,
         });
       } catch {
         return NextResponse.json({ ok: false, error: "Coach brief parse failed" });
@@ -1022,6 +1173,96 @@ ${chatHist || "(none)"}`,
     }
 
     return NextResponse.json({ ok: false, error: "dashboardCoach mode must be brief or chat" }, { status: 400 });
+  }
+
+  if (action === "coachGenerateMessageDrafts") {
+    const tasks = await Task.find({ telegramChatId: chatId, status: { $in: ["todo", "upcoming"] } })
+      .sort({ updatedAt: -1 })
+      .limit(45)
+      .lean();
+    const people = await Person.find({ telegramChatId: chatId }).sort({ messageCount: -1 }).limit(40).lean();
+
+    if (tasks.length === 0) {
+      return NextResponse.json({ ok: true, created: 0, message: "No open tasks to base drafts on." });
+    }
+
+    const taskLines = tasks.map((t) => {
+      const x = t as { title: string; description?: string; people?: string[]; momentum?: string; blockedBy?: string; waitingOn?: string };
+      const extra = [x.blockedBy && `blocked:${x.blockedBy}`, x.waitingOn && `waiting:${x.waitingOn}`].filter(Boolean).join(" ");
+      return `- ${x.title}${x.description ? ` | ${String(x.description).replace(/\s+/g, " ").slice(0, 140)}` : ""}${(x.people || []).length ? ` [people: ${(x.people || []).join(", ")}]` : ""} [${x.momentum || "new"}]${extra ? ` (${extra})` : ""}`;
+    }).join("\n");
+
+    const peopleLines = people.length
+      ? people
+          .map((p) => {
+            const x = p as { username?: string; firstName?: string; role?: string; context?: string; notes?: string };
+            const n = (x.username || x.firstName || "").trim() || "?";
+            const bits = [x.role && `role:${x.role}`, x.context && String(x.context).replace(/\s+/g, " ").slice(0, 80)].filter(Boolean).join(" · ");
+            return `- ${n}${bits ? ` — ${bits}` : ""}`;
+          })
+          .join("\n")
+      : "(no people on file — infer generic recipients from tasks only)";
+
+    const response = await aiChat(
+      [
+        {
+          role: "system",
+          content: `You write ready-to-send message drafts (DMs, email, Slack-style pings) for a busy operator.
+
+Return ONLY valid JSON:
+{ "drafts": [ { "title": "very short label, no brackets", "target": "who this is for (name or role)", "body": "the full draft message, plain text, friendly-professional" } ] }
+
+Rules:
+- 1 to 6 drafts max. Skip fluff. Each body should be copy-paste ready.
+- Tie drafts to real tasks/people from the user list when possible.
+- If a task implies follow-up with someone named in people or task.people, address them.
+- Do not invent private facts; stay generic if context is thin.`,
+        },
+        {
+          role: "user",
+          content: `OPEN TASKS:\n${taskLines}\n\nPEOPLE:\n${peopleLines}`,
+        },
+      ],
+      "openai/gpt-4o-mini"
+    );
+
+    try {
+      const c = response.replace(/```json?\n?/g, "").replace(/```/g, "").trim();
+      const j = JSON.parse(c) as { drafts?: { title?: string; target?: string; body?: string }[] };
+      const drafts = Array.isArray(j.drafts) ? j.drafts : [];
+      let created = 0;
+      const titles: string[] = [];
+      for (const d of drafts.slice(0, 8)) {
+        const body = String(d.body || "").trim();
+        if (!body) continue;
+        const label = String(d.title || "Message draft").replace(/\s+/g, " ").trim().slice(0, 120);
+        const target = String(d.target || "").replace(/\s+/g, " ").trim().slice(0, 120);
+        const title = label.toLowerCase().startsWith("[draft]") ? label : `[Draft] ${label}`;
+        const description = (target ? `To: ${target}\n\n` : "") + body.slice(0, 4000);
+        await Task.create({
+          telegramChatId: chatId,
+          title,
+          description,
+          status: "todo",
+          categories: ["draft", "messaging"],
+          people: [],
+          createdBy: "dashboard",
+          createdByUsername: "ai",
+        });
+        created++;
+        titles.push(title);
+        Activity.create({
+          telegramChatId: chatId,
+          type: "task_added",
+          title,
+          detail: "AI message draft (coach)",
+          actor: "dashboard",
+        }).catch(console.error);
+      }
+      return NextResponse.json({ ok: true, created, titles });
+    } catch {
+      return NextResponse.json({ ok: false, error: "Failed to parse or save message drafts" });
+    }
   }
 
   if (action === "planTaskRollup") {
@@ -1339,7 +1580,7 @@ OUTPUT (valid JSON only):
   "narrative": "multi-paragraph priority narrative covering all dimensions below",
   "leveragePlay": "The leverage play paragraph",
   "tasks": [
-    { "id": "taskId", "priorityScore": 85, "momentum": "in-motion", "effort": "low", "impact": "high", "executionType": "human", "actionLane": "do", "costEstimate": "$50/mo or 2hrs/week", "revenueEstimate": "$2k/mo potential", "priorityReason": "..." },
+    { "id": "taskId", "priorityScore": 85, "momentum": "in-motion", "effort": "low", "impact": "high", "executionType": "human", "actionLane": "do", "actionLaneReason": "1-2 sentences: why this lane for this specific task", "costEstimate": "$50/mo or 2hrs/week", "revenueEstimate": "$2k/mo potential", "priorityReason": "..." },
     ...
   ]
 }
@@ -1351,6 +1592,7 @@ FOR EACH TASK, assign:
 - impact: "low" | "medium" | "high"
 - executionType: "automated" (runs itself — crons, bots, scripts, CI/CD, scheduled jobs) | "human" (needs someone's time and attention) | "hybrid" (automated process but needs human setup, review, or maintenance)
 - actionLane: exactly one of "do" | "delegate" | "automate" | "delete" — same definitions as triage: **do** = meat-and-potatoes execution you should ship soon; **delegate** = better owner elsewhere; **automate** = machine-repeatable; **delete** = drop or not worth doing. Align with executionType (automated tasks usually "automate" unless a human must do a one-off before scripting).
+- actionLaneReason: required whenever actionLane is set — 1-2 short sentences the assignee can read on the board explaining why THAT lane (not generic).
 - costEstimate: what it costs to execute — be specific. "$0" for free automated tasks, "2hrs/week" for human time, "$200/mo + 1hr setup" for tools/subscriptions. Use real numbers when data is available.
 - revenueEstimate: what value or revenue this could generate — "$0" for pure ops/maintenance, "saves 5hrs/week" for efficiency, "$5k/mo" for revenue-generating tasks. Be honest — not everything makes money, and that's fine. Flag things that are cost centers vs revenue drivers.
 - priorityReason: 1 sentence explaining ranking
@@ -1428,7 +1670,7 @@ CONTEXT SUMMARY:\n${chatDoc?.contextSummary || "none"}` },
       const taskUpdates = result.tasks || [];
 
       const lanes = new Set(["do", "delegate", "automate", "delete"]);
-      const ops = taskUpdates.map((t: { id: string; priorityScore: number; momentum: string; effort: string; impact: string; executionType?: string; actionLane?: string; costEstimate?: string; revenueEstimate?: string; priorityReason: string }) => {
+      const ops = taskUpdates.map((t: { id: string; priorityScore: number; momentum: string; effort: string; impact: string; executionType?: string; actionLane?: string; actionLaneReason?: string; costEstimate?: string; revenueEstimate?: string; priorityReason: string }) => {
         const set: Record<string, unknown> = {
           priorityScore: t.priorityScore || 0,
           momentum: t.momentum || "new",
@@ -1439,7 +1681,12 @@ CONTEXT SUMMARY:\n${chatDoc?.contextSummary || "none"}` },
           revenueEstimate: t.revenueEstimate || "",
           priorityReason: t.priorityReason || "",
         };
-        if (t.actionLane && lanes.has(t.actionLane)) set.actionLane = t.actionLane;
+        if (t.actionLane && lanes.has(t.actionLane)) {
+          set.actionLane = t.actionLane;
+          if (t.actionLaneReason && String(t.actionLaneReason).trim()) {
+            set.actionLaneReason = String(t.actionLaneReason).replace(/\s+/g, " ").trim().slice(0, 800);
+          }
+        }
         return Task.updateOne({ _id: t.id, telegramChatId: chatId }, { $set: set });
       });
       await Promise.all([
@@ -1463,6 +1710,9 @@ CONTEXT SUMMARY:\n${chatDoc?.contextSummary || "none"}` },
       const al = body.actionLane;
       if (al === "" || al === null) update.actionLane = "";
       else if (["do", "delegate", "automate", "delete"].includes(String(al))) update.actionLane = String(al);
+    }
+    if (body.actionLaneReason !== undefined) {
+      update.actionLaneReason = String(body.actionLaneReason ?? "").replace(/\s+/g, " ").trim().slice(0, 800);
     }
     if (body.costEstimate !== undefined) update.costEstimate = body.costEstimate;
     if (body.revenueEstimate !== undefined) update.revenueEstimate = body.revenueEstimate;

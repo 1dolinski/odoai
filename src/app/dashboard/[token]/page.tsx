@@ -41,6 +41,8 @@ interface Task {
   priorityReason?: string;
   /** do | delegate | automate | delete — triage bucket */
   actionLane?: "" | "do" | "delegate" | "automate" | "delete";
+  /** AI / user-facing why this lane */
+  actionLaneReason?: string;
   createdAt: string;
 }
 
@@ -404,6 +406,13 @@ export default function DashboardPage() {
   } | null>(null);
   const [taskBoardError, setTaskBoardError] = useState<string | null>(null);
   const [rollupApplyError, setRollupApplyError] = useState<string | null>(null);
+  const [laneModalTaskId, setLaneModalTaskId] = useState<string | null>(null);
+  const [laneModalMessages, setLaneModalMessages] = useState<{ role: "user" | "assistant"; content: string }[]>([]);
+  const [laneModalDraft, setLaneModalDraft] = useState("");
+  const [laneModalBusy, setLaneModalBusy] = useState(false);
+  const [laneModalExplainBusy, setLaneModalExplainBusy] = useState(false);
+  const [laneModalError, setLaneModalError] = useState<string | null>(null);
+  const [laneModalSuggestion, setLaneModalSuggestion] = useState<{ lane: ActionLaneId; reason: string } | null>(null);
   const [taskViewMode, setTaskViewMode] = useState<"list" | "categories" | "priorities" | "lanes">(() => {
     if (typeof window !== "undefined") {
       const cached = localStorage.getItem("taskViewMode");
@@ -1123,6 +1132,114 @@ export default function DashboardPage() {
   const coachDone = allTasks.filter((t) => t.status === "done").length;
   const coachBoardLabel = tasksSimpleUi ? "list (simple)" : taskViewMode;
 
+  const laneModalTask = laneModalTaskId ? data.tasks.find((x) => x._id === laneModalTaskId) : undefined;
+
+  async function runLaneExplain(regenerate: boolean) {
+    if (!laneModalTaskId) return;
+    setLaneModalExplainBusy(true);
+    setLaneModalError(null);
+    try {
+      const res = await fetch("/api/dashboard", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token, action: "explainTaskLane", taskId: laneModalTaskId, regenerate }),
+      });
+      const j = await res.json();
+      if (!j.ok) setLaneModalError(j.error || "Couldn’t load explanation.");
+      else {
+        setData((d) =>
+          d
+            ? {
+                ...d,
+                tasks: d.tasks.map((task) =>
+                  task._id === laneModalTaskId ? { ...task, actionLaneReason: j.explanation } : task
+                ),
+              }
+            : d
+        );
+      }
+    } catch {
+      setLaneModalError("Network error.");
+    }
+    setLaneModalExplainBusy(false);
+  }
+
+  async function sendLaneChat() {
+    const text = laneModalDraft.trim();
+    if (!text || !laneModalTaskId) return;
+    setLaneModalBusy(true);
+    setLaneModalError(null);
+    setLaneModalSuggestion(null);
+    const prev = laneModalMessages;
+    setLaneModalMessages([...prev, { role: "user", content: text }]);
+    setLaneModalDraft("");
+    try {
+      const res = await fetch("/api/dashboard", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          token,
+          action: "chatTaskLane",
+          taskId: laneModalTaskId,
+          message: text,
+          history: prev,
+        }),
+      });
+      const j = await res.json();
+      if (!j.ok) {
+        setLaneModalError(j.error || "Chat failed.");
+        setLaneModalDraft(text);
+        setLaneModalMessages(prev);
+      } else {
+        setLaneModalMessages((m) => [...m, { role: "assistant", content: j.reply }]);
+        if (j.suggestedLane && (ACTION_LANES as readonly string[]).includes(j.suggestedLane)) {
+          setLaneModalSuggestion({ lane: j.suggestedLane as ActionLaneId, reason: String(j.suggestedReason || "") });
+        }
+      }
+    } catch {
+      setLaneModalError("Network error.");
+      setLaneModalDraft(text);
+      setLaneModalMessages(prev);
+    }
+    setLaneModalBusy(false);
+  }
+
+  function applyLaneSuggestion() {
+    if (!laneModalTaskId || !laneModalSuggestion || !data) return;
+    const { lane, reason } = laneModalSuggestion;
+    setData((d) =>
+      d
+        ? {
+            ...d,
+            tasks: d.tasks.map((task) =>
+              task._id === laneModalTaskId ? { ...task, actionLane: lane, actionLaneReason: reason || undefined } : task
+            ),
+          }
+        : d
+    );
+    void fetch("/api/dashboard", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        token,
+        action: "updateTaskPriority",
+        taskId: laneModalTaskId,
+        actionLane: lane,
+        actionLaneReason: reason || "",
+      }),
+    });
+    setLaneModalSuggestion(null);
+    void fetchData();
+  }
+
+  function openLaneModal(taskId: string) {
+    setLaneModalTaskId(taskId);
+    setLaneModalMessages([]);
+    setLaneModalDraft("");
+    setLaneModalError(null);
+    setLaneModalSuggestion(null);
+  }
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 via-white to-gray-100 text-gray-900">
       <div className="max-w-6xl mx-auto px-3 sm:px-6 py-4 sm:py-8">
@@ -1244,53 +1361,57 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        <DashboardCoachBar
-          token={String(token)}
-          workspaceZoom={workspaceZoom}
-          taskBoardLabel={coachBoardLabel}
-          tasksSimpleUi={tasksSimpleUi}
-          chatTitle={data.chat.title}
-          coachTodo={coachTodo}
-          coachUpcoming={coachUpcoming}
-          coachDone={coachDone}
-          coachLaneDo={coachLaneDo}
-          coachLaneDelegate={coachLaneDelegate}
-          coachLaneAutomate={coachLaneAutomate}
-          coachLaneDelete={coachLaneDelete}
-          coachLaneUnset={coachLaneUnset}
-          nowQueueCount={nowLensTasks.length}
-          blockerCount={blockerLensTasks.length}
-          lastPrioritizedAt={data.chat.lastPrioritizedAt ? (typeof data.chat.lastPrioritizedAt === "string" ? data.chat.lastPrioritizedAt : new Date(data.chat.lastPrioritizedAt).toISOString()) : null}
-          initialChat={data.chat.dashboardCoachChat || []}
-          fetchData={fetchData}
-        />
-
-        {/* Workspace zoom — house → tasks → people / blockers / opportunities */}
-        <section className="mb-5 sm:sticky sm:top-0 z-20 -mx-2 px-2 py-2.5 sm:mx-0 sm:px-0 bg-gradient-to-b from-slate-50/95 to-white/80 backdrop-blur-sm border border-slate-200/80 rounded-xl shadow-sm">
-          <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
-            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 w-full sm:w-auto sm:mr-1">Zoom</span>
-            {WORKSPACE_ZOOM_LEVELS.map((z) => (
-              <button
-                key={z.id}
-                type="button"
-                onClick={() => setWorkspaceZoom(z.id)}
-                className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold border transition-all ${
-                  workspaceZoom === z.id
-                    ? "bg-slate-900 text-white border-slate-900 shadow-sm"
-                    : "bg-white text-slate-600 border-slate-200 hover:border-slate-400 hover:bg-slate-50"
-                }`}
-              >
-                {z.label}
-              </button>
-            ))}
+        {/* Coach + Zoom — single wayfinding card (sticky) */}
+        <div className="mb-6 sm:sticky sm:top-2 z-20 -mx-1 sm:mx-0 rounded-2xl border border-slate-200/90 bg-white shadow-md shadow-slate-200/30 ring-1 ring-slate-100 overflow-hidden">
+          <DashboardCoachBar
+            embedded
+            token={String(token)}
+            workspaceZoom={workspaceZoom}
+            taskBoardLabel={coachBoardLabel}
+            tasksSimpleUi={tasksSimpleUi}
+            chatTitle={data.chat.title}
+            coachTodo={coachTodo}
+            coachUpcoming={coachUpcoming}
+            coachDone={coachDone}
+            coachLaneDo={coachLaneDo}
+            coachLaneDelegate={coachLaneDelegate}
+            coachLaneAutomate={coachLaneAutomate}
+            coachLaneDelete={coachLaneDelete}
+            coachLaneUnset={coachLaneUnset}
+            nowQueueCount={nowLensTasks.length}
+            blockerCount={blockerLensTasks.length}
+            lastPrioritizedAt={data.chat.lastPrioritizedAt ? (typeof data.chat.lastPrioritizedAt === "string" ? data.chat.lastPrioritizedAt : new Date(data.chat.lastPrioritizedAt).toISOString()) : null}
+            initialChat={data.chat.dashboardCoachChat || []}
+            fetchData={fetchData}
+          />
+          <div className="border-t border-slate-100 bg-gradient-to-b from-slate-50/90 to-slate-50/40 px-4 py-4 sm:px-5">
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-2">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500 shrink-0 pr-1">Zoom</span>
+              <div className="flex flex-wrap items-center gap-2">
+                {WORKSPACE_ZOOM_LEVELS.map((z) => (
+                  <button
+                    key={z.id}
+                    type="button"
+                    onClick={() => setWorkspaceZoom(z.id)}
+                    className={`min-h-[36px] px-3 py-2 rounded-xl text-xs font-semibold border transition-all ${
+                      workspaceZoom === z.id
+                        ? "bg-slate-900 text-white border-slate-900 shadow-sm"
+                        : "bg-white text-slate-700 border-slate-200 hover:border-slate-300 hover:bg-white"
+                    }`}
+                  >
+                    {z.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <p className="mt-4 pt-3 border-t border-slate-200/80 text-xs text-slate-600 leading-relaxed max-w-3xl">
+              {WORKSPACE_ZOOM_LEVELS.find((x) => x.id === workspaceZoom)?.hint}
+            </p>
           </div>
-          <p className="text-[10px] text-slate-500 mt-1.5 leading-snug">
-            {WORKSPACE_ZOOM_LEVELS.find((x) => x.id === workspaceZoom)?.hint}
-          </p>
-        </section>
+        </div>
 
         {/* Toolbar */}
-        <section className="mb-10">
+        <section className="mb-10 mt-2">
           <div className="flex flex-wrap items-center gap-2">
             {([
               { key: "workMode", label: "Work Mode", state: showWorkMode, set: setShowWorkMode },
@@ -1316,10 +1437,10 @@ export default function DashboardPage() {
                   setShowFeed(false); setShowPeople(false); setShowInitiatives(false); setShowContext(false); setShowDump(false); setShowGuidance(false); setShowActions(false); setShowWatch(false); setShowWallet(false); setShowAbilities(false); setShowDataSources(false); setShowSocial(false); setShowAiQuestions(false); setShowMenu(false); setShowWorkMode(false); setShowOffers(false);
                   btn.set(next);
                 }}
-                className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all border ${
+                className={`min-h-[36px] px-3 py-2 rounded-xl text-sm font-medium transition-all border ${
                   btn.state
                     ? btn.key === "workMode" ? "bg-indigo-600 text-white border-indigo-600 shadow-sm" : btn.key === "aiQuestions" ? "bg-indigo-600 text-white border-indigo-600 shadow-sm" : btn.key === "menu" ? "bg-emerald-600 text-white border-emerald-600 shadow-sm" : "bg-gray-900 text-white border-gray-900"
-                    : btn.key === "workMode" ? "bg-indigo-50 text-indigo-700 border-indigo-200 hover:border-indigo-400 hover:bg-indigo-100" : btn.key === "aiQuestions" ? "bg-indigo-50 text-indigo-700 border-indigo-200 hover:border-indigo-400 hover:bg-indigo-100" : btn.key === "menu" ? "bg-emerald-50 text-emerald-700 border-emerald-200 hover:border-emerald-400 hover:bg-emerald-100" : "bg-white text-gray-600 border-gray-200 hover:border-gray-400"
+                    : btn.key === "workMode" ? "bg-indigo-50 text-indigo-700 border-indigo-200 hover:border-indigo-400 hover:bg-indigo-100" : btn.key === "aiQuestions" ? "bg-indigo-50 text-indigo-700 border-indigo-200 hover:border-indigo-400 hover:bg-indigo-100" : btn.key === "menu" ? "bg-emerald-50 text-emerald-700 border-emerald-200 hover:border-emerald-400 hover:bg-emerald-100" : "bg-white text-gray-600 border-gray-200 hover:border-slate-300"
                 }`}
               >
                 {btn.key === "workMode" && <span className="mr-1">⚡</span>}{btn.key === "aiQuestions" && <span className="mr-1">✦</span>}{btn.key === "menu" && <span className="mr-1">☰</span>}{btn.key === "offers" && <span className="mr-1">💰</span>}{btn.label}
@@ -3754,25 +3875,26 @@ export default function DashboardPage() {
 
         {workspaceZoom === "tasks" && (
         <>
-        {/* Task Board */}
-        <section className="mb-10 relative rounded-xl border border-gray-100/80 bg-white/40 shadow-sm" aria-busy={taskBoardAiBusy}>
-          {taskBoardAiBusy && (
-            <div
-              className="absolute inset-0 z-20 flex items-center justify-center rounded-xl bg-white/85 backdrop-blur-sm px-4 py-16"
-              role="status"
-              aria-live="polite"
-              aria-label={taskBoardAiTitle}
-            >
-              <div className="flex flex-col items-center max-w-sm text-center rounded-2xl border border-gray-200 bg-white px-8 py-7 shadow-lg">
-                <Spinner className="h-10 w-10 text-violet-600 mb-1" label={taskBoardAiTitle} />
-                <p className="text-sm font-semibold text-gray-900 mt-3">{taskBoardAiTitle}</p>
-                <p className="text-xs text-gray-500 mt-2 leading-relaxed">{taskBoardAiHint}</p>
-                <div className="mt-5 h-2 w-full max-w-[220px] rounded-full bg-violet-100 overflow-hidden">
-                  <div className="h-full w-full rounded-full bg-violet-500/80 animate-pulse" />
-                </div>
+        {taskBoardAiBusy && (
+          <div
+            className="fixed inset-0 z-[100] flex flex-col items-center pt-20 sm:pt-28 px-4 pointer-events-auto"
+            role="status"
+            aria-live="polite"
+            aria-label={taskBoardAiTitle}
+          >
+            <div className="absolute inset-0 bg-white/75 backdrop-blur-sm" aria-hidden />
+            <div className="relative flex flex-col items-center w-full max-w-sm text-center rounded-2xl border border-violet-200/80 bg-white px-8 py-7 shadow-xl shadow-violet-200/40">
+              <Spinner className="h-10 w-10 text-violet-600 mb-1" label={taskBoardAiTitle} />
+              <p className="text-sm font-semibold text-gray-900 mt-3">{taskBoardAiTitle}</p>
+              <p className="text-xs text-gray-500 mt-2 leading-relaxed">{taskBoardAiHint}</p>
+              <div className="mt-5 h-2 w-full max-w-[220px] rounded-full bg-violet-100 overflow-hidden">
+                <div className="h-full w-full rounded-full bg-violet-500/80 animate-pulse" />
               </div>
             </div>
-          )}
+          </div>
+        )}
+        {/* Task Board */}
+        <section className="mb-10 relative rounded-xl border border-gray-100/80 bg-white/40 shadow-sm" aria-busy={taskBoardAiBusy}>
           <div className="p-3 sm:p-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-3">
             <h2 className="text-lg font-semibold text-gray-800">Tasks <span className="text-sm font-normal text-gray-400">({filteredTasks.length})</span></h2>
@@ -4271,8 +4393,8 @@ export default function DashboardPage() {
                                 type="button"
                                 onClick={() => {
                                   const next = normalizedActionLane(t) === lane ? "" : lane;
-                                  setData((d) => d ? { ...d, tasks: d.tasks.map((task) => task._id === t._id ? { ...task, actionLane: next || undefined } : task) } : d);
-                                  fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "updateTaskPriority", taskId: t._id, actionLane: next }) });
+                                  setData((d) => d ? { ...d, tasks: d.tasks.map((task) => task._id === t._id ? { ...task, actionLane: next || undefined, actionLaneReason: "" } : task) } : d);
+                                  fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "updateTaskPriority", taskId: t._id, actionLane: next, actionLaneReason: "" }) });
                                 }}
                                 title={LANE_LABELS[lane].hint}
                                 className={`text-[9px] px-1.5 py-0.5 rounded-full border transition-all ${
@@ -4282,6 +4404,13 @@ export default function DashboardPage() {
                                 {lane === "do" ? "Do" : lane === "delegate" ? "Deleg" : lane === "automate" ? "Auto" : "Drop"}
                               </button>
                             ))}
+                            <button
+                              type="button"
+                              className="text-[9px] font-medium text-indigo-600 hover:text-indigo-800 hover:underline ml-0.5"
+                              onClick={() => openLaneModal(t._id)}
+                            >
+                              See reasoning
+                            </button>
                           </>
                         )}
                         <span className="text-gray-200 mx-0.5">|</span>
@@ -4527,8 +4656,8 @@ export default function DashboardPage() {
                                   const next = normalizedActionLane(t) === lane ? "" : lane;
                                   const id = t._id;
                                   if (String(id).startsWith("check-")) return;
-                                  setData((d) => d ? { ...d, tasks: d.tasks.map((task) => task._id === id ? { ...task, actionLane: next || undefined } : task) } : d);
-                                  fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "updateTaskPriority", taskId: id, actionLane: next }) });
+                                  setData((d) => d ? { ...d, tasks: d.tasks.map((task) => task._id === id ? { ...task, actionLane: next || undefined, actionLaneReason: "" } : task) } : d);
+                                  fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "updateTaskPriority", taskId: id, actionLane: next, actionLaneReason: "" }) });
                                 }}
                                 disabled={String(t._id).startsWith("check-")}
                                 className={`text-[10px] font-semibold px-2 py-0.5 rounded-md border transition-colors disabled:opacity-40 ${
@@ -4540,6 +4669,15 @@ export default function DashboardPage() {
                                 {LANE_LABELS[lane].title}
                               </button>
                             ))}
+                            {!String(t._id).startsWith("check-") && (
+                              <button
+                                type="button"
+                                className="text-[10px] font-medium text-indigo-600 hover:underline"
+                                onClick={() => openLaneModal(t._id)}
+                              >
+                                See reasoning
+                              </button>
+                            )}
                             <select
                               value={t.status}
                               onChange={(e) => changeTaskStatus(t._id, t.title, e.target.value)}
@@ -4667,8 +4805,8 @@ export default function DashboardPage() {
                               type="button"
                               onClick={() => {
                                 const next = normalizedActionLane(t) === lane ? "" : lane;
-                                setData((d) => d ? { ...d, tasks: d.tasks.map((task) => task._id === t._id ? { ...task, actionLane: next || undefined } : task) } : d);
-                                fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "updateTaskPriority", taskId: t._id, actionLane: next }) });
+                                setData((d) => d ? { ...d, tasks: d.tasks.map((task) => task._id === t._id ? { ...task, actionLane: next || undefined, actionLaneReason: "" } : task) } : d);
+                                fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "updateTaskPriority", taskId: t._id, actionLane: next, actionLaneReason: "" }) });
                               }}
                               className={`text-[9px] font-semibold px-1.5 py-0.5 rounded-md border transition-colors ${
                                 normalizedActionLane(t) === lane
@@ -4679,6 +4817,13 @@ export default function DashboardPage() {
                               {LANE_LABELS[lane].title}
                             </button>
                           ))}
+                          <button
+                            type="button"
+                            className="text-[9px] font-medium text-indigo-600 hover:underline ml-0.5"
+                            onClick={() => openLaneModal(t._id)}
+                          >
+                            See reasoning
+                          </button>
                         </div>
                       )}
                       <div className={`flex items-center gap-2 flex-wrap ${tasksSimpleUi ? "mt-0" : "mt-0.5"}`}>
@@ -5137,8 +5282,8 @@ export default function DashboardPage() {
                           type="button"
                           onClick={() => {
                             const next = normalizedActionLane(t) === lane ? "" : lane;
-                            setData((d) => d ? { ...d, tasks: d.tasks.map((task) => task._id === t._id ? { ...task, actionLane: next || undefined } : task) } : d);
-                            fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "updateTaskPriority", taskId: t._id, actionLane: next }) });
+                            setData((d) => d ? { ...d, tasks: d.tasks.map((task) => task._id === t._id ? { ...task, actionLane: next || undefined, actionLaneReason: "" } : task) } : d);
+                            fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "updateTaskPriority", taskId: t._id, actionLane: next, actionLaneReason: "" }) });
                           }}
                           className={`text-[10px] font-semibold px-2 py-0.5 rounded-md border transition-colors ${
                             normalizedActionLane(t) === lane
@@ -5149,6 +5294,13 @@ export default function DashboardPage() {
                           {LANE_LABELS[lane].title}
                         </button>
                       ))}
+                      <button
+                        type="button"
+                        className="text-[10px] font-medium text-indigo-600 hover:underline self-center"
+                        onClick={() => openLaneModal(t._id)}
+                      >
+                        See reasoning
+                      </button>
                     </div>
                   </li>
                 ))}
@@ -5397,6 +5549,118 @@ export default function DashboardPage() {
 
         {/* (Context Summary moved to top toolbar) */}
 
+        {laneModalTaskId && laneModalTask && (
+          <div
+            className="fixed inset-0 z-[201] flex items-end sm:items-center justify-center p-3 sm:p-6 bg-black/45"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="lane-modal-title"
+            onClick={() => setLaneModalTaskId(null)}
+          >
+            <div
+              className="bg-white rounded-xl shadow-2xl w-full max-w-lg max-h-[88vh] overflow-hidden flex flex-col border border-gray-200"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="px-4 py-3 border-b border-gray-100 flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <h3 id="lane-modal-title" className="text-sm font-semibold text-gray-900 truncate">{laneModalTask.title}</h3>
+                  <p className="text-[10px] text-gray-500 mt-0.5">
+                    Lane:{" "}
+                    <span className="font-semibold text-gray-700">
+                      {normalizedActionLane(laneModalTask) ? LANE_LABELS[normalizedActionLane(laneModalTask) as ActionLaneId].title : "Unset"}
+                    </span>
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setLaneModalTaskId(null)}
+                  className="text-gray-400 hover:text-gray-700 text-lg leading-none px-1 shrink-0"
+                >
+                  ×
+                </button>
+              </div>
+              <div className="px-4 py-3 overflow-y-auto flex-1 space-y-3 text-xs">
+                <div>
+                  <div className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-1">Reasoning</div>
+                  <p className="text-gray-700 leading-relaxed whitespace-pre-wrap">
+                    {(laneModalTask.actionLaneReason || "").trim() || "No saved explanation yet. Generate one or chat below if the lane looks wrong."}
+                  </p>
+                  <div className="flex flex-wrap gap-2 mt-2">
+                    <button
+                      type="button"
+                      disabled={laneModalExplainBusy}
+                      onClick={() => void runLaneExplain(!!(laneModalTask.actionLaneReason || "").trim())}
+                      className="text-[11px] font-semibold px-2.5 py-1 rounded-lg bg-gray-900 text-white hover:bg-gray-800 disabled:opacity-50"
+                    >
+                      {laneModalExplainBusy
+                        ? "Loading…"
+                        : (laneModalTask.actionLaneReason || "").trim()
+                          ? "Regenerate explanation"
+                          : "Get explanation"}
+                    </button>
+                  </div>
+                </div>
+                <div className="border-t border-gray-100 pt-3">
+                  <div className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-2">Discuss with AI</div>
+                  <div className="max-h-40 overflow-y-auto space-y-2 mb-2 rounded-lg bg-gray-50 border border-gray-100 p-2">
+                    {laneModalMessages.length === 0 ? (
+                      <p className="text-[11px] text-gray-400 italic">Say why you disagree or what lane fits better — the model can suggest an update.</p>
+                    ) : (
+                      laneModalMessages.map((m, i) => (
+                        <div
+                          key={i}
+                          className={`text-[11px] rounded-md px-2 py-1.5 ${m.role === "user" ? "bg-indigo-100 text-indigo-950 ml-4" : "bg-white border border-gray-200 text-gray-800 mr-4"}`}
+                        >
+                          {m.content}
+                        </div>
+                      ))
+                    )}
+                  </div>
+                  <div className="flex gap-2">
+                    <textarea
+                      value={laneModalDraft}
+                      onChange={(e) => setLaneModalDraft(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && !e.shiftKey) {
+                          e.preventDefault();
+                          void sendLaneChat();
+                        }
+                      }}
+                      rows={2}
+                      placeholder="e.g. This is client-facing design work — should be Do, not Delete…"
+                      className="flex-1 text-[11px] border border-gray-200 rounded-lg px-2 py-1.5 resize-none focus:ring-1 focus:ring-indigo-400 outline-none"
+                    />
+                    <button
+                      type="button"
+                      disabled={laneModalBusy || !laneModalDraft.trim()}
+                      onClick={() => void sendLaneChat()}
+                      className="self-end text-[11px] font-semibold px-3 py-2 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50 shrink-0"
+                    >
+                      {laneModalBusy ? "…" : "Send"}
+                    </button>
+                  </div>
+                </div>
+                {laneModalSuggestion && (
+                  <div className="rounded-lg border border-emerald-200 bg-emerald-50/80 px-3 py-2 flex flex-col sm:flex-row sm:items-center gap-2">
+                    <p className="text-[11px] text-emerald-950 flex-1">
+                      Suggested: <strong>{LANE_LABELS[laneModalSuggestion.lane].title}</strong>
+                      {laneModalSuggestion.reason ? ` — ${laneModalSuggestion.reason}` : ""}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={applyLaneSuggestion}
+                      className="text-[11px] font-semibold px-3 py-1.5 rounded-lg bg-emerald-700 text-white hover:bg-emerald-800 shrink-0"
+                    >
+                      Apply lane + reason
+                    </button>
+                  </div>
+                )}
+                {laneModalError && <p className="text-[11px] text-red-600">{laneModalError}</p>}
+              </div>
+            </div>
+          </div>
+        )}
+
         {rollupModal && data && (
           <div
             className="fixed inset-0 z-[200] flex items-end sm:items-center justify-center p-3 sm:p-6 bg-black/45"
@@ -5533,15 +5797,32 @@ export default function DashboardPage() {
   );
 }
 
+type CoachExecuteKind = "prioritize" | "lanes" | "messaging_drafts" | "none";
+
 type CoachBrief = {
   viewTitle: string;
   viewExplained: string;
   guidance: string;
   recommendedAction: string;
   recommendedDetail: string;
+  suggestedExecuteKind: CoachExecuteKind;
 };
 
+function effectiveCoachExecuteKind(b: CoachBrief): CoachExecuteKind {
+  const k = b.suggestedExecuteKind;
+  if (k === "prioritize" || k === "lanes" || k === "messaging_drafts") return k;
+  const blob = `${b.recommendedAction}\n${b.recommendedDetail}\n${b.guidance}`.toLowerCase();
+  if (/\b(dm|dms|message|email|outreach|ping\b|reach out|follow[\s-]?up|slack|inmail|text them|contact\s)/
+    .test(blob)) return "messaging_drafts";
+  if (/\b(priorit|rank\b|scoring|analyze.*task|what to tackle|highest impact|close out|before the weekend)/
+    .test(blob)) return "prioritize";
+  if (/\b(lane|classify|bucket|triage|four lane|do\/delegate|sort into)/
+    .test(blob)) return "lanes";
+  return "none";
+}
+
 function DashboardCoachBar({
+  embedded = false,
   token,
   workspaceZoom,
   taskBoardLabel,
@@ -5561,6 +5842,7 @@ function DashboardCoachBar({
   initialChat,
   fetchData,
 }: {
+  embedded?: boolean;
   token: string;
   workspaceZoom: WorkspaceZoom;
   taskBoardLabel: string;
@@ -5582,6 +5864,8 @@ function DashboardCoachBar({
 }) {
   const [brief, setBrief] = useState<CoachBrief | null>(null);
   const [coachLoading, setCoachLoading] = useState(false);
+  const [coachExecuteBusy, setCoachExecuteBusy] = useState(false);
+  const [coachExecuteNote, setCoachExecuteNote] = useState<string | null>(null);
   const [coachErr, setCoachErr] = useState<string | null>(null);
   const [coachInput, setCoachInput] = useState("");
   const [coachSending, setCoachSending] = useState(false);
@@ -5627,6 +5911,11 @@ function DashboardCoachBar({
 
   const viewKey = useMemo(() => JSON.stringify(viewContext), [viewContext]);
 
+  const coachExecuteKind = useMemo(
+    () => (brief ? effectiveCoachExecuteKind(brief) : "none"),
+    [brief]
+  );
+
   const initialChatSig = JSON.stringify(initialChat);
   useEffect(() => {
     setLocalChat(initialChat);
@@ -5646,12 +5935,16 @@ function DashboardCoachBar({
         setCoachErr(j.error || "Coach couldn’t load.");
         setBrief(null);
       } else {
+        const sk = String(j.suggestedExecuteKind || "none").toLowerCase();
+        const suggestedExecuteKind: CoachExecuteKind =
+          sk === "prioritize" || sk === "lanes" || sk === "messaging_drafts" ? sk : "none";
         setBrief({
           viewTitle: j.viewTitle,
           viewExplained: j.viewExplained,
           guidance: j.guidance,
           recommendedAction: j.recommendedAction,
           recommendedDetail: j.recommendedDetail,
+          suggestedExecuteKind,
         });
       }
     } catch {
@@ -5699,14 +5992,66 @@ function DashboardCoachBar({
     setCoachSending(false);
   }
 
+  async function runCoachSuggestedAction() {
+    if (!brief) return;
+    const kind = effectiveCoachExecuteKind(brief);
+    if (kind === "none") return;
+    setCoachExecuteBusy(true);
+    setCoachExecuteNote(null);
+    setCoachErr(null);
+    try {
+      if (kind === "prioritize") {
+        const res = await fetch("/api/dashboard", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ token, action: "prioritizeTasks" }),
+        });
+        const j = await res.json();
+        if (!j.ok) throw new Error(j.error || "Prioritize failed.");
+        setCoachExecuteNote("Priorities updated.");
+      } else if (kind === "lanes") {
+        const res = await fetch("/api/dashboard", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ token, action: "classifyTaskLanes" }),
+        });
+        const j = await res.json();
+        if (!j.ok) throw new Error(j.error || "Lane sort failed.");
+        setCoachExecuteNote("Lanes classified.");
+      } else {
+        const res = await fetch("/api/dashboard", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ token, action: "coachGenerateMessageDrafts" }),
+        });
+        const j = await res.json();
+        if (!j.ok) throw new Error(j.error || "Draft generation failed.");
+        const n = typeof j.created === "number" ? j.created : 0;
+        setCoachExecuteNote(n === 0 ? (j.message as string) || "No drafts added." : `Added ${n} draft task(s) — check the task board (tags: draft, messaging).`);
+      }
+      await fetchData();
+      window.setTimeout(() => setCoachExecuteNote(null), 8000);
+    } catch (e) {
+      setCoachErr(e instanceof Error ? e.message : "Action failed.");
+    }
+    setCoachExecuteBusy(false);
+  }
+
   return (
-    <section className="mb-5 rounded-xl border border-indigo-200/90 bg-gradient-to-br from-indigo-50/95 via-white to-violet-50/40 shadow-sm overflow-hidden" aria-label="Dashboard coach">
-      <div className="p-4 sm:p-5">
+    <section
+      className={
+        embedded
+          ? "bg-gradient-to-br from-indigo-50/70 via-white to-violet-50/30 overflow-hidden"
+          : "mb-5 rounded-xl border border-indigo-200/90 bg-gradient-to-br from-indigo-50/95 via-white to-violet-50/40 shadow-sm overflow-hidden"
+      }
+      aria-label="Dashboard coach"
+    >
+      <div className={embedded ? "px-4 py-4 sm:px-5 sm:py-4" : "p-4 sm:p-5"}>
         <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-500">Coach</span>
-              <span className="text-[10px] text-indigo-400">ET-aware · learns from chat</span>
+              <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-600">Coach</span>
+              <span className="text-[10px] text-indigo-400/90">ET-aware · learns from chat</span>
             </div>
             {coachLoading && !brief ? (
               <div className="mt-3 space-y-2 animate-pulse">
@@ -5716,13 +6061,32 @@ function DashboardCoachBar({
               </div>
             ) : brief ? (
               <div className="mt-2">
-                <h2 className="text-base sm:text-lg font-semibold text-gray-900 leading-snug">{brief.viewTitle}</h2>
-                <p className="text-sm text-gray-700 mt-1.5 leading-relaxed">{brief.viewExplained}</p>
-                <p className="text-sm text-gray-600 mt-2 leading-relaxed">{brief.guidance}</p>
-                <div className="mt-4 rounded-xl border border-indigo-100 bg-white/90 px-3 py-2.5 shadow-sm">
+                <h2 className="text-base sm:text-[1.05rem] font-semibold text-gray-900 leading-snug">{brief.viewTitle}</h2>
+                <p className="text-sm text-gray-700 mt-2 leading-relaxed">{brief.viewExplained}</p>
+                <p className="text-sm text-gray-600 mt-2 leading-relaxed max-w-3xl">{brief.guidance}</p>
+                <div className="mt-3 rounded-xl border border-indigo-100/90 bg-white/95 px-3 py-2.5 shadow-sm">
                   <p className="text-[10px] font-bold uppercase tracking-wide text-indigo-600">Suggested next move</p>
                   <p className="text-sm font-semibold text-gray-900 mt-0.5">{brief.recommendedAction}</p>
                   <p className="text-xs text-gray-500 mt-1 leading-snug">{brief.recommendedDetail}</p>
+                  {coachExecuteKind !== "none" && (
+                    <div className="mt-2.5 flex flex-col gap-1.5">
+                      <button
+                        type="button"
+                        disabled={coachExecuteBusy || coachLoading}
+                        onClick={() => void runCoachSuggestedAction()}
+                        className="self-start text-xs font-semibold min-h-[36px] px-3 py-2 rounded-lg bg-indigo-700 text-white hover:bg-indigo-800 disabled:opacity-50"
+                      >
+                        {coachExecuteBusy
+                          ? "Working…"
+                          : coachExecuteKind === "prioritize"
+                            ? "Prioritize tasks now"
+                            : coachExecuteKind === "lanes"
+                              ? "AI: sort into lanes"
+                              : "Generate message drafts"}
+                      </button>
+                      {coachExecuteNote && <p className="text-[11px] text-emerald-700">{coachExecuteNote}</p>}
+                    </div>
+                  )}
                 </div>
               </div>
             ) : (
@@ -5730,27 +6094,27 @@ function DashboardCoachBar({
             )}
             {coachErr && brief && <p className="text-xs text-amber-700 mt-2">{coachErr}</p>}
           </div>
-          <div className="flex flex-wrap gap-2 shrink-0">
+          <div className="flex flex-wrap gap-2 shrink-0 sm:pt-0.5">
             <button
               type="button"
               disabled={coachLoading}
               onClick={() => void loadBrief()}
-              className="text-xs font-semibold px-3 py-1.5 rounded-lg border border-indigo-200 bg-white text-indigo-800 hover:bg-indigo-50 disabled:opacity-50"
+              className="text-xs font-semibold min-h-[36px] px-3 py-2 rounded-xl border border-indigo-200 bg-white text-indigo-800 hover:bg-indigo-50 disabled:opacity-50"
             >
-              {coachLoading ? "Refreshing…" : "Refresh coach"}
+              {coachLoading ? "Refreshing…" : "Refresh"}
             </button>
             <button
               type="button"
               onClick={() => setChatOpen((o) => !o)}
-              className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700"
+              className="text-xs font-semibold min-h-[36px] px-3 py-2 rounded-xl bg-indigo-600 text-white hover:bg-indigo-700"
             >
-              {chatOpen ? "Hide chat" : "Correct the coach"}
+              {chatOpen ? "Hide chat" : "Teach coach"}
             </button>
           </div>
         </div>
 
         {chatOpen && (
-          <div className="mt-4 border-t border-indigo-100 pt-4">
+          <div className="mt-4 border-t border-indigo-100/80 pt-4">
             <p className="text-xs text-gray-600 mb-2">
               Tell the coach about your schedule, role, or what you’re optimizing for — it updates stored memory and the next brief.
             </p>
