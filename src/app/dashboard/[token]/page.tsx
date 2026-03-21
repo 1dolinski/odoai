@@ -321,7 +321,7 @@ function isMeatPotatoesTask(t: { title: string; description?: string }): boolean
 type WorkspaceZoom = "house" | "now" | "tasks" | "people" | "blockers" | "opportunities";
 
 const WORKSPACE_ZOOM_LEVELS: { id: WorkspaceZoom; label: string; hint: string }[] = [
-  { id: "house", label: "House", hint: "Top of the house — initiatives, context, leverage, counts" },
+  { id: "house", label: "House", hint: "North star, initiatives, and pulse — then drill down with Zoom." },
   { id: "now", label: "Now", hint: "Do right now — meat & potatoes + Do lane" },
   { id: "tasks", label: "Tasks", hint: "Full board — list, categories, priorities, lanes" },
   { id: "people", label: "People", hint: "Per-person load and intentions" },
@@ -1421,9 +1421,16 @@ export default function DashboardPage() {
                 ))}
               </div>
             </div>
-            <p className="mt-4 pt-3 border-t border-slate-200/80 text-xs text-slate-600 leading-relaxed max-w-3xl">
-              {WORKSPACE_ZOOM_LEVELS.find((x) => x.id === workspaceZoom)?.hint}
-            </p>
+            <div className="mt-4 pt-3 border-t border-slate-200/80 max-w-3xl">
+              {workspaceZoom === "house" ? (
+                <>
+                  <p className="text-base sm:text-lg font-semibold text-slate-900 tracking-tight">House — your north star view</p>
+                  <p className="text-sm text-slate-600 mt-1 leading-relaxed">{WORKSPACE_ZOOM_LEVELS.find((x) => x.id === "house")?.hint}</p>
+                </>
+              ) : (
+                <p className="text-xs text-slate-600 leading-relaxed">{WORKSPACE_ZOOM_LEVELS.find((x) => x.id === workspaceZoom)?.hint}</p>
+              )}
+            </div>
           </div>
         </div>
 
@@ -5145,19 +5152,55 @@ export default function DashboardPage() {
         )}
 
         {workspaceZoom === "house" && (
-          <section className="mb-10 rounded-xl border border-slate-200/90 bg-gradient-to-br from-white to-slate-50/80 shadow-sm p-4 sm:p-5">
-            <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 mb-4">
-              <div>
-                <h2 className="text-lg font-semibold text-slate-900">House</h2>
-                <p className="text-xs text-slate-500 mt-0.5">Executive altitude — drill down with Zoom.</p>
+          <section className="mb-10 rounded-2xl border border-slate-200/90 bg-gradient-to-b from-white to-slate-50/90 shadow-md shadow-slate-200/40 overflow-hidden">
+            <div className="relative px-4 py-8 sm:px-8 sm:py-10 bg-gradient-to-br from-slate-900 via-slate-800 to-indigo-950 text-white">
+              <div className="absolute inset-0 bg-[radial-gradient(ellipse_80%_60%_at_50%_-20%,rgba(255,255,255,0.12),transparent)] pointer-events-none" aria-hidden />
+              <div className="relative flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+                <div className="min-w-0 flex-1">
+                  <p className="text-[11px] font-bold uppercase tracking-[0.22em] text-white/45 mb-3">North star</p>
+                  <h2 className="text-2xl sm:text-3xl lg:text-4xl font-bold tracking-tight text-white leading-[1.15]">
+                    {data.chat.title || "This workspace"}
+                  </h2>
+                  {data.chat.leveragePlay ? (
+                    <div
+                      className="mt-5 text-base sm:text-lg text-white/90 leading-relaxed max-w-3xl [&_strong]:text-white [&_strong]:font-semibold"
+                      dangerouslySetInnerHTML={{
+                        __html: data.chat.leveragePlay.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>"),
+                      }}
+                    />
+                  ) : data.chat.contextSummary ? (
+                    <p className="mt-5 text-base sm:text-lg text-white/90 leading-relaxed max-w-3xl whitespace-pre-wrap">
+                      {data.chat.contextSummary}
+                    </p>
+                  ) : (
+                    <p className="mt-5 text-base text-white/65 leading-relaxed max-w-2xl">
+                      Run <strong className="text-white/90">Analyze Priorities</strong> on the task board to generate a leverage play — it becomes the headline story here. Or build up <strong className="text-white/90">Chat Context</strong> so the team sees a shared direction every time they land on House.
+                    </p>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setWorkspaceZoom("tasks")}
+                  className="text-sm font-semibold px-4 py-2.5 rounded-xl bg-white text-slate-900 hover:bg-white/95 shadow-md shrink-0 self-start"
+                >
+                  Open task board →
+                </button>
               </div>
-              <button
-                type="button"
-                onClick={() => setWorkspaceZoom("tasks")}
-                className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-slate-900 text-white hover:bg-slate-800 shrink-0"
-              >
-                Open task board →
-              </button>
+            </div>
+
+            <div className="p-4 sm:p-5 sm:px-8 sm:pb-6">
+            {data.chat.leveragePlay && data.chat.contextSummary ? (
+              <div className="mb-6 rounded-xl border border-slate-200 bg-white px-4 py-4 sm:px-5">
+                <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-2">Team context</h3>
+                <div className="text-sm sm:text-base text-slate-700 leading-relaxed whitespace-pre-wrap">{data.chat.contextSummary}</div>
+              </div>
+            ) : null}
+
+            <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-2 mb-5">
+              <div>
+                <h3 className="text-lg font-semibold text-slate-900">Pulse</h3>
+                <p className="text-sm text-slate-500 mt-0.5">Counts at a glance — tap a card to zoom in.</p>
+              </div>
             </div>
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 sm:gap-3 mb-5">
               {[
@@ -5182,8 +5225,9 @@ export default function DashboardPage() {
               ))}
             </div>
             {activeInitiativesLens.length > 0 && (
-              <div className="mb-4">
-                <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-2">Active initiatives</div>
+              <div className="mb-6">
+                <h3 className="text-lg font-semibold text-slate-900 mb-1">Active initiatives</h3>
+                <p className="text-sm text-slate-500 mb-3">Workstreams that organize execution under the north star.</p>
                 <div className="space-y-2">
                   {activeInitiativesLens.slice(0, 6).map((ini) => (
                     <div key={ini.id} className="rounded-lg border border-slate-100 bg-white px-3 py-2">
@@ -5199,30 +5243,24 @@ export default function DashboardPage() {
                 )}
               </div>
             )}
-            {data.chat.contextSummary ? (
-              <div className="mb-4 rounded-lg border border-slate-100 bg-white px-3 py-2">
-                <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">Context</div>
-                <div className="text-sm text-slate-700 whitespace-pre-wrap line-clamp-6">{data.chat.contextSummary}</div>
+            {data.chat.contextSummary && !data.chat.leveragePlay ? (
+              <div className="mb-4 rounded-xl border border-slate-200 bg-white px-4 py-4">
+                <div className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-2">Team context</div>
+                <div className="text-sm sm:text-base text-slate-700 whitespace-pre-wrap leading-relaxed">{data.chat.contextSummary}</div>
               </div>
             ) : null}
             {data.chat.priorityNarrative ? (
-              <details className="mb-2 rounded-lg border border-amber-100 bg-amber-50/50 px-3 py-2">
-                <summary className="text-xs font-semibold text-amber-900 cursor-pointer">Priority narrative</summary>
+              <details className="mb-2 rounded-xl border border-amber-200/80 bg-amber-50/60 px-4 py-3 open:shadow-sm">
+                <summary className="text-sm font-semibold text-amber-950 cursor-pointer list-none flex items-center gap-2 [&::-webkit-details-marker]:hidden">
+                  <span className="text-amber-700">▸</span> Full priority narrative
+                </summary>
                 <div
-                  className="text-sm text-amber-900 leading-relaxed mt-2 whitespace-pre-line [&>p]:mb-2"
+                  className="text-sm sm:text-base text-amber-950 leading-relaxed mt-3 pl-5 border-l-2 border-amber-200 whitespace-pre-line [&>p]:mb-2"
                   dangerouslySetInnerHTML={{ __html: data.chat.priorityNarrative.replace(/\*\*(.+?)\*\*/g, '<strong class="text-amber-950">$1</strong>') }}
                 />
               </details>
             ) : null}
-            {data.chat.leveragePlay ? (
-              <details className="rounded-lg border border-violet-100 bg-violet-50/40 px-3 py-2">
-                <summary className="text-xs font-semibold text-violet-900 cursor-pointer">Leverage play</summary>
-                <div
-                  className="text-sm text-violet-900 leading-relaxed mt-2"
-                  dangerouslySetInnerHTML={{ __html: data.chat.leveragePlay.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>') }}
-                />
-              </details>
-            ) : null}
+            </div>
           </section>
         )}
 
