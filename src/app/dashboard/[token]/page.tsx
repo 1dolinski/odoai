@@ -1361,8 +1361,8 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {/* Coach + Zoom — single wayfinding card (sticky) */}
-        <div className="mb-6 sm:sticky sm:top-2 z-20 -mx-1 sm:mx-0 rounded-2xl border border-slate-200/90 bg-white shadow-md shadow-slate-200/30 ring-1 ring-slate-100 overflow-hidden">
+        {/* Coach + Zoom — scrolls with page (not sticky — saves vertical space) */}
+        <div className="mb-6 -mx-1 sm:mx-0 rounded-2xl border border-slate-200/90 bg-white shadow-md shadow-slate-200/30 ring-1 ring-slate-100 overflow-hidden">
           <DashboardCoachBar
             embedded
             token={String(token)}
@@ -5871,6 +5871,18 @@ function DashboardCoachBar({
   const [coachSending, setCoachSending] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
   const [localChat, setLocalChat] = useState(initialChat);
+  const [includeRecentMoves, setIncludeRecentMoves] = useState(() => {
+    if (typeof window === "undefined") return true;
+    return localStorage.getItem("coachIncludeRecentMoves") !== "0";
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("coachIncludeRecentMoves", includeRecentMoves ? "1" : "0");
+    } catch {
+      /* ignore */
+    }
+  }, [includeRecentMoves]);
 
   const viewContext = useMemo(
     () => ({
@@ -5889,6 +5901,7 @@ function DashboardCoachBar({
       nowQueueCount,
       blockerCount,
       lastPrioritizedAt,
+      includeRecentMoves,
     }),
     [
       workspaceZoom,
@@ -5906,6 +5919,7 @@ function DashboardCoachBar({
       nowQueueCount,
       blockerCount,
       lastPrioritizedAt,
+      includeRecentMoves,
     ]
   );
 
@@ -6094,22 +6108,33 @@ function DashboardCoachBar({
             )}
             {coachErr && brief && <p className="text-xs text-amber-700 mt-2">{coachErr}</p>}
           </div>
-          <div className="flex flex-wrap gap-2 shrink-0 sm:pt-0.5">
-            <button
-              type="button"
-              disabled={coachLoading}
-              onClick={() => void loadBrief()}
-              className="text-xs font-semibold min-h-[36px] px-3 py-2 rounded-xl border border-indigo-200 bg-white text-indigo-800 hover:bg-indigo-50 disabled:opacity-50"
-            >
-              {coachLoading ? "Refreshing…" : "Refresh"}
-            </button>
-            <button
-              type="button"
-              onClick={() => setChatOpen((o) => !o)}
-              className="text-xs font-semibold min-h-[36px] px-3 py-2 rounded-xl bg-indigo-600 text-white hover:bg-indigo-700"
-            >
-              {chatOpen ? "Hide chat" : "Teach coach"}
-            </button>
+          <div className="flex flex-col gap-2 shrink-0 sm:pt-0.5 sm:items-end">
+            <div className="flex flex-wrap gap-2 justify-end w-full sm:w-auto">
+              <button
+                type="button"
+                disabled={coachLoading}
+                onClick={() => void loadBrief()}
+                className="text-xs font-semibold min-h-[36px] px-3 py-2 rounded-xl border border-indigo-200 bg-white text-indigo-800 hover:bg-indigo-50 disabled:opacity-50"
+              >
+                {coachLoading ? "Refreshing…" : "Refresh"}
+              </button>
+              <button
+                type="button"
+                onClick={() => setChatOpen((o) => !o)}
+                className="text-xs font-semibold min-h-[36px] px-3 py-2 rounded-xl bg-indigo-600 text-white hover:bg-indigo-700"
+              >
+                {chatOpen ? "Hide chat" : "Teach coach"}
+              </button>
+            </div>
+            <label className="flex items-center gap-2 cursor-pointer text-[11px] text-gray-600 select-none max-w-[16rem] sm:text-right sm:justify-end">
+              <input
+                type="checkbox"
+                checked={includeRecentMoves}
+                onChange={(e) => setIncludeRecentMoves(e.target.checked)}
+                className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 shrink-0"
+              />
+              <span className="leading-snug">Send last moves &amp; activity to coach</span>
+            </label>
           </div>
         </div>
 

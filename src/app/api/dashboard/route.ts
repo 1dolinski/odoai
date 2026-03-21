@@ -1012,13 +1012,39 @@ If you agree the current lane is fine, set suggestedLane to "" and suggestedReas
         return NextResponse.json({ ok: false, error: "viewContext required" }, { status: 400 });
       }
 
-      const activities = await Activity.find({ telegramChatId: chatId }).sort({ createdAt: -1 }).limit(15).lean();
-      const actLines = activities
-        .map((a) => {
-          const x = a as { type: string; title: string; createdAt: Date };
-          return `${new Date(x.createdAt).toISOString()} [${x.type}] ${x.title}`;
-        })
-        .join("\n");
+      const includeRecentMoves = (vc as { includeRecentMoves?: boolean }).includeRecentMoves !== false;
+
+      let actLines: string;
+      let lastMovesDone: string;
+      if (includeRecentMoves) {
+        const activities = await Activity.find({ telegramChatId: chatId }).sort({ createdAt: -1 }).limit(22).lean();
+        actLines = activities
+          .map((a) => {
+            const x = a as { type: string; title: string; detail?: string; actor?: string; createdAt: Date };
+            const bits = [x.detail, x.actor ? `@${x.actor}` : ""].filter(Boolean);
+            const extra = bits.length ? ` — ${bits.join(" · ")}` : "";
+            return `${new Date(x.createdAt).toISOString()} [${x.type}] ${x.title}${extra}`;
+          })
+          .join("\n");
+
+        const doneTasks = await Task.find({ telegramChatId: chatId, status: "done" })
+          .sort({ completedAt: -1, updatedAt: -1 })
+          .limit(14)
+          .select({ title: 1, completedAt: 1 })
+          .lean();
+        lastMovesDone = doneTasks.length
+          ? doneTasks
+              .map((t) => {
+                const row = t as { title: string; completedAt?: Date | null };
+                const d = row.completedAt ? new Date(row.completedAt).toISOString().split("T")[0] : "?";
+                return `- "${row.title}" (done ${d})`;
+              })
+              .join("\n")
+          : "(none in snapshot)";
+      } else {
+        actLines = "(omitted — dashboard toggle “last moves” is off)";
+        lastMovesDone = "(omitted — dashboard toggle “last moves” is off)";
+      }
 
       const now = new Date();
       const et = now.toLocaleString("en-US", {
@@ -1052,6 +1078,9 @@ OTHER:
 RECENT_ACTIVITY:
 ${actLines || "(none)"}
 
+LAST_MOVES_DONE (recently completed tasks — use for momentum / wrap-up context; if omitted, do not guess what was finished):
+${lastMovesDone}
+
 COACH_MEMORY (user-taught — honor strictly):
 ${memory || "(none yet)"}`;
 
@@ -1060,6 +1089,8 @@ ${memory || "(none yet)"}`;
           {
             role: "system",
             content: `You are the conversational guide on a team ops dashboard (tasks, people, initiatives, offers, zoom levels). Write in second person ("you"). Warm, direct, no filler.
+
+If RECENT_ACTIVITY or LAST_MOVES_DONE says they were omitted, do not invent recent completions — stay forward-looking.
 
 Return ONLY valid JSON:
 {
