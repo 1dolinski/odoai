@@ -100,6 +100,14 @@ export async function GET(req: NextRequest) {
         targetBuyers: m.targetBuyers || "",
         createdAt: m.createdAt,
       })),
+      dashboardCoachMemory: typeof (chat as { dashboardCoachMemory?: string }).dashboardCoachMemory === "string"
+        ? (chat as { dashboardCoachMemory: string }).dashboardCoachMemory
+        : "",
+      dashboardCoachChat: ((chat as { dashboardCoachChat?: { role: string; content: string; createdAt: Date }[] }).dashboardCoachChat || []).slice(-30).map((m) => ({
+        role: m.role === "assistant" ? "assistant" as const : "user" as const,
+        content: m.content,
+        createdAt: typeof m.createdAt === "string" ? m.createdAt : new Date(m.createdAt).toISOString(),
+      })),
     },
     tasks,
     initiatives: chat.initiatives || [],
@@ -852,6 +860,168 @@ Every task id from the user list must appear exactly once.`,
     } catch {
       return NextResponse.json({ ok: false, error: "Failed to parse lane classification" });
     }
+  }
+
+  if (action === "dashboardCoach") {
+    const mode = typeof body.mode === "string" ? body.mode : "";
+    const chatDoc = await Chat.findOne({ telegramChatId: chatId });
+    if (!chatDoc) return NextResponse.json({ ok: false, error: "chat not found" }, { status: 404 });
+
+    if (mode === "brief") {
+      const vc = body.viewContext;
+      if (!vc || typeof vc !== "object") {
+        return NextResponse.json({ ok: false, error: "viewContext required" }, { status: 400 });
+      }
+
+      const activities = await Activity.find({ telegramChatId: chatId }).sort({ createdAt: -1 }).limit(15).lean();
+      const actLines = activities
+        .map((a) => {
+          const x = a as { type: string; title: string; createdAt: Date };
+          return `${new Date(x.createdAt).toISOString()} [${x.type}] ${x.title}`;
+        })
+        .join("\n");
+
+      const now = new Date();
+      const et = now.toLocaleString("en-US", {
+        timeZone: "America/New_York",
+        weekday: "long",
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+        hour12: true,
+      });
+
+      const memory = String(chatDoc.dashboardCoachMemory || "").slice(0, 3500);
+      const userBlock = `CURRENT_TIME_ET: ${et}
+DASHBOARD_VIEW:
+- workspace zoom: ${JSON.stringify((vc as { workspaceZoom?: string }).workspaceZoom)}
+- task board: ${JSON.stringify((vc as { taskBoardLabel?: string }).taskBoardLabel)} (simple UI: ${(vc as { tasksSimpleUi?: boolean }).tasksSimpleUi})
+- chat title: ${(vc as { chatTitle?: string }).chatTitle || "untitled"}
+
+COUNTS:
+${JSON.stringify((vc as { counts?: unknown }).counts ?? {}, null, 2)}
+
+LANE_COUNTS:
+${JSON.stringify((vc as { laneCounts?: unknown }).laneCounts ?? {}, null, 2)}
+
+OTHER:
+- now-queue estimate: ${(vc as { nowQueueCount?: number }).nowQueueCount ?? "?"}
+- blocker-style tasks: ${(vc as { blockerCount?: number }).blockerCount ?? "?"}
+- last prioritize: ${(vc as { lastPrioritizedAt?: string | null }).lastPrioritizedAt || "never"}
+
+RECENT_ACTIVITY:
+${actLines || "(none)"}
+
+COACH_MEMORY (user-taught — honor strictly):
+${memory || "(none yet)"}`;
+
+      const response = await aiChat(
+        [
+          {
+            role: "system",
+            content: `You are the conversational guide on a team ops dashboard (tasks, people, initiatives, offers, zoom levels). Write in second person ("you"). Warm, direct, no filler.
+
+Return ONLY valid JSON:
+{
+  "viewTitle": "short headline, 4-10 words",
+  "viewExplained": "1-2 sentences: what this view is for.",
+  "guidance": "2-5 sentences: how to work here; use time of day in ET (morning=plan/review, midday=execute, late afternoon=ship, evening=wrap); reference recent activity when it helps.",
+  "recommendedAction": "short imperative, e.g. Classify tasks into lanes",
+  "recommendedDetail": "one sentence why that next step fits now"
+}
+Plain text inside strings, no markdown.`,
+          },
+          { role: "user", content: userBlock },
+        ],
+        "openai/gpt-4o-mini"
+      );
+
+      try {
+        const cleaned = response.replace(/```json?\n?/g, "").replace(/```/g, "").trim();
+        const parsed = JSON.parse(cleaned) as Record<string, string>;
+        return NextResponse.json({
+          ok: true,
+          viewTitle: String(parsed.viewTitle || "Dashboard"),
+          viewExplained: String(parsed.viewExplained || ""),
+          guidance: String(parsed.guidance || ""),
+          recommendedAction: String(parsed.recommendedAction || ""),
+          recommendedDetail: String(parsed.recommendedDetail || ""),
+        });
+      } catch {
+        return NextResponse.json({ ok: false, error: "Coach brief parse failed" });
+      }
+    }
+
+    if (mode === "chat") {
+      const message = typeof body.message === "string" ? body.message.trim() : "";
+      if (!message) return NextResponse.json({ ok: false, error: "message required" }, { status: 400 });
+
+      const viewHint = body.viewContext
+        ? `Current dashboard snapshot (may help):\n${JSON.stringify(body.viewContext).slice(0, 900)}`
+        : "";
+
+      const prevMem = String(chatDoc.dashboardCoachMemory || "");
+      const chatHist = (chatDoc.dashboardCoachChat || [])
+        .slice(-14)
+        .map((m: { role: string; content: string }) => `${m.role}: ${m.content}`)
+        .join("\n---\n");
+
+      const response = await aiChat(
+        [
+          {
+            role: "system",
+            content: `You are the dashboard coach. Users correct you or add facts (schedule, role, what they're optimizing for). Merge new facts into memory; remove contradicted old facts.
+
+Return ONLY valid JSON:
+{
+  "assistantReply": "2-6 sentences, warm, plain text, acknowledge what they said",
+  "updatedMemory": "max 2000 chars: durable notes for future briefs (bullets ok)"
+}
+
+Prior memory:
+${prevMem.slice(0, 3000)}
+
+Recent coach thread:
+${chatHist || "(none)"}`,
+          },
+          { role: "user", content: `${viewHint ? `${viewHint}\n\n` : ""}User says:\n${message}` },
+        ],
+        "openai/gpt-4o-mini"
+      );
+
+      let assistantReply = "Got it — I’ll use that on the next coach refresh.";
+      let updatedMemory = prevMem;
+      try {
+        const cleaned = response.replace(/```json?\n?/g, "").replace(/```/g, "").trim();
+        const j = JSON.parse(cleaned) as { assistantReply?: string; updatedMemory?: string };
+        assistantReply = String(j.assistantReply || assistantReply);
+        updatedMemory = String(j.updatedMemory || prevMem).slice(0, 2000);
+      } catch { /* keep defaults */ }
+
+      const userEntry = { role: "user" as const, content: message, createdAt: new Date() };
+      const asstEntry = { role: "assistant" as const, content: assistantReply, createdAt: new Date() };
+      const prevChat = chatDoc.dashboardCoachChat || [];
+      const nextChat = [...prevChat, userEntry, asstEntry].slice(-40);
+
+      await Chat.updateOne(
+        { telegramChatId: chatId },
+        { $set: { dashboardCoachMemory: updatedMemory, dashboardCoachChat: nextChat } }
+      );
+
+      return NextResponse.json({
+        ok: true,
+        assistantReply,
+        updatedMemory,
+        dashboardCoachChat: nextChat.map((m) => ({
+          role: m.role,
+          content: m.content,
+          createdAt: m.createdAt instanceof Date ? m.createdAt.toISOString() : String(m.createdAt),
+        })),
+      });
+    }
+
+    return NextResponse.json({ ok: false, error: "dashboardCoach mode must be brief or chat" }, { status: 400 });
   }
 
   if (action === "planTaskRollup") {

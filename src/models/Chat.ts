@@ -145,6 +145,8 @@ export interface IChat extends Document {
   offerResearchLog: IOfferResearchLog[];
   offerIteration: number;
   messagesSinceSummary: number;
+  dashboardCoachMemory?: string;
+  dashboardCoachChat?: { role: "user" | "assistant"; content: string; createdAt: Date }[];
   createdAt: Date;
   updatedAt: Date;
 }
@@ -223,6 +225,11 @@ const ChatSchema = new Schema<IChat>(
     }], default: [] },
     offerIteration: { type: Number, default: 0 },
     messagesSinceSummary: { type: Number, default: 0 },
+    dashboardCoachMemory: { type: String, default: "" },
+    dashboardCoachChat: {
+      type: [{ role: { type: String, enum: ["user", "assistant"] }, content: String, createdAt: { type: Date, default: Date.now } }],
+      default: [],
+    },
   },
   { timestamps: true }
 );

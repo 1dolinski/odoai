@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useMemo } from "react";
 import { useParams } from "next/navigation";
 import { parseISO, format } from "date-fns";
 
@@ -226,6 +226,8 @@ interface DashboardData {
     }[];
     messageCount: number;
     dataSources: { sourceId: string; endpointId: string; enabled: boolean; lastFetchAt?: string }[];
+    dashboardCoachMemory?: string;
+    dashboardCoachChat?: { role: "user" | "assistant"; content: string; createdAt: string }[];
   };
   initiatives: Initiative[];
   tasks: Task[];
@@ -1111,6 +1113,16 @@ export default function DashboardPage() {
 
   const LANE_SECTION_ORDER = ["do", "delegate", "automate", "delete", "unset"] as const;
 
+  const coachLaneDo = activeTasks.filter((t) => normalizedActionLane(t) === "do").length;
+  const coachLaneDelegate = activeTasks.filter((t) => normalizedActionLane(t) === "delegate").length;
+  const coachLaneAutomate = activeTasks.filter((t) => normalizedActionLane(t) === "automate").length;
+  const coachLaneDelete = activeTasks.filter((t) => normalizedActionLane(t) === "delete").length;
+  const coachLaneUnset = activeTasks.filter((t) => !normalizedActionLane(t)).length;
+  const coachTodo = allTasks.filter((t) => t.status === "todo").length;
+  const coachUpcoming = allTasks.filter((t) => t.status === "upcoming").length;
+  const coachDone = allTasks.filter((t) => t.status === "done").length;
+  const coachBoardLabel = tasksSimpleUi ? "list (simple)" : taskViewMode;
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 via-white to-gray-100 text-gray-900">
       <div className="max-w-6xl mx-auto px-3 sm:px-6 py-4 sm:py-8">
@@ -1231,6 +1243,27 @@ export default function DashboardPage() {
             </a>
           </div>
         </div>
+
+        <DashboardCoachBar
+          token={String(token)}
+          workspaceZoom={workspaceZoom}
+          taskBoardLabel={coachBoardLabel}
+          tasksSimpleUi={tasksSimpleUi}
+          chatTitle={data.chat.title}
+          coachTodo={coachTodo}
+          coachUpcoming={coachUpcoming}
+          coachDone={coachDone}
+          coachLaneDo={coachLaneDo}
+          coachLaneDelegate={coachLaneDelegate}
+          coachLaneAutomate={coachLaneAutomate}
+          coachLaneDelete={coachLaneDelete}
+          coachLaneUnset={coachLaneUnset}
+          nowQueueCount={nowLensTasks.length}
+          blockerCount={blockerLensTasks.length}
+          lastPrioritizedAt={data.chat.lastPrioritizedAt ? (typeof data.chat.lastPrioritizedAt === "string" ? data.chat.lastPrioritizedAt : new Date(data.chat.lastPrioritizedAt).toISOString()) : null}
+          initialChat={data.chat.dashboardCoachChat || []}
+          fetchData={fetchData}
+        />
 
         {/* Workspace zoom — house → tasks → people / blockers / opportunities */}
         <section className="mb-5 sm:sticky sm:top-0 z-20 -mx-2 px-2 py-2.5 sm:mx-0 sm:px-0 bg-gradient-to-b from-slate-50/95 to-white/80 backdrop-blur-sm border border-slate-200/80 rounded-xl shadow-sm">
@@ -5497,6 +5530,265 @@ export default function DashboardPage() {
         )}
       </div>
     </div>
+  );
+}
+
+type CoachBrief = {
+  viewTitle: string;
+  viewExplained: string;
+  guidance: string;
+  recommendedAction: string;
+  recommendedDetail: string;
+};
+
+function DashboardCoachBar({
+  token,
+  workspaceZoom,
+  taskBoardLabel,
+  tasksSimpleUi,
+  chatTitle,
+  coachTodo,
+  coachUpcoming,
+  coachDone,
+  coachLaneDo,
+  coachLaneDelegate,
+  coachLaneAutomate,
+  coachLaneDelete,
+  coachLaneUnset,
+  nowQueueCount,
+  blockerCount,
+  lastPrioritizedAt,
+  initialChat,
+  fetchData,
+}: {
+  token: string;
+  workspaceZoom: WorkspaceZoom;
+  taskBoardLabel: string;
+  tasksSimpleUi: boolean;
+  chatTitle: string;
+  coachTodo: number;
+  coachUpcoming: number;
+  coachDone: number;
+  coachLaneDo: number;
+  coachLaneDelegate: number;
+  coachLaneAutomate: number;
+  coachLaneDelete: number;
+  coachLaneUnset: number;
+  nowQueueCount: number;
+  blockerCount: number;
+  lastPrioritizedAt: string | null;
+  initialChat: { role: "user" | "assistant"; content: string; createdAt: string }[];
+  fetchData: () => Promise<void>;
+}) {
+  const [brief, setBrief] = useState<CoachBrief | null>(null);
+  const [coachLoading, setCoachLoading] = useState(false);
+  const [coachErr, setCoachErr] = useState<string | null>(null);
+  const [coachInput, setCoachInput] = useState("");
+  const [coachSending, setCoachSending] = useState(false);
+  const [chatOpen, setChatOpen] = useState(false);
+  const [localChat, setLocalChat] = useState(initialChat);
+
+  const viewContext = useMemo(
+    () => ({
+      workspaceZoom,
+      taskBoardLabel,
+      tasksSimpleUi,
+      chatTitle,
+      counts: { todo: coachTodo, upcoming: coachUpcoming, done: coachDone },
+      laneCounts: {
+        do: coachLaneDo,
+        delegate: coachLaneDelegate,
+        automate: coachLaneAutomate,
+        delete: coachLaneDelete,
+        unset: coachLaneUnset,
+      },
+      nowQueueCount,
+      blockerCount,
+      lastPrioritizedAt,
+    }),
+    [
+      workspaceZoom,
+      taskBoardLabel,
+      tasksSimpleUi,
+      chatTitle,
+      coachTodo,
+      coachUpcoming,
+      coachDone,
+      coachLaneDo,
+      coachLaneDelegate,
+      coachLaneAutomate,
+      coachLaneDelete,
+      coachLaneUnset,
+      nowQueueCount,
+      blockerCount,
+      lastPrioritizedAt,
+    ]
+  );
+
+  const viewKey = useMemo(() => JSON.stringify(viewContext), [viewContext]);
+
+  const initialChatSig = JSON.stringify(initialChat);
+  useEffect(() => {
+    setLocalChat(initialChat);
+  }, [initialChatSig]); // eslint-disable-line react-hooks/exhaustive-deps -- sync when server-fed transcript changes
+
+  const loadBrief = useCallback(async () => {
+    setCoachLoading(true);
+    setCoachErr(null);
+    try {
+      const res = await fetch("/api/dashboard", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token, action: "dashboardCoach", mode: "brief", viewContext }),
+      });
+      const j = await res.json();
+      if (!j.ok) {
+        setCoachErr(j.error || "Coach couldn’t load.");
+        setBrief(null);
+      } else {
+        setBrief({
+          viewTitle: j.viewTitle,
+          viewExplained: j.viewExplained,
+          guidance: j.guidance,
+          recommendedAction: j.recommendedAction,
+          recommendedDetail: j.recommendedDetail,
+        });
+      }
+    } catch {
+      setCoachErr("Network error loading coach.");
+      setBrief(null);
+    }
+    setCoachLoading(false);
+  }, [token, viewContext]);
+
+  useEffect(() => {
+    const t = setTimeout(() => {
+      void loadBrief();
+    }, 450);
+    return () => clearTimeout(t);
+  }, [viewKey, loadBrief]);
+
+  async function sendCoachMessage(e: React.FormEvent) {
+    e.preventDefault();
+    const text = coachInput.trim();
+    if (!text || coachSending) return;
+    setCoachSending(true);
+    setCoachErr(null);
+    const optimistic = [...localChat, { role: "user" as const, content: text, createdAt: new Date().toISOString() }];
+    setLocalChat(optimistic);
+    setCoachInput("");
+    try {
+      const res = await fetch("/api/dashboard", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token, action: "dashboardCoach", mode: "chat", message: text, viewContext }),
+      });
+      const j = await res.json();
+      if (!j.ok) {
+        setCoachErr(j.error || "Message failed.");
+        setLocalChat((c) => c.slice(0, -1));
+        setCoachInput(text);
+      } else if (Array.isArray(j.dashboardCoachChat)) {
+        setLocalChat(j.dashboardCoachChat);
+        await fetchData();
+        void loadBrief();
+      }
+    } catch {
+      setCoachErr("Network error sending message.");
+    }
+    setCoachSending(false);
+  }
+
+  return (
+    <section className="mb-5 rounded-xl border border-indigo-200/90 bg-gradient-to-br from-indigo-50/95 via-white to-violet-50/40 shadow-sm overflow-hidden" aria-label="Dashboard coach">
+      <div className="p-4 sm:p-5">
+        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-500">Coach</span>
+              <span className="text-[10px] text-indigo-400">ET-aware · learns from chat</span>
+            </div>
+            {coachLoading && !brief ? (
+              <div className="mt-3 space-y-2 animate-pulse">
+                <div className="h-4 bg-indigo-100/80 rounded w-3/4 max-w-md" />
+                <div className="h-3 bg-indigo-50 rounded w-full max-w-lg" />
+                <div className="h-3 bg-indigo-50 rounded w-5/6 max-w-lg" />
+              </div>
+            ) : brief ? (
+              <div className="mt-2">
+                <h2 className="text-base sm:text-lg font-semibold text-gray-900 leading-snug">{brief.viewTitle}</h2>
+                <p className="text-sm text-gray-700 mt-1.5 leading-relaxed">{brief.viewExplained}</p>
+                <p className="text-sm text-gray-600 mt-2 leading-relaxed">{brief.guidance}</p>
+                <div className="mt-4 rounded-xl border border-indigo-100 bg-white/90 px-3 py-2.5 shadow-sm">
+                  <p className="text-[10px] font-bold uppercase tracking-wide text-indigo-600">Suggested next move</p>
+                  <p className="text-sm font-semibold text-gray-900 mt-0.5">{brief.recommendedAction}</p>
+                  <p className="text-xs text-gray-500 mt-1 leading-snug">{brief.recommendedDetail}</p>
+                </div>
+              </div>
+            ) : (
+              <p className="text-sm text-gray-500 mt-2">{coachErr || "Coach is waking up…"}</p>
+            )}
+            {coachErr && brief && <p className="text-xs text-amber-700 mt-2">{coachErr}</p>}
+          </div>
+          <div className="flex flex-wrap gap-2 shrink-0">
+            <button
+              type="button"
+              disabled={coachLoading}
+              onClick={() => void loadBrief()}
+              className="text-xs font-semibold px-3 py-1.5 rounded-lg border border-indigo-200 bg-white text-indigo-800 hover:bg-indigo-50 disabled:opacity-50"
+            >
+              {coachLoading ? "Refreshing…" : "Refresh coach"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setChatOpen((o) => !o)}
+              className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700"
+            >
+              {chatOpen ? "Hide chat" : "Correct the coach"}
+            </button>
+          </div>
+        </div>
+
+        {chatOpen && (
+          <div className="mt-4 border-t border-indigo-100 pt-4">
+            <p className="text-xs text-gray-600 mb-2">
+              Tell the coach about your schedule, role, or what you’re optimizing for — it updates stored memory and the next brief.
+            </p>
+            <div className="max-h-48 overflow-y-auto space-y-2 mb-3 rounded-lg border border-gray-100 bg-gray-50/80 p-2">
+              {localChat.length === 0 ? (
+                <p className="text-xs text-gray-400 italic px-1">No messages yet.</p>
+              ) : (
+                localChat.map((m, i) => (
+                  <div
+                    key={`${m.createdAt}-${i}`}
+                    className={`text-xs rounded-lg px-2.5 py-1.5 max-w-[95%] ${m.role === "user" ? "bg-indigo-600 text-white ml-auto" : "bg-white border border-gray-200 text-gray-800"}`}
+                  >
+                    <span className="text-[10px] opacity-70 block mb-0.5">{m.role === "user" ? "You" : "Coach"}</span>
+                    <span className="whitespace-pre-wrap leading-snug">{m.content}</span>
+                  </div>
+                ))
+              )}
+            </div>
+            <form onSubmit={sendCoachMessage} className="flex flex-col sm:flex-row gap-2">
+              <input
+                value={coachInput}
+                onChange={(e) => setCoachInput(e.target.value)}
+                placeholder="e.g. I only work ops after 3pm ET — prioritize execution tips then"
+                className="flex-1 text-sm border border-gray-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400 outline-none"
+                disabled={coachSending}
+              />
+              <button
+                type="submit"
+                disabled={coachSending || !coachInput.trim()}
+                className="text-sm font-semibold px-4 py-2 rounded-lg bg-gray-900 text-white hover:bg-gray-800 disabled:opacity-50 shrink-0"
+              >
+                {coachSending ? "Sending…" : "Send"}
+              </button>
+            </form>
+          </div>
+        )}
+      </div>
+    </section>
   );
 }
 
