@@ -58,6 +58,17 @@ export async function GET(req: NextRequest) {
       priorityNarrative: chat.priorityNarrative || "",
       leveragePlay: chat.leveragePlay || "",
       lastPrioritizedAt: chat.lastPrioritizedAt || null,
+      northStarHistory: (
+        ((chat as { northStarHistory?: { at: Date; leveragePlay?: string; contextSummary?: string; priorityNarrative?: string }[] }).northStarHistory ||
+          []) as { at: Date; leveragePlay?: string; contextSummary?: string; priorityNarrative?: string }[]
+      )
+        .map((h) => ({
+          at: typeof h.at === "string" ? h.at : new Date(h.at).toISOString(),
+          leveragePlay: String(h.leveragePlay || ""),
+          contextSummary: String(h.contextSummary || ""),
+          priorityNarrative: String(h.priorityNarrative || ""),
+        }))
+        .sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime()),
       offers: (chat.offers || []).map((o: { id: string; name: string; description: string; pricePoint: string; targetBuyer: string; whyNow: string; deliveryMethod: string; costToDeliver: string; revenueEstimate: string; confidenceScore: number; confidenceReason: string; validationNotes: string; meatAndPotatoes?: string[]; teamLeverage?: string[]; standoutActions?: string[]; creativePlays?: string[]; chatSignals?: string[]; teamPing?: string; status: string; iteration: number; createdAt: Date; updatedAt: Date }) => ({
         id: o.id, name: o.name, description: o.description, pricePoint: o.pricePoint,
         targetBuyer: o.targetBuyer, whyNow: o.whyNow, deliveryMethod: o.deliveryMethod,
@@ -1806,7 +1817,25 @@ CONTEXT SUMMARY:\n${chatDoc?.contextSummary || "none"}` },
       });
       await Promise.all([
         ...ops,
-        Chat.updateOne({ telegramChatId: chatId }, { $set: { priorityNarrative: narrative, leveragePlay, lastPrioritizedAt: new Date() } }),
+        Chat.updateOne(
+          { telegramChatId: chatId },
+          {
+            $set: { priorityNarrative: narrative, leveragePlay, lastPrioritizedAt: new Date() },
+            $push: {
+              northStarHistory: {
+                $each: [
+                  {
+                    at: new Date(),
+                    leveragePlay,
+                    contextSummary: String(chatDoc?.contextSummary || ""),
+                    priorityNarrative: narrative,
+                  },
+                ],
+                $slice: -150,
+              },
+            },
+          }
+        ),
       ]);
 
       return NextResponse.json({ ok: true, narrative, leveragePlay, tasks: taskUpdates });

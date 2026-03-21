@@ -116,6 +116,13 @@ export interface IOfferResearchLog {
   createdAt: Date;
 }
 
+export interface INorthStarSnapshot {
+  at: Date;
+  leveragePlay: string;
+  contextSummary: string;
+  priorityNarrative: string;
+}
+
 export interface IChat extends Document {
   telegramChatId: string;
   chatTitle?: string;
@@ -141,6 +148,8 @@ export interface IChat extends Document {
   priorityNarrative: string;
   leveragePlay: string;
   lastPrioritizedAt: Date;
+  /** Rolling history for House time lens (prioritize + context sync append). */
+  northStarHistory: INorthStarSnapshot[];
   offers: IOffer[];
   offerResearchLog: IOfferResearchLog[];
   offerIteration: number;
@@ -200,6 +209,17 @@ const ChatSchema = new Schema<IChat>(
     priorityNarrative: { type: String, default: "" },
     leveragePlay: { type: String, default: "" },
     lastPrioritizedAt: { type: Date },
+    northStarHistory: {
+      type: [
+        {
+          at: { type: Date, default: Date.now },
+          leveragePlay: { type: String, default: "" },
+          contextSummary: { type: String, default: "" },
+          priorityNarrative: { type: String, default: "" },
+        },
+      ],
+      default: [],
+    },
     offers: { type: [{
       id: String, name: String, description: { type: String, default: "" },
       pricePoint: { type: String, default: "" }, targetBuyer: { type: String, default: "" },

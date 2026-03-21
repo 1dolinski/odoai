@@ -3,6 +3,8 @@
 import { useEffect, useState, useCallback, useMemo } from "react";
 import { useParams } from "next/navigation";
 import { parseISO, format } from "date-fns";
+import { markdownLiteToHtml, toBriefVision } from "@/lib/markdownLite";
+import { pickNorthStarSnapshot, type HouseTimeLens } from "@/lib/northStarHistory";
 
 interface Subtask {
   id: string;
@@ -207,6 +209,7 @@ interface DashboardData {
     priorityNarrative: string;
     leveragePlay: string;
     lastPrioritizedAt: string | null;
+    northStarHistory?: { at: string; leveragePlay: string; contextSummary: string; priorityNarrative: string }[];
     offers: {
       id: string; name: string; description: string; pricePoint: string;
       targetBuyer: string; whyNow: string; deliveryMethod: string;
@@ -444,6 +447,34 @@ export default function DashboardPage() {
     setWorkspacePeopleFocus(null);
     if (typeof window !== "undefined") localStorage.setItem("workspaceZoom", z);
   };
+
+  type HouseStoryMode = "brief" | "full";
+  const [houseStoryMode, setHouseStoryMode] = useState<HouseStoryMode>(() => {
+    if (typeof window === "undefined") return "full";
+    return localStorage.getItem("houseStoryMode") === "brief" ? "brief" : "full";
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem("houseStoryMode", houseStoryMode);
+    } catch {
+      /* ignore */
+    }
+  }, [houseStoryMode]);
+
+  const [houseTimeLens, setHouseTimeLens] = useState<HouseTimeLens>(() => {
+    if (typeof window === "undefined") return "live";
+    const v = localStorage.getItem("houseTimeLens");
+    if (v === "h24" || v === "d7" || v === "d30") return v;
+    return "live";
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem("houseTimeLens", houseTimeLens);
+    } catch {
+      /* ignore */
+    }
+  }, [houseTimeLens]);
+
   const [prioritizing, setPrioritizing] = useState(false);
   const [researchingOffers, setResearchingOffers] = useState(false);
   const [offerCopyFlash, setOfferCopyFlash] = useState<string | null>(null);
@@ -1008,6 +1039,12 @@ export default function DashboardPage() {
     setData((d) => d ? { ...d, chat: { ...d.chat, aiFeed: [] } } : d);
   }
 
+  const houseNorthSnap = useMemo(() => {
+    if (!data?.chat) return null;
+    if (houseTimeLens === "live") return null;
+    return pickNorthStarSnapshot(data.chat.northStarHistory || [], houseTimeLens);
+  }, [data, houseTimeLens]);
+
   if (error) {
     return (
       <div className="min-h-screen bg-gray-50 text-gray-900 flex items-center justify-center">
@@ -1141,6 +1178,15 @@ export default function DashboardPage() {
   const coachUpcoming = allTasks.filter((t) => t.status === "upcoming").length;
   const coachDone = allTasks.filter((t) => t.status === "done").length;
   const coachBoardLabel = tasksSimpleUi ? "list (simple)" : taskViewMode;
+
+  const hLeverage = houseTimeLens === "live" ? (data.chat.leveragePlay || "") : (houseNorthSnap?.leveragePlay ?? "");
+  const hContext = houseTimeLens === "live" ? (data.chat.contextSummary || "") : (houseNorthSnap?.contextSummary ?? "");
+  const hNarrative = houseTimeLens === "live" ? (data.chat.priorityNarrative || "") : (houseNorthSnap?.priorityNarrative ?? "");
+  const housePastMissing = houseTimeLens !== "live" && houseNorthSnap == null;
+  const houseSnapshotLabel =
+    houseNorthSnap?.at != null
+      ? format(parseISO(houseNorthSnap.at), "MMM d, yyyy · h:mm a")
+      : "";
 
   const laneModalTask = laneModalTaskId ? data.tasks.find((x) => x._id === laneModalTaskId) : undefined;
 
@@ -4275,7 +4321,10 @@ export default function DashboardPage() {
                       >{prioritizing ? "Re-prioritizing..." : "Re-prioritize"}</button>
                     </div>
                   </div>
-                  <div className="text-sm text-amber-800 leading-relaxed whitespace-pre-line [&>p]:mb-2" dangerouslySetInnerHTML={{ __html: data.chat.priorityNarrative.replace(/\*\*(.+?)\*\*/g, '<strong class="text-amber-900">$1</strong>') }} />
+                  <div
+                    className="text-sm leading-relaxed"
+                    dangerouslySetInnerHTML={{ __html: markdownLiteToHtml(data.chat.priorityNarrative, "amber") }}
+                  />
                 </div>
               )}
               {data.chat.leveragePlay && (
@@ -4286,7 +4335,10 @@ export default function DashboardPage() {
                       <span className="text-xs font-bold uppercase tracking-widest text-purple-600">Leverage Play</span>
                       <span className="text-[10px] text-purple-400 font-medium bg-purple-100 rounded-full px-2 py-0.5">high-conviction unlock</span>
                     </div>
-                    <div className="text-sm text-purple-900 leading-relaxed" dangerouslySetInnerHTML={{ __html: data.chat.leveragePlay.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>') }} />
+                    <div
+                      className="text-sm leading-relaxed"
+                      dangerouslySetInnerHTML={{ __html: markdownLiteToHtml(data.chat.leveragePlay, "violet") }}
+                    />
                   </div>
                 </div>
               )}
@@ -5155,51 +5207,135 @@ export default function DashboardPage() {
           <section className="mb-10 rounded-2xl border border-slate-200/90 bg-gradient-to-b from-white to-slate-50/90 shadow-md shadow-slate-200/40 overflow-hidden">
             <div className="relative px-4 py-8 sm:px-8 sm:py-10 bg-gradient-to-br from-slate-900 via-slate-800 to-indigo-950 text-white">
               <div className="absolute inset-0 bg-[radial-gradient(ellipse_80%_60%_at_50%_-20%,rgba(255,255,255,0.12),transparent)] pointer-events-none" aria-hidden />
-              <div className="relative flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
-                <div className="min-w-0 flex-1">
-                  <p className="text-[11px] font-bold uppercase tracking-[0.22em] text-white/45 mb-3">North star</p>
-                  <h2 className="text-2xl sm:text-3xl lg:text-4xl font-bold tracking-tight text-white leading-[1.15]">
-                    {data.chat.title || "This workspace"}
-                  </h2>
-                  {data.chat.leveragePlay ? (
-                    <div
-                      className="mt-5 text-base sm:text-lg text-white/90 leading-relaxed max-w-3xl [&_strong]:text-white [&_strong]:font-semibold"
-                      dangerouslySetInnerHTML={{
-                        __html: data.chat.leveragePlay.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>"),
-                      }}
-                    />
-                  ) : data.chat.contextSummary ? (
-                    <p className="mt-5 text-base sm:text-lg text-white/90 leading-relaxed max-w-3xl whitespace-pre-wrap">
-                      {data.chat.contextSummary}
-                    </p>
-                  ) : (
-                    <p className="mt-5 text-base text-white/65 leading-relaxed max-w-2xl">
-                      Run <strong className="text-white/90">Analyze Priorities</strong> on the task board to generate a leverage play — it becomes the headline story here. Or build up <strong className="text-white/90">Chat Context</strong> so the team sees a shared direction every time they land on House.
-                    </p>
-                  )}
+              <div className="relative flex flex-col gap-3 mb-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-[11px] font-bold uppercase tracking-[0.22em] text-white/45">North star</p>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="flex rounded-xl bg-black/35 p-0.5 border border-white/10" role="group" aria-label="Time window">
+                      {(
+                        [
+                          { id: "live" as const, label: "Now" },
+                          { id: "h24" as const, label: "24h" },
+                          { id: "d7" as const, label: "7d" },
+                          { id: "d30" as const, label: "30d" },
+                        ] as const
+                      ).map((t) => (
+                        <button
+                          key={t.id}
+                          type="button"
+                          onClick={() => setHouseTimeLens(t.id)}
+                          className={`px-2.5 sm:px-3 py-1.5 rounded-lg text-[11px] sm:text-xs font-semibold transition-colors ${
+                            houseTimeLens === t.id ? "bg-white text-slate-900 shadow" : "text-white/75 hover:text-white"
+                          }`}
+                          title={t.id === "live" ? "Current board" : `North star as of ≥${t.label} ago`}
+                        >
+                          {t.label}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="flex rounded-xl bg-black/35 p-0.5 border border-white/10" role="group" aria-label="Story length">
+                      <button
+                        type="button"
+                        onClick={() => setHouseStoryMode("brief")}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                          houseStoryMode === "brief" ? "bg-white text-slate-900 shadow" : "text-white/75 hover:text-white"
+                        }`}
+                      >
+                        Brief
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setHouseStoryMode("full")}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                          houseStoryMode === "full" ? "bg-white text-slate-900 shadow" : "text-white/75 hover:text-white"
+                        }`}
+                      >
+                        Full
+                      </button>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setWorkspaceZoom("tasks")}
+                      className="text-sm font-semibold px-4 py-2.5 rounded-xl bg-white text-slate-900 hover:bg-white/95 shadow-md shrink-0"
+                    >
+                      Open task board →
+                    </button>
+                  </div>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setWorkspaceZoom("tasks")}
-                  className="text-sm font-semibold px-4 py-2.5 rounded-xl bg-white text-slate-900 hover:bg-white/95 shadow-md shrink-0 self-start"
-                >
-                  Open task board →
-                </button>
+                {houseTimeLens !== "live" && houseNorthSnap ? (
+                  <p className="text-[11px] text-amber-200/90 font-medium">
+                    Historical view · snapshot from <span className="text-white">{houseSnapshotLabel}</span>
+                    {houseTimeLens === "h24" ? " (latest on file from ≥24h ago)" : houseTimeLens === "d7" ? " (≥7d ago)" : " (≥30d ago)"}
+                  </p>
+                ) : null}
+                {housePastMissing ? (
+                  <p className="text-[11px] text-amber-200/95 rounded-lg bg-black/30 border border-white/10 px-3 py-2 max-w-2xl">
+                    No snapshot that old yet. History appends when you run <strong className="text-white">Analyze Priorities</strong> or when chat context syncs. Check back after a few runs — or pick <strong className="text-white">Now</strong>.
+                  </p>
+                ) : null}
+              </div>
+              <div className="relative min-w-0">
+                <h2 className="text-2xl sm:text-3xl lg:text-4xl font-bold tracking-tight text-white leading-[1.15]">
+                  {data.chat.title || "This workspace"}
+                </h2>
+                {housePastMissing ? (
+                  <p className="mt-5 text-base text-white/55 leading-relaxed max-w-2xl">Switch to <strong className="text-white/90">Now</strong> for the live north star, or run another prioritize pass to grow history.</p>
+                ) : hLeverage ? (
+                  <div
+                    className="mt-5 max-w-3xl markdown-lite-hero [&_.markdown-lite]:text-base [&_.markdown-lite]:sm:text-lg"
+                    dangerouslySetInnerHTML={{
+                      __html: markdownLiteToHtml(
+                        houseStoryMode === "brief" ? toBriefVision(hLeverage) : hLeverage,
+                        "onDark"
+                      ),
+                    }}
+                  />
+                ) : hContext ? (
+                  <div
+                    className="mt-5 max-w-3xl [&_.markdown-lite]:text-base [&_.markdown-lite]:sm:text-lg"
+                    dangerouslySetInnerHTML={{
+                      __html: markdownLiteToHtml(
+                        houseStoryMode === "brief" ? toBriefVision(hContext, 480) : hContext,
+                        "onDark"
+                      ),
+                    }}
+                  />
+                ) : (
+                  <p className="mt-5 text-base text-white/65 leading-relaxed max-w-2xl">
+                    Run <strong className="text-white/90">Analyze Priorities</strong> on the task board to generate a leverage play — it becomes the headline story here. Or build up <strong className="text-white/90">Chat Context</strong> so the team sees a shared direction every time they land on House.
+                  </p>
+                )}
+                {houseStoryMode === "brief" && (hLeverage || hContext) && !housePastMissing ? (
+                  <p className="mt-3 text-[11px] text-white/40">Brief mode trims to ~1–2 sentences. Switch to Full for lists and detail.</p>
+                ) : null}
               </div>
             </div>
 
             <div className="p-4 sm:p-5 sm:px-8 sm:pb-6">
-            {data.chat.leveragePlay && data.chat.contextSummary ? (
+            {hLeverage && hContext ? (
               <div className="mb-6 rounded-xl border border-slate-200 bg-white px-4 py-4 sm:px-5">
-                <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-2">Team context</h3>
-                <div className="text-sm sm:text-base text-slate-700 leading-relaxed whitespace-pre-wrap">{data.chat.contextSummary}</div>
+                <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-2">
+                  Team context{houseTimeLens !== "live" ? " (historical)" : ""}
+                </h3>
+                <div
+                  className="text-sm sm:text-base leading-relaxed"
+                  dangerouslySetInnerHTML={{
+                    __html: markdownLiteToHtml(
+                      houseStoryMode === "brief" ? toBriefVision(hContext, 560) : hContext,
+                      "onLight"
+                    ),
+                  }}
+                />
               </div>
             ) : null}
 
             <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-2 mb-5">
               <div>
                 <h3 className="text-lg font-semibold text-slate-900">Pulse</h3>
-                <p className="text-sm text-slate-500 mt-0.5">Counts at a glance — tap a card to zoom in.</p>
+                <p className="text-sm text-slate-500 mt-0.5">
+                  Counts at a glance — tap a card to zoom in.
+                  {houseTimeLens !== "live" ? " Numbers are live; only the north star copy above is from the past." : ""}
+                </p>
               </div>
             </div>
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 sm:gap-3 mb-5">
@@ -5243,20 +5379,31 @@ export default function DashboardPage() {
                 )}
               </div>
             )}
-            {data.chat.contextSummary && !data.chat.leveragePlay ? (
+            {hContext && !hLeverage ? (
               <div className="mb-4 rounded-xl border border-slate-200 bg-white px-4 py-4">
-                <div className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-2">Team context</div>
-                <div className="text-sm sm:text-base text-slate-700 whitespace-pre-wrap leading-relaxed">{data.chat.contextSummary}</div>
+                <div className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-2">
+                  Team context{houseTimeLens !== "live" ? " (historical)" : ""}
+                </div>
+                <div
+                  className="text-sm sm:text-base leading-relaxed"
+                  dangerouslySetInnerHTML={{
+                    __html: markdownLiteToHtml(
+                      houseStoryMode === "brief" ? toBriefVision(hContext, 560) : hContext,
+                      "onLight"
+                    ),
+                  }}
+                />
               </div>
             ) : null}
-            {data.chat.priorityNarrative ? (
+            {hNarrative ? (
               <details className="mb-2 rounded-xl border border-amber-200/80 bg-amber-50/60 px-4 py-3 open:shadow-sm">
                 <summary className="text-sm font-semibold text-amber-950 cursor-pointer list-none flex items-center gap-2 [&::-webkit-details-marker]:hidden">
-                  <span className="text-amber-700">▸</span> Full priority narrative
+                  <span className="text-amber-700">▸</span>{" "}
+                  {houseTimeLens === "live" ? "Full priority narrative" : "Priority narrative (historical)"}
                 </summary>
                 <div
-                  className="text-sm sm:text-base text-amber-950 leading-relaxed mt-3 pl-5 border-l-2 border-amber-200 whitespace-pre-line [&>p]:mb-2"
-                  dangerouslySetInnerHTML={{ __html: data.chat.priorityNarrative.replace(/\*\*(.+?)\*\*/g, '<strong class="text-amber-950">$1</strong>') }}
+                  className="text-sm sm:text-base leading-relaxed mt-3 pl-5 border-l-2 border-amber-200"
+                  dangerouslySetInnerHTML={{ __html: markdownLiteToHtml(hNarrative, "amber") }}
                 />
               </details>
             ) : null}

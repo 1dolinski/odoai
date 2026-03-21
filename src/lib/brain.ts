@@ -397,6 +397,19 @@ export async function maybeUpdateContext(chatId: string) {
         lastSummaryAt: new Date(),
         messagesSinceSummary: 0,
       },
+      $push: {
+        northStarHistory: {
+          $each: [
+            {
+              at: new Date(),
+              leveragePlay: String(chatDoc.leveragePlay || ""),
+              contextSummary: newSummary,
+              priorityNarrative: String(chatDoc.priorityNarrative || ""),
+            },
+          ],
+          $slice: -150,
+        },
+      },
     }
   );
 
