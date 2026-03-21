@@ -209,7 +209,7 @@ interface DashboardData {
     priorityNarrative: string;
     leveragePlay: string;
     lastPrioritizedAt: string | null;
-    northStarHistory?: { at: string; leveragePlay: string; contextSummary: string; priorityNarrative: string }[];
+    northStarHistory?: { id?: string; at: string; leveragePlay: string; contextSummary: string; priorityNarrative: string }[];
     offers: {
       id: string; name: string; description: string; pricePoint: string;
       targetBuyer: string; whyNow: string; deliveryMethod: string;
@@ -474,6 +474,9 @@ export default function DashboardPage() {
       /* ignore */
     }
   }, [houseTimeLens]);
+
+  /** `null` idle, snapshot Mongo id, or `"clear"` while wiping all north star history */
+  const [northStarDeleteBusy, setNorthStarDeleteBusy] = useState<null | string>(null);
 
   const [prioritizing, setPrioritizing] = useState(false);
   const [researchingOffers, setResearchingOffers] = useState(false);
@@ -1044,6 +1047,53 @@ export default function DashboardPage() {
     if (houseTimeLens === "live") return null;
     return pickNorthStarSnapshot(data.chat.northStarHistory || [], houseTimeLens);
   }, [data, houseTimeLens]);
+
+  const northStarHistoryNewestFirst = useMemo(() => {
+    const h = data?.chat?.northStarHistory || [];
+    return [...h].sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
+  }, [data?.chat?.northStarHistory]);
+
+  const removeNorthStarSnapshot = useCallback(
+    async (snapshotId: string) => {
+      if (!snapshotId) return;
+      setNorthStarDeleteBusy(snapshotId);
+      try {
+        const res = await fetch("/api/dashboard", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ token, action: "deleteNorthStarHistory", snapshotId }),
+        });
+        const j = await res.json().catch(() => ({}));
+        if (!res.ok || !j.ok) {
+          console.error("deleteNorthStarHistory:", j);
+          return;
+        }
+        await fetchData();
+      } finally {
+        setNorthStarDeleteBusy(null);
+      }
+    },
+    [token, fetchData]
+  );
+
+  const clearAllNorthStarHistory = useCallback(async () => {
+    setNorthStarDeleteBusy("clear");
+    try {
+      const res = await fetch("/api/dashboard", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token, action: "deleteNorthStarHistory", clearAll: true }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok || !j.ok) {
+        console.error("clearNorthStarHistory:", j);
+        return;
+      }
+      await fetchData();
+    } finally {
+      setNorthStarDeleteBusy(null);
+    }
+  }, [token, fetchData]);
 
   if (error) {
     return (
@@ -5263,10 +5313,25 @@ export default function DashboardPage() {
                   </div>
                 </div>
                 {houseTimeLens !== "live" && houseNorthSnap ? (
-                  <p className="text-[11px] text-amber-200/90 font-medium">
-                    Historical view · snapshot from <span className="text-white">{houseSnapshotLabel}</span>
-                    {houseTimeLens === "h24" ? " (latest on file from ≥24h ago)" : houseTimeLens === "d7" ? " (≥7d ago)" : " (≥30d ago)"}
-                  </p>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-[11px] text-amber-200/90 font-medium min-w-0">
+                      Historical view · snapshot from <span className="text-white">{houseSnapshotLabel}</span>
+                      {houseTimeLens === "h24" ? " (latest on file from ≥24h ago)" : houseTimeLens === "d7" ? " (≥7d ago)" : " (≥30d ago)"}
+                    </p>
+                    {houseNorthSnap.id ? (
+                      <button
+                        type="button"
+                        disabled={northStarDeleteBusy !== null}
+                        onClick={() => {
+                          if (!confirm("Remove this snapshot from north star history?")) return;
+                          void removeNorthStarSnapshot(houseNorthSnap.id!);
+                        }}
+                        className="shrink-0 text-[11px] font-semibold px-2.5 py-1 rounded-lg border border-white/25 text-white/90 hover:bg-white/10 disabled:opacity-50"
+                      >
+                        {northStarDeleteBusy === houseNorthSnap.id ? "Removing…" : "Remove snapshot"}
+                      </button>
+                    ) : null}
+                  </div>
                 ) : null}
                 {housePastMissing ? (
                   <p className="text-[11px] text-amber-200/95 rounded-lg bg-black/30 border border-white/10 px-3 py-2 max-w-2xl">
@@ -5405,6 +5470,67 @@ export default function DashboardPage() {
                   className="text-sm sm:text-base leading-relaxed mt-3 pl-5 border-l-2 border-amber-200"
                   dangerouslySetInnerHTML={{ __html: markdownLiteToHtml(hNarrative, "amber") }}
                 />
+              </details>
+            ) : null}
+            {northStarHistoryNewestFirst.length > 0 ? (
+              <details className="mt-3 rounded-xl border border-slate-200 bg-slate-50/80 px-4 py-3 open:shadow-sm">
+                <summary className="text-xs font-bold uppercase tracking-wider text-slate-500 cursor-pointer list-none flex items-center justify-between gap-2 [&::-webkit-details-marker]:hidden">
+                  <span>
+                    <span className="text-slate-400 mr-1">▸</span> North star snapshot history ({northStarHistoryNewestFirst.length})
+                  </span>
+                </summary>
+                <p className="text-[11px] text-slate-500 mt-2 mb-2">
+                  Saved when you run <strong className="text-slate-700">Analyze Priorities</strong> or chat context syncs. Delete mistakes or clear all — live fields on House are unchanged.
+                </p>
+                <ul className="max-h-56 overflow-y-auto space-y-1.5 border-t border-slate-200/80 pt-2">
+                  {northStarHistoryNewestFirst.map((row) => {
+                    const oneLine = (row.leveragePlay || row.contextSummary || "").split(/\n/)[0]?.trim() || "—";
+                    const short = oneLine.length > 90 ? `${oneLine.slice(0, 90)}…` : oneLine;
+                    return (
+                      <li
+                        key={row.id || row.at}
+                        className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-700 rounded-lg bg-white/80 border border-slate-100 px-2 py-1.5"
+                      >
+                        <span className="min-w-0">
+                          <span className="font-mono text-[10px] text-slate-500 tabular-nums">
+                            {format(parseISO(row.at), "MMM d, yyyy · h:mm a")}
+                          </span>
+                          <span className="block text-slate-600 mt-0.5 line-clamp-2">{short}</span>
+                        </span>
+                        {row.id ? (
+                          <button
+                            type="button"
+                            disabled={northStarDeleteBusy !== null}
+                            onClick={() => {
+                              if (!confirm("Delete this snapshot?")) return;
+                              void removeNorthStarSnapshot(row.id!);
+                            }}
+                            className="shrink-0 text-[10px] font-semibold text-slate-400 hover:text-red-600 disabled:opacity-50"
+                          >
+                            {northStarDeleteBusy === row.id ? "…" : "Delete"}
+                          </button>
+                        ) : (
+                          <span className="shrink-0 text-[10px] text-slate-400" title="Legacy row without id — refresh after deploy">
+                            —
+                          </span>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+                <div className="mt-2 pt-2 border-t border-slate-200/80 flex justify-end">
+                  <button
+                    type="button"
+                    disabled={northStarDeleteBusy !== null}
+                    onClick={() => {
+                      if (!confirm(`Clear all ${northStarHistoryNewestFirst.length} north star snapshots?`)) return;
+                      void clearAllNorthStarHistory();
+                    }}
+                    className="text-[11px] font-semibold text-slate-400 hover:text-red-600 disabled:opacity-50"
+                  >
+                    {northStarDeleteBusy === "clear" ? "Clearing…" : "Clear all history"}
+                  </button>
+                </div>
               </details>
             ) : null}
             </div>

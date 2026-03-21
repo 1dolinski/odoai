@@ -59,10 +59,18 @@ export async function GET(req: NextRequest) {
       leveragePlay: chat.leveragePlay || "",
       lastPrioritizedAt: chat.lastPrioritizedAt || null,
       northStarHistory: (
-        ((chat as { northStarHistory?: { at: Date; leveragePlay?: string; contextSummary?: string; priorityNarrative?: string }[] }).northStarHistory ||
-          []) as { at: Date; leveragePlay?: string; contextSummary?: string; priorityNarrative?: string }[]
+        ((chat as {
+          northStarHistory?: { _id?: unknown; at: Date; leveragePlay?: string; contextSummary?: string; priorityNarrative?: string }[];
+        }).northStarHistory || []) as {
+          _id?: unknown;
+          at: Date;
+          leveragePlay?: string;
+          contextSummary?: string;
+          priorityNarrative?: string;
+        }[]
       )
         .map((h) => ({
+          id: h._id != null ? String(h._id) : "",
           at: typeof h.at === "string" ? h.at : new Date(h.at).toISOString(),
           leveragePlay: String(h.leveragePlay || ""),
           contextSummary: String(h.contextSummary || ""),
@@ -267,6 +275,23 @@ export async function POST(req: NextRequest) {
   if (!chat) return NextResponse.json({ error: "invalid token" }, { status: 404 });
 
   const chatId = chat.telegramChatId;
+
+  if (action === "deleteNorthStarHistory") {
+    const clearAll = body.clearAll === true;
+    const snapshotId = typeof body.snapshotId === "string" ? body.snapshotId.trim() : "";
+    if (clearAll) {
+      await Chat.updateOne({ telegramChatId: chatId }, { $set: { northStarHistory: [] } });
+      return NextResponse.json({ ok: true });
+    }
+    if (!snapshotId || !mongoose.Types.ObjectId.isValid(snapshotId)) {
+      return NextResponse.json({ error: "snapshotId required (Mongo id) or clearAll: true" }, { status: 400 });
+    }
+    await Chat.updateOne(
+      { telegramChatId: chatId },
+      { $pull: { northStarHistory: { _id: new mongoose.Types.ObjectId(snapshotId) } } }
+    );
+    return NextResponse.json({ ok: true });
+  }
 
   if (action === "sync") {
     await Promise.all([

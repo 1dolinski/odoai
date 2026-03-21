@@ -1,4 +1,6 @@
 export type NorthStarSnapshot = {
+  /** Mongo subdocument _id — used to delete from history */
+  id?: string;
   at: string;
   leveragePlay: string;
   contextSummary: string;
@@ -18,7 +20,7 @@ export function pickNorthStarSnapshot(history: NorthStarSnapshot[], lens: Exclud
     const t = new Date(s.at).getTime();
     if (t <= target && t > bestT) {
       bestT = t;
-      best = s;
+      best = { ...s };
     }
   }
   return best;
