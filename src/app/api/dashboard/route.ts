@@ -814,6 +814,46 @@ Rules:
     }
   }
 
+  if (action === "classifyTaskLanes") {
+    const tasks = await Task.find({ telegramChatId: chatId, status: { $in: ["todo", "upcoming"] } }).lean();
+    if (!tasks.length) return NextResponse.json({ ok: true, mapping: {} });
+    const taskList = tasks.map((t) => ({
+      id: String((t as { _id: unknown })._id),
+      title: (t as { title: string }).title,
+      desc: ((t as { description?: string }).description || "").replace(/\s+/g, " ").slice(0, 240),
+    }));
+    const response = await aiChat([
+      {
+        role: "system",
+        content: `You triage each open task into exactly ONE lane (4-bucket execution hygiene):
+
+- **do** — Concrete work someone should do soon: DMs, outreach, comments on accounts, posts, generating images/video, emails, calls, shipping small deliverables, brand pitches, follow-ups. "Meat and potatoes" execution.
+- **delegate** — Should be owned by someone else, another role, vendor, or partner — not the right person here.
+- **automate** — Repeatable or machine-ownable: scripts, bots, scheduled jobs, templates, CI, reminders, bulk generation after setup.
+- **delete** — Low value, duplicate, obsolete, or explicitly should NOT be done — candidate to remove or consciously drop.
+
+Respond ONLY with valid JSON: { "<mongoTaskId>": "do"|"delegate"|"automate"|"delete", ... }
+Every task id from the user list must appear exactly once.`,
+      },
+      {
+        role: "user",
+        content: `Tasks (id: title | optional description):\n${taskList.map((t) => `${t.id}: ${t.title}${t.desc ? ` | ${t.desc}` : ""}`).join("\n")}`,
+      },
+    ], "openai/gpt-4o-mini");
+    try {
+      const cleaned = response.replace(/```json?\n?/g, "").replace(/```/g, "").trim();
+      const mapping = JSON.parse(cleaned) as Record<string, string>;
+      const valid = new Set(["do", "delegate", "automate", "delete"]);
+      const ops = Object.entries(mapping)
+        .filter(([id, lane]) => valid.has(lane) && mongoose.Types.ObjectId.isValid(id))
+        .map(([id, lane]) => Task.updateOne({ _id: id, telegramChatId: chatId }, { $set: { actionLane: lane } }));
+      await Promise.all(ops);
+      return NextResponse.json({ ok: true, mapping });
+    } catch {
+      return NextResponse.json({ ok: false, error: "Failed to parse lane classification" });
+    }
+  }
+
   if (action === "planTaskRollup") {
     const chatDoc = await Chat.findOne({ telegramChatId: chatId }).lean();
     const tasks = await Task.find({ telegramChatId: chatId, status: { $in: ["todo", "upcoming"] } }).lean();
@@ -1129,7 +1169,7 @@ OUTPUT (valid JSON only):
   "narrative": "multi-paragraph priority narrative covering all dimensions below",
   "leveragePlay": "The leverage play paragraph",
   "tasks": [
-    { "id": "taskId", "priorityScore": 85, "momentum": "in-motion", "effort": "low", "impact": "high", "executionType": "human", "costEstimate": "$50/mo or 2hrs/week", "revenueEstimate": "$2k/mo potential", "priorityReason": "..." },
+    { "id": "taskId", "priorityScore": 85, "momentum": "in-motion", "effort": "low", "impact": "high", "executionType": "human", "actionLane": "do", "costEstimate": "$50/mo or 2hrs/week", "revenueEstimate": "$2k/mo potential", "priorityReason": "..." },
     ...
   ]
 }
@@ -1140,6 +1180,7 @@ FOR EACH TASK, assign:
 - effort: "low" | "medium" | "high"
 - impact: "low" | "medium" | "high"
 - executionType: "automated" (runs itself — crons, bots, scripts, CI/CD, scheduled jobs) | "human" (needs someone's time and attention) | "hybrid" (automated process but needs human setup, review, or maintenance)
+- actionLane: exactly one of "do" | "delegate" | "automate" | "delete" — same definitions as triage: **do** = meat-and-potatoes execution you should ship soon; **delegate** = better owner elsewhere; **automate** = machine-repeatable; **delete** = drop or not worth doing. Align with executionType (automated tasks usually "automate" unless a human must do a one-off before scripting).
 - costEstimate: what it costs to execute — be specific. "$0" for free automated tasks, "2hrs/week" for human time, "$200/mo + 1hr setup" for tools/subscriptions. Use real numbers when data is available.
 - revenueEstimate: what value or revenue this could generate — "$0" for pure ops/maintenance, "saves 5hrs/week" for efficiency, "$5k/mo" for revenue-generating tasks. Be honest — not everything makes money, and that's fine. Flag things that are cost centers vs revenue drivers.
 - priorityReason: 1 sentence explaining ranking
@@ -1216,8 +1257,9 @@ CONTEXT SUMMARY:\n${chatDoc?.contextSummary || "none"}` },
       const leveragePlay = result.leveragePlay || "";
       const taskUpdates = result.tasks || [];
 
-      const ops = taskUpdates.map((t: { id: string; priorityScore: number; momentum: string; effort: string; impact: string; executionType?: string; costEstimate?: string; revenueEstimate?: string; priorityReason: string }) =>
-        Task.updateOne({ _id: t.id, telegramChatId: chatId }, { $set: {
+      const lanes = new Set(["do", "delegate", "automate", "delete"]);
+      const ops = taskUpdates.map((t: { id: string; priorityScore: number; momentum: string; effort: string; impact: string; executionType?: string; actionLane?: string; costEstimate?: string; revenueEstimate?: string; priorityReason: string }) => {
+        const set: Record<string, unknown> = {
           priorityScore: t.priorityScore || 0,
           momentum: t.momentum || "new",
           effort: t.effort || "medium",
@@ -1226,8 +1268,10 @@ CONTEXT SUMMARY:\n${chatDoc?.contextSummary || "none"}` },
           costEstimate: t.costEstimate || "",
           revenueEstimate: t.revenueEstimate || "",
           priorityReason: t.priorityReason || "",
-        }})
-      );
+        };
+        if (t.actionLane && lanes.has(t.actionLane)) set.actionLane = t.actionLane;
+        return Task.updateOne({ _id: t.id, telegramChatId: chatId }, { $set: set });
+      });
       await Promise.all([
         ...ops,
         Chat.updateOne({ telegramChatId: chatId }, { $set: { priorityNarrative: narrative, leveragePlay, lastPrioritizedAt: new Date() } }),
@@ -1245,6 +1289,11 @@ CONTEXT SUMMARY:\n${chatDoc?.contextSummary || "none"}` },
     if (body.effort) update.effort = body.effort;
     if (body.impact) update.impact = body.impact;
     if (body.executionType) update.executionType = body.executionType;
+    if (body.actionLane !== undefined) {
+      const al = body.actionLane;
+      if (al === "" || al === null) update.actionLane = "";
+      else if (["do", "delegate", "automate", "delete"].includes(String(al))) update.actionLane = String(al);
+    }
     if (body.costEstimate !== undefined) update.costEstimate = body.costEstimate;
     if (body.revenueEstimate !== undefined) update.revenueEstimate = body.revenueEstimate;
     if (body.blockedBy !== undefined) update.blockedBy = body.blockedBy;

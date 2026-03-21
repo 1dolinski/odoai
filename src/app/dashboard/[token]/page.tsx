@@ -39,7 +39,15 @@ interface Task {
   waitingOn?: string;
   priorityScore?: number;
   priorityReason?: string;
+  /** do | delegate | automate | delete — triage bucket */
+  actionLane?: "" | "do" | "delegate" | "automate" | "delete";
   createdAt: string;
+}
+
+function tasksAssignedToPerson(tasks: Task[], p: Person): Task[] {
+  const k = (p.username || p.firstName || "").toLowerCase();
+  if (!k) return [];
+  return tasks.filter((t) => t.people?.some((tp) => tp.toLowerCase() === k));
 }
 
 function offerRelatedTasks(offer: { id: string; name: string }, tasks: Task[]): Task[] {
@@ -275,6 +283,43 @@ const WATCH_ITEMS: { key: keyof WatchSettings; label: string; desc: string }[] =
   { key: "opportunities", label: "Opportunities", desc: "Spot ways to be better, faster, cheaper" },
 ];
 
+const ACTION_LANES = ["do", "delegate", "automate", "delete"] as const;
+type ActionLaneId = (typeof ACTION_LANES)[number];
+
+const LANE_LABELS: Record<ActionLaneId, { title: string; hint: string }> = {
+  do: { title: "Do", hint: "Ship now — DMs, brands, comments, posts, assets" },
+  delegate: { title: "Delegate", hint: "Better owner elsewhere" },
+  automate: { title: "Automate", hint: "Bot, script, template, schedule" },
+  delete: { title: "Delete", hint: "Drop — low value or duplicate" },
+};
+
+function normalizedActionLane(t: Task): ActionLaneId | "" {
+  const a = t.actionLane;
+  return a && (ACTION_LANES as readonly string[]).includes(a) ? (a as ActionLaneId) : "";
+}
+
+/** Heuristic “meat & potatoes” execution work when AI hasn’t set a lane yet */
+function isMeatPotatoesTask(t: { title: string; description?: string }): boolean {
+  const hay = `${t.title} ${t.description || ""}`.toLowerCase();
+  return /\b(dm|dms|direct message|outreach|email|comment|comments|reply|post|tweet|thread|reel|stor(y|ies)|carousel|image|images|video|shoot|brand|brands|caption|engagement|follow[\s-]?up|send|pitch|slide|deck|landing|generate)\b/.test(hay);
+}
+
+type WorkspaceZoom = "house" | "now" | "tasks" | "people" | "blockers" | "opportunities";
+
+const WORKSPACE_ZOOM_LEVELS: { id: WorkspaceZoom; label: string; hint: string }[] = [
+  { id: "house", label: "House", hint: "Top of the house — initiatives, context, leverage, counts" },
+  { id: "now", label: "Now", hint: "Do right now — meat & potatoes + Do lane" },
+  { id: "tasks", label: "Tasks", hint: "Full board — list, categories, priorities, lanes" },
+  { id: "people", label: "People", hint: "Per-person load and intentions" },
+  { id: "blockers", label: "Blockers", hint: "Stalled, blocked, waiting-on" },
+  { id: "opportunities", label: "Opportunities", hint: "Initiatives, offers, feed signals" },
+];
+
+function parseWorkspaceZoom(raw: string | null): WorkspaceZoom {
+  if (raw === "house" || raw === "now" || raw === "tasks" || raw === "people" || raw === "blockers" || raw === "opportunities") return raw;
+  return "tasks";
+}
+
 function timeAgo(dateStr: string): string {
   const ms = Date.now() - new Date(dateStr).getTime();
   const sec = Math.floor(ms / 1000);
@@ -347,6 +392,7 @@ export default function DashboardPage() {
   });
   const [categoryFilters, setCategoryFilters] = useState<Set<string>>(new Set());
   const [categorizing, setCategorizing] = useState(false);
+  const [laneClassifying, setLaneClassifying] = useState(false);
   const [rollupLoading, setRollupLoading] = useState(false);
   const [rollupApplying, setRollupApplying] = useState(false);
   const [rollupModal, setRollupModal] = useState<{
@@ -356,13 +402,27 @@ export default function DashboardPage() {
   } | null>(null);
   const [taskBoardError, setTaskBoardError] = useState<string | null>(null);
   const [rollupApplyError, setRollupApplyError] = useState<string | null>(null);
-  const [taskViewMode, setTaskViewMode] = useState<"list" | "categories" | "priorities">(() => {
+  const [taskViewMode, setTaskViewMode] = useState<"list" | "categories" | "priorities" | "lanes">(() => {
     if (typeof window !== "undefined") {
       const cached = localStorage.getItem("taskViewMode");
-      if (cached === "list" || cached === "categories" || cached === "priorities") return cached;
+      if (cached === "list" || cached === "categories" || cached === "priorities" || cached === "lanes") return cached;
     }
     return "list";
   });
+  const [tasksSimpleUi, setTasksSimpleUi] = useState(() => {
+    if (typeof window !== "undefined") return localStorage.getItem("tasksSimpleUi") === "1";
+    return false;
+  });
+  const [workspaceZoom, setWorkspaceZoomState] = useState<WorkspaceZoom>(() => {
+    if (typeof window !== "undefined") return parseWorkspaceZoom(localStorage.getItem("workspaceZoom"));
+    return "tasks";
+  });
+  const [workspacePeopleFocus, setWorkspacePeopleFocus] = useState<string | null>(null);
+  const setWorkspaceZoom = (z: WorkspaceZoom) => {
+    setWorkspaceZoomState(z);
+    setWorkspacePeopleFocus(null);
+    if (typeof window !== "undefined") localStorage.setItem("workspaceZoom", z);
+  };
   const [prioritizing, setPrioritizing] = useState(false);
   const [researchingOffers, setResearchingOffers] = useState(false);
   const [offerCopyFlash, setOfferCopyFlash] = useState<string | null>(null);
@@ -968,21 +1028,88 @@ export default function DashboardPage() {
   const statusFiltered = taskFilters.size === 3 ? allTasks : allTasks.filter((t) => taskFilters.has(t.status));
   const filteredTasks = categoryFilters.size === 0 ? statusFiltered : statusFiltered.filter((t) => (t.categories || []).some((c) => categoryFilters.has(c)));
 
-  const taskBoardAiBusy = categorizing || rollupLoading || prioritizing;
+  const taskBoardView = tasksSimpleUi ? "list" : taskViewMode;
+
+  const taskStatusFilterGroup = (
+    <div className="flex gap-1 bg-gray-100 rounded-lg p-1 border border-gray-200/80">
+      {([
+        { key: "todo", label: "Todo", count: allTasks.filter((t) => t.status === "todo").length },
+        { key: "upcoming", label: "Upcoming", count: allTasks.filter((t) => t.status === "upcoming").length },
+        { key: "done", label: "Done", count: allTasks.filter((t) => t.status === "done").length },
+      ] as { key: string; label: string; count: number }[]).map((f) => {
+        const active = taskFilters.has(f.key);
+        return (
+          <button
+            key={f.key}
+            type="button"
+            onClick={() => {
+              setTaskFilters((prev) => {
+                const next = new Set(prev);
+                if (next.has(f.key)) { if (next.size > 1) next.delete(f.key); }
+                else next.add(f.key);
+                localStorage.setItem("taskFilters", JSON.stringify([...next]));
+                return next;
+              });
+            }}
+            className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all border ${
+              active
+                ? "bg-white text-gray-900 shadow-sm border-gray-200"
+                : "text-gray-600 border-transparent hover:bg-gray-50 hover:border-gray-200 hover:text-gray-900"
+            }`}
+          >
+            {f.label} <span className="tabular-nums text-gray-500">({f.count})</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+
+  const taskBoardAiBusy = categorizing || rollupLoading || prioritizing || laneClassifying;
   const taskBoardAiTitle = rollupLoading
     ? "Building roll-up plan"
     : categorizing
       ? "Tagging tasks with AI"
-      : prioritizing
-        ? "Prioritizing the board"
-        : "";
+      : laneClassifying
+        ? "Classifying delegate / delete / automate / do"
+        : prioritizing
+          ? "Prioritizing the board"
+          : "";
   const taskBoardAiHint = rollupLoading
     ? "Grouping related work and safe deferrals. You’ll confirm every merge before anything is deleted."
     : categorizing
       ? "Assigning shared topic tags (max 5 buckets). Almost done…"
-      : prioritizing
-        ? "Ranking by impact, momentum, and switching cost. Almost done…"
-        : "";
+      : laneClassifying
+        ? "Tagging meat-and-potatoes work vs automate, delegate, or drop…"
+        : prioritizing
+          ? "Ranking by impact, momentum, and switching cost. Almost done…"
+          : "";
+
+  const blockerLensTasks = activeTasks.filter((t) => {
+    const m = t.momentum;
+    const by = (t.blockedBy || "").trim();
+    const w = (t.waitingOn || "").trim();
+    return m === "blocked" || m === "stalled" || by.length > 0 || w.length > 0;
+  });
+  const activeInitiativesLens = (data.initiatives || []).filter((i) => i.status === "active");
+  const opportunityOffersLens = (data.chat.offers || [])
+    .filter((o) => o.status !== "rejected")
+    .sort((a, b) => (b.confidenceScore ?? 0) - (a.confidenceScore ?? 0));
+  const opportunityFeedLens = (data.chat.aiFeed || []).filter((item) => {
+    const lump = `${item.type} ${(item.content || "").slice(0, 160)}`.toLowerCase();
+    return /opportun|insight|suggestion|idea|bet|growth|revenue|upsell|expand|leverage|scale/.test(lump);
+  }).slice(0, 18);
+
+  const nowLensTasks = activeTasks
+    .filter((t) => !(t as { _isCheck?: boolean })._isCheck)
+    .filter((t) => {
+      const lane = normalizedActionLane(t);
+      if (lane === "do") return true;
+      if (!lane && isMeatPotatoesTask(t) && t.executionType !== "automated") return true;
+      return false;
+    })
+    .sort((a, b) => (b.priorityScore ?? 0) - (a.priorityScore ?? 0));
+
+  const LANE_SECTION_ORDER = ["do", "delegate", "automate", "delete", "unset"] as const;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 via-white to-gray-100 text-gray-900">
@@ -1104,6 +1231,30 @@ export default function DashboardPage() {
             </a>
           </div>
         </div>
+
+        {/* Workspace zoom — house → tasks → people / blockers / opportunities */}
+        <section className="mb-5 sm:sticky sm:top-0 z-20 -mx-2 px-2 py-2.5 sm:mx-0 sm:px-0 bg-gradient-to-b from-slate-50/95 to-white/80 backdrop-blur-sm border border-slate-200/80 rounded-xl shadow-sm">
+          <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 w-full sm:w-auto sm:mr-1">Zoom</span>
+            {WORKSPACE_ZOOM_LEVELS.map((z) => (
+              <button
+                key={z.id}
+                type="button"
+                onClick={() => setWorkspaceZoom(z.id)}
+                className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold border transition-all ${
+                  workspaceZoom === z.id
+                    ? "bg-slate-900 text-white border-slate-900 shadow-sm"
+                    : "bg-white text-slate-600 border-slate-200 hover:border-slate-400 hover:bg-slate-50"
+                }`}
+              >
+                {z.label}
+              </button>
+            ))}
+          </div>
+          <p className="text-[10px] text-slate-500 mt-1.5 leading-snug">
+            {WORKSPACE_ZOOM_LEVELS.find((x) => x.id === workspaceZoom)?.hint}
+          </p>
+        </section>
 
         {/* Toolbar */}
         <section className="mb-10">
@@ -3568,6 +3719,8 @@ export default function DashboardPage() {
           )}
         </section>
 
+        {workspaceZoom === "tasks" && (
+        <>
         {/* Task Board */}
         <section className="mb-10 relative rounded-xl border border-gray-100/80 bg-white/40 shadow-sm" aria-busy={taskBoardAiBusy}>
           {taskBoardAiBusy && (
@@ -3590,161 +3743,326 @@ export default function DashboardPage() {
           <div className="p-3 sm:p-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-3">
             <h2 className="text-lg font-semibold text-gray-800">Tasks <span className="text-sm font-normal text-gray-400">({filteredTasks.length})</span></h2>
-            <div className="flex flex-wrap items-center gap-2">
-              <div className="flex gap-1 bg-gray-100 rounded-lg p-1 border border-gray-200/80">
-                {([
-                  { key: "todo", label: "Todo", count: allTasks.filter((t) => t.status === "todo").length },
-                  { key: "upcoming", label: "Upcoming", count: allTasks.filter((t) => t.status === "upcoming").length },
-                  { key: "done", label: "Done", count: allTasks.filter((t) => t.status === "done").length },
-                ] as { key: string; label: string; count: number }[]).map((f) => {
-                  const active = taskFilters.has(f.key);
-                  return (
+            {tasksSimpleUi ? (
+              <div className="flex flex-wrap items-center gap-2">
+                {taskStatusFilterGroup}
+                <span className="text-[10px] font-semibold text-emerald-900 bg-emerald-50 border border-emerald-200 rounded-full px-2.5 py-1">Simple</span>
+                <details className="relative group/taskmore">
+                  <summary className="list-none cursor-pointer inline-flex items-center gap-1 min-h-[32px] px-2.5 py-1.5 rounded-lg border border-gray-200 bg-white text-[10px] font-semibold text-gray-700 hover:bg-gray-50 [&::-webkit-details-marker]:hidden">
+                    More <span className="text-gray-400" aria-hidden>▾</span>
+                  </summary>
+                  <div className="absolute right-0 top-full mt-1 w-52 rounded-xl border border-gray-200 bg-white shadow-lg py-1 z-40">
                     <button
-                      key={f.key}
                       type="button"
-                      onClick={() => {
-                        setTaskFilters((prev) => {
-                          const next = new Set(prev);
-                          if (next.has(f.key)) { if (next.size > 1) next.delete(f.key); }
-                          else next.add(f.key);
-                          localStorage.setItem("taskFilters", JSON.stringify([...next]));
-                          return next;
-                        });
-                      }}
-                      className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all border ${
-                        active
-                          ? "bg-white text-gray-900 shadow-sm border-gray-200"
-                          : "text-gray-600 border-transparent hover:bg-gray-50 hover:border-gray-200 hover:text-gray-900"
-                      }`}
-                    >
-                      {f.label} <span className="tabular-nums text-gray-500">({f.count})</span>
-                    </button>
-                  );
-                })}
-              </div>
-              <div className="flex flex-wrap items-center gap-1.5">
-              <button
-                type="button"
-                disabled={categorizing || taskBoardAiBusy}
-                onClick={async () => {
-                  setTaskBoardError(null);
-                  setCategorizing(true);
-                  try {
-                    const res = await fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "categorizeTasks" }) });
-                    const j = await res.json();
-                    if (!j.ok) setTaskBoardError(j.error || "Couldn’t categorize tasks.");
-                    await fetchData();
-                  } catch {
-                    setTaskBoardError("Network error while categorizing.");
-                  }
-                  setCategorizing(false);
-                }}
-                className="inline-flex items-center justify-center gap-1.5 min-h-[32px] px-2.5 py-1.5 rounded-lg border border-gray-200 bg-white text-[10px] font-semibold text-gray-700 hover:bg-gray-50 hover:border-gray-300 disabled:opacity-55 disabled:pointer-events-none transition-colors"
-              >
-                {categorizing ? <Spinner className="h-3.5 w-3.5 text-gray-600" /> : <span className="text-gray-400" aria-hidden>⟳</span>}
-                {categorizing ? "Tagging…" : activeTasks.some((t) => !t.categories || t.categories.length === 0) && allCategories.length > 0 ? "Re-categorize" : "Categorize"}
-              </button>
-              <button
-                type="button"
-                disabled={rollupLoading || taskBoardAiBusy || activeTasks.length < 2}
-                title={activeTasks.length < 2 ? "Need 2+ active tasks" : "AI proposes merges + backlog deferrals — you confirm"}
-                onClick={async () => {
-                  setTaskBoardError(null);
-                  setRollupLoading(true);
-                  try {
-                    const res = await fetch("/api/dashboard", {
-                      method: "POST",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({ token, action: "planTaskRollup" }),
-                    });
-                    const j = await res.json();
-                    if (!j.ok) {
-                      setTaskBoardError(j.error || "Roll-up plan failed.");
-                      setRollupModal(null);
-                    } else {
-                      setRollupApplyError(null);
-                      setRollupModal({
-                        narrative: j.narrative || "",
-                        rollups: j.rollups || [],
-                        deferrals: j.deferrals || [],
-                      });
-                    }
-                  } catch {
-                    setTaskBoardError("Couldn’t reach the server for roll-up.");
-                  }
-                  setRollupLoading(false);
-                }}
-                className="inline-flex items-center justify-center gap-1.5 min-h-[32px] px-2.5 py-1.5 rounded-lg border border-violet-200 bg-violet-50 text-[10px] font-semibold text-violet-800 hover:bg-violet-100 hover:border-violet-300 disabled:opacity-50 disabled:pointer-events-none transition-colors"
-              >
-                {rollupLoading ? <Spinner className="h-3.5 w-3.5 text-violet-700" /> : <span aria-hidden>⟋</span>}
-                {rollupLoading ? "Planning…" : "Roll up & focus"}
-              </button>
-              </div>
-              <div className="flex gap-0.5 bg-gray-100 rounded-lg p-0.5 border border-gray-200/80">
-                <button
-                  type="button"
-                  onClick={() => { setTaskViewMode("list"); localStorage.setItem("taskViewMode", "list"); }}
-                  className={`px-2.5 py-1.5 rounded-md text-[10px] font-semibold transition-all border ${taskViewMode === "list" ? "bg-white text-gray-900 shadow-sm border-gray-200" : "text-gray-600 border-transparent hover:bg-gray-50 hover:text-gray-900"}`}
-                >
-                  List
-                </button>
-                {allCategories.length > 0 && (
-                  <button
-                    type="button"
-                    disabled={categorizing || taskBoardAiBusy}
-                    onClick={async () => {
-                      if (taskViewMode === "categories") { setTaskViewMode("list"); localStorage.setItem("taskViewMode", "list"); return; }
-                      if (allCategories.length === 0) {
+                      disabled={categorizing || taskBoardAiBusy}
+                      className="w-full text-left px-3 py-2 text-[11px] font-medium text-gray-800 hover:bg-gray-50 disabled:opacity-50"
+                      onClick={async () => {
+                        (document.activeElement as HTMLElement | null)?.blur?.();
                         setTaskBoardError(null);
                         setCategorizing(true);
                         try {
                           const res = await fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "categorizeTasks" }) });
                           const j = await res.json();
-                          if (!j.ok) setTaskBoardError(j.error || "Categorize failed.");
+                          if (!j.ok) setTaskBoardError(j.error || "Couldn’t categorize tasks.");
                           await fetchData();
                         } catch {
                           setTaskBoardError("Network error while categorizing.");
                         }
                         setCategorizing(false);
-                      }
-                      setTaskViewMode("categories");
-                      localStorage.setItem("taskViewMode", "categories");
-                    }}
-                    className={`inline-flex items-center justify-center gap-1 px-2.5 py-1.5 rounded-md text-[10px] font-semibold transition-all border ${taskViewMode === "categories" ? "bg-white text-gray-900 shadow-sm border-gray-200" : "text-gray-600 border-transparent hover:bg-gray-50 hover:text-gray-900"} disabled:opacity-50`}
-                  >
-                    {categorizing && taskViewMode !== "categories" ? <Spinner className="h-3 w-3" /> : null}
-                    Categories
-                  </button>
-                )}
+                      }}
+                    >⟳ Tag tasks (AI)</button>
+                    <button
+                      type="button"
+                      disabled={laneClassifying || taskBoardAiBusy || activeTasks.length === 0}
+                      className="w-full text-left px-3 py-2 text-[11px] font-medium text-emerald-800 hover:bg-emerald-50 disabled:opacity-50"
+                      onClick={async () => {
+                        (document.activeElement as HTMLElement | null)?.blur?.();
+                        setTaskBoardError(null);
+                        setLaneClassifying(true);
+                        try {
+                          const res = await fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "classifyTaskLanes" }) });
+                          const j = await res.json();
+                          if (!j.ok) setTaskBoardError(j.error || "Lane classification failed.");
+                          await fetchData();
+                        } catch {
+                          setTaskBoardError("Network error while classifying lanes.");
+                        }
+                        setLaneClassifying(false);
+                      }}
+                    >◎ AI: 4 lanes (delegate / delete / automate / do)</button>
+                    <button
+                      type="button"
+                      className="w-full text-left px-3 py-2 text-[11px] font-medium text-gray-800 hover:bg-gray-50 border-t border-gray-100"
+                      onClick={() => {
+                        (document.activeElement as HTMLElement | null)?.blur?.();
+                        setTasksSimpleUi(false);
+                        localStorage.removeItem("tasksSimpleUi");
+                        setTaskViewMode("lanes");
+                        localStorage.setItem("taskViewMode", "lanes");
+                      }}
+                    >▤ Open lanes view</button>
+                    <button
+                      type="button"
+                      disabled={rollupLoading || taskBoardAiBusy || activeTasks.length < 2}
+                      className="w-full text-left px-3 py-2 text-[11px] font-medium text-violet-800 hover:bg-violet-50 disabled:opacity-50"
+                      onClick={async () => {
+                        (document.activeElement as HTMLElement | null)?.blur?.();
+                        setTaskBoardError(null);
+                        setRollupLoading(true);
+                        try {
+                          const res = await fetch("/api/dashboard", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ token, action: "planTaskRollup" }),
+                          });
+                          const j = await res.json();
+                          if (!j.ok) {
+                            setTaskBoardError(j.error || "Roll-up plan failed.");
+                            setRollupModal(null);
+                          } else {
+                            setRollupApplyError(null);
+                            setRollupModal({
+                              narrative: j.narrative || "",
+                              rollups: j.rollups || [],
+                              deferrals: j.deferrals || [],
+                            });
+                          }
+                        } catch {
+                          setTaskBoardError("Couldn’t reach the server for roll-up.");
+                        }
+                        setRollupLoading(false);
+                      }}
+                    >⟋ Roll up & focus…</button>
+                    <button
+                      type="button"
+                      className="w-full text-left px-3 py-2 text-[11px] font-medium text-gray-800 hover:bg-gray-50 border-t border-gray-100"
+                      onClick={async () => {
+                        (document.activeElement as HTMLElement | null)?.blur?.();
+                        setTasksSimpleUi(false);
+                        localStorage.removeItem("tasksSimpleUi");
+                        setTaskViewMode("priorities");
+                        localStorage.setItem("taskViewMode", "priorities");
+                        const hasPriorities = activeTasks.some((t) => (t.priorityScore ?? 0) > 0);
+                        if (!hasPriorities) {
+                          setTaskBoardError(null);
+                          setPrioritizing(true);
+                          try {
+                            const res = await fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "prioritizeTasks" }) });
+                            const j = await res.json();
+                            if (j.error) setTaskBoardError(String(j.error));
+                            await fetchData();
+                          } catch {
+                            setTaskBoardError("Network error while prioritizing.");
+                          }
+                          setPrioritizing(false);
+                        }
+                      }}
+                    >📊 Open priorities view</button>
+                    {allCategories.length > 0 && (
+                      <button
+                        type="button"
+                        className="w-full text-left px-3 py-2 text-[11px] font-medium text-gray-800 hover:bg-gray-50"
+                        onClick={() => {
+                          setTasksSimpleUi(false);
+                          localStorage.removeItem("tasksSimpleUi");
+                          setTaskViewMode("categories");
+                          localStorage.setItem("taskViewMode", "categories");
+                        }}
+                      >📁 Open categories view</button>
+                    )}
+                  </div>
+                </details>
                 <button
                   type="button"
-                  disabled={prioritizing || taskBoardAiBusy}
-                  onClick={async () => {
-                    if (taskViewMode === "priorities") { setTaskViewMode("list"); localStorage.setItem("taskViewMode", "list"); return; }
-                    const hasPriorities = activeTasks.some((t) => (t.priorityScore ?? 0) > 0);
-                    if (!hasPriorities) {
-                      setTaskBoardError(null);
-                      setPrioritizing(true);
-                      try {
-                        const res = await fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "prioritizeTasks" }) });
-                        const j = await res.json();
-                        if (j.error) setTaskBoardError(String(j.error));
-                        await fetchData();
-                      } catch {
-                        setTaskBoardError("Network error while prioritizing.");
-                      }
-                      setPrioritizing(false);
-                    }
-                    setTaskViewMode("priorities");
-                    localStorage.setItem("taskViewMode", "priorities");
+                  onClick={() => {
+                    setTasksSimpleUi(false);
+                    localStorage.removeItem("tasksSimpleUi");
                   }}
-                  className={`inline-flex items-center justify-center gap-1 px-2.5 py-1.5 rounded-md text-[10px] font-semibold transition-all border ${taskViewMode === "priorities" ? "bg-white text-gray-900 shadow-sm border-gray-200" : "text-gray-600 border-transparent hover:bg-gray-50 hover:text-gray-900"} disabled:opacity-50`}
+                  className="inline-flex items-center justify-center min-h-[32px] px-2.5 py-1.5 rounded-lg border border-indigo-200 bg-indigo-50 text-[10px] font-semibold text-indigo-800 hover:bg-indigo-100"
                 >
-                  {prioritizing ? <Spinner className="h-3 w-3" /> : null}
-                  Priorities
+                  All controls
                 </button>
               </div>
-            </div>
+            ) : (
+              <div className="flex flex-wrap items-center gap-2">
+                {taskStatusFilterGroup}
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <button
+                    type="button"
+                    disabled={categorizing || taskBoardAiBusy}
+                    onClick={async () => {
+                      setTaskBoardError(null);
+                      setCategorizing(true);
+                      try {
+                        const res = await fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "categorizeTasks" }) });
+                        const j = await res.json();
+                        if (!j.ok) setTaskBoardError(j.error || "Couldn’t categorize tasks.");
+                        await fetchData();
+                      } catch {
+                        setTaskBoardError("Network error while categorizing.");
+                      }
+                      setCategorizing(false);
+                    }}
+                    className="inline-flex items-center justify-center gap-1.5 min-h-[32px] px-2.5 py-1.5 rounded-lg border border-gray-200 bg-white text-[10px] font-semibold text-gray-700 hover:bg-gray-50 hover:border-gray-300 disabled:opacity-55 disabled:pointer-events-none transition-colors"
+                  >
+                    {categorizing ? <Spinner className="h-3.5 w-3.5 text-gray-600" /> : <span className="text-gray-400" aria-hidden>⟳</span>}
+                    {categorizing ? "Tagging…" : activeTasks.some((t) => !t.categories || t.categories.length === 0) && allCategories.length > 0 ? "Re-categorize" : "Categorize"}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={laneClassifying || taskBoardAiBusy || activeTasks.length === 0}
+                    onClick={async () => {
+                      setTaskBoardError(null);
+                      setLaneClassifying(true);
+                      try {
+                        const res = await fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "classifyTaskLanes" }) });
+                        const j = await res.json();
+                        if (!j.ok) setTaskBoardError(j.error || "Lane classification failed.");
+                        await fetchData();
+                      } catch {
+                        setTaskBoardError("Network error while classifying lanes.");
+                      }
+                      setLaneClassifying(false);
+                    }}
+                    className="inline-flex items-center justify-center gap-1.5 min-h-[32px] px-2.5 py-1.5 rounded-lg border border-emerald-200 bg-emerald-50 text-[10px] font-semibold text-emerald-900 hover:bg-emerald-100 hover:border-emerald-300 disabled:opacity-55 disabled:pointer-events-none transition-colors"
+                  >
+                    {laneClassifying ? <Spinner className="h-3.5 w-3.5 text-emerald-700" /> : <span className="text-emerald-600" aria-hidden>◎</span>}
+                    {laneClassifying ? "Lanes…" : "4 lanes"}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={rollupLoading || taskBoardAiBusy || activeTasks.length < 2}
+                    title={activeTasks.length < 2 ? "Need 2+ active tasks" : "AI proposes merges + backlog deferrals — you confirm"}
+                    onClick={async () => {
+                      setTaskBoardError(null);
+                      setRollupLoading(true);
+                      try {
+                        const res = await fetch("/api/dashboard", {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ token, action: "planTaskRollup" }),
+                        });
+                        const j = await res.json();
+                        if (!j.ok) {
+                          setTaskBoardError(j.error || "Roll-up plan failed.");
+                          setRollupModal(null);
+                        } else {
+                          setRollupApplyError(null);
+                          setRollupModal({
+                            narrative: j.narrative || "",
+                            rollups: j.rollups || [],
+                            deferrals: j.deferrals || [],
+                          });
+                        }
+                      } catch {
+                        setTaskBoardError("Couldn’t reach the server for roll-up.");
+                      }
+                      setRollupLoading(false);
+                    }}
+                    className="inline-flex items-center justify-center gap-1.5 min-h-[32px] px-2.5 py-1.5 rounded-lg border border-violet-200 bg-violet-50 text-[10px] font-semibold text-violet-800 hover:bg-violet-100 hover:border-violet-300 disabled:opacity-50 disabled:pointer-events-none transition-colors"
+                  >
+                    {rollupLoading ? <Spinner className="h-3.5 w-3.5 text-violet-700" /> : <span aria-hidden>⟋</span>}
+                    {rollupLoading ? "Planning…" : "Roll up & focus"}
+                  </button>
+                </div>
+                <div className="flex gap-0.5 bg-gray-100 rounded-lg p-0.5 border border-gray-200/80">
+                  <button
+                    type="button"
+                    onClick={() => { setTaskViewMode("list"); localStorage.setItem("taskViewMode", "list"); }}
+                    className={`px-2.5 py-1.5 rounded-md text-[10px] font-semibold transition-all border ${taskViewMode === "list" ? "bg-white text-gray-900 shadow-sm border-gray-200" : "text-gray-600 border-transparent hover:bg-gray-50 hover:text-gray-900"}`}
+                  >
+                    List
+                  </button>
+                  {allCategories.length > 0 && (
+                    <button
+                      type="button"
+                      disabled={categorizing || taskBoardAiBusy}
+                      onClick={async () => {
+                        if (taskViewMode === "categories") { setTaskViewMode("list"); localStorage.setItem("taskViewMode", "list"); return; }
+                        if (allCategories.length === 0) {
+                          setTaskBoardError(null);
+                          setCategorizing(true);
+                          try {
+                            const res = await fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "categorizeTasks" }) });
+                            const j = await res.json();
+                            if (!j.ok) setTaskBoardError(j.error || "Categorize failed.");
+                            await fetchData();
+                          } catch {
+                            setTaskBoardError("Network error while categorizing.");
+                          }
+                          setCategorizing(false);
+                        }
+                        setTaskViewMode("categories");
+                        localStorage.setItem("taskViewMode", "categories");
+                      }}
+                      className={`inline-flex items-center justify-center gap-1 px-2.5 py-1.5 rounded-md text-[10px] font-semibold transition-all border ${taskViewMode === "categories" ? "bg-white text-gray-900 shadow-sm border-gray-200" : "text-gray-600 border-transparent hover:bg-gray-50 hover:text-gray-900"} disabled:opacity-50`}
+                    >
+                      {categorizing && taskViewMode !== "categories" ? <Spinner className="h-3 w-3" /> : null}
+                      Categories
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    disabled={prioritizing || taskBoardAiBusy}
+                    onClick={async () => {
+                      if (taskViewMode === "priorities") { setTaskViewMode("list"); localStorage.setItem("taskViewMode", "list"); return; }
+                      const hasPriorities = activeTasks.some((t) => (t.priorityScore ?? 0) > 0);
+                      if (!hasPriorities) {
+                        setTaskBoardError(null);
+                        setPrioritizing(true);
+                        try {
+                          const res = await fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "prioritizeTasks" }) });
+                          const j = await res.json();
+                          if (j.error) setTaskBoardError(String(j.error));
+                          await fetchData();
+                        } catch {
+                          setTaskBoardError("Network error while prioritizing.");
+                        }
+                        setPrioritizing(false);
+                      }
+                      setTaskViewMode("priorities");
+                      localStorage.setItem("taskViewMode", "priorities");
+                    }}
+                    className={`inline-flex items-center justify-center gap-1 px-2.5 py-1.5 rounded-md text-[10px] font-semibold transition-all border ${taskViewMode === "priorities" ? "bg-white text-gray-900 shadow-sm border-gray-200" : "text-gray-600 border-transparent hover:bg-gray-50 hover:text-gray-900"} disabled:opacity-50`}
+                  >
+                    {prioritizing ? <Spinner className="h-3 w-3" /> : null}
+                    Priorities
+                  </button>
+                  <button
+                    type="button"
+                    disabled={laneClassifying || taskBoardAiBusy}
+                    onClick={() => {
+                      if (taskViewMode === "lanes") {
+                        setTaskViewMode("list");
+                        localStorage.setItem("taskViewMode", "list");
+                        return;
+                      }
+                      setTaskViewMode("lanes");
+                      localStorage.setItem("taskViewMode", "lanes");
+                    }}
+                    className={`inline-flex items-center justify-center gap-1 px-2.5 py-1.5 rounded-md text-[10px] font-semibold transition-all border ${taskViewMode === "lanes" ? "bg-white text-gray-900 shadow-sm border-gray-200" : "text-gray-600 border-transparent hover:bg-gray-50 hover:text-gray-900"} disabled:opacity-50`}
+                  >
+                    {laneClassifying ? <Spinner className="h-3 w-3" /> : null}
+                    Lanes
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setTasksSimpleUi(true);
+                      localStorage.setItem("tasksSimpleUi", "1");
+                      setTaskViewMode("list");
+                      localStorage.setItem("taskViewMode", "list");
+                      setCategoryFilters(new Set());
+                      setExpandedCategory(null);
+                    }}
+                    className={`px-2.5 py-1.5 rounded-md text-[10px] font-semibold transition-all border border-transparent text-emerald-800 hover:bg-emerald-50 hover:border-emerald-200`}
+                    title="Compact toolbar + checklist-style steps"
+                  >
+                    Simple
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
 
           {taskBoardError && (
@@ -3756,7 +4074,7 @@ export default function DashboardPage() {
             </div>
           )}
 
-          {taskViewMode === "priorities" ? (
+          {taskBoardView === "priorities" ? (
             <div className="mb-4">
               {data.chat.priorityNarrative && (
                 <div className="bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-200 rounded-xl p-4 mb-4">
@@ -3911,6 +4229,28 @@ export default function DashboardPage() {
                             className={`text-[9px] px-1.5 py-0.5 rounded-full border transition-all ${t.executionType === ex ? execColors[ex] : "text-gray-300 border-gray-200 hover:border-gray-300"}`}
                           >{execIcons[ex]}{ex[0].toUpperCase()}</button>
                         ))}
+                        {!(t as { _isCheck?: boolean })._isCheck && (
+                          <>
+                            <span className="text-gray-200 mx-0.5">|</span>
+                            {ACTION_LANES.map((lane) => (
+                              <button
+                                key={`lane-${lane}`}
+                                type="button"
+                                onClick={() => {
+                                  const next = normalizedActionLane(t) === lane ? "" : lane;
+                                  setData((d) => d ? { ...d, tasks: d.tasks.map((task) => task._id === t._id ? { ...task, actionLane: next || undefined } : task) } : d);
+                                  fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "updateTaskPriority", taskId: t._id, actionLane: next }) });
+                                }}
+                                title={LANE_LABELS[lane].hint}
+                                className={`text-[9px] px-1.5 py-0.5 rounded-full border transition-all ${
+                                  normalizedActionLane(t) === lane ? "bg-emerald-700 text-white border-emerald-700" : "text-gray-300 border-gray-200 hover:border-gray-300"
+                                }`}
+                              >
+                                {lane === "do" ? "Do" : lane === "delegate" ? "Deleg" : lane === "automate" ? "Auto" : "Drop"}
+                              </button>
+                            ))}
+                          </>
+                        )}
                         <span className="text-gray-200 mx-0.5">|</span>
                         {(["low", "medium", "high"] as const).map((imp) => (
                           <button
@@ -3999,7 +4339,7 @@ export default function DashboardPage() {
                 );
               })()}
             </div>
-          ) : taskViewMode === "categories" && allCategories.length > 0 ? (
+          ) : taskBoardView === "categories" && allCategories.length > 0 ? (
             <div>
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 mb-4">
                 {allCategories.map((cat) => {
@@ -4057,9 +4397,35 @@ export default function DashboardPage() {
                 </div>
               )}
             </div>
+          ) : taskBoardView === "lanes" ? (
+            <div className="mb-4 rounded-xl border border-emerald-200 bg-emerald-50/50 px-3 py-2.5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+              <p className="text-xs text-emerald-900 leading-snug">
+                <span className="font-semibold">Lanes</span> — <strong>delegate</strong> · <strong>delete</strong> · <strong>automate</strong> · <strong>do</strong>. Use <strong>Now</strong> zoom for “do this afternoon” execution. Click a pill on any row to reassign.
+              </p>
+              <button
+                type="button"
+                disabled={laneClassifying || taskBoardAiBusy || activeTasks.length === 0}
+                onClick={async () => {
+                  setTaskBoardError(null);
+                  setLaneClassifying(true);
+                  try {
+                    const res = await fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "classifyTaskLanes" }) });
+                    const j = await res.json();
+                    if (!j.ok) setTaskBoardError(j.error || "Lane classification failed.");
+                    await fetchData();
+                  } catch {
+                    setTaskBoardError("Network error while classifying lanes.");
+                  }
+                  setLaneClassifying(false);
+                }}
+                className="shrink-0 text-[11px] font-semibold px-3 py-1.5 rounded-lg bg-emerald-700 text-white hover:bg-emerald-800 disabled:opacity-50"
+              >
+                {laneClassifying ? "Classifying…" : "AI: classify all open"}
+              </button>
+            </div>
           ) : (
             <>
-              {allCategories.length > 0 && (
+              {!tasksSimpleUi && allCategories.length > 0 && (
                 <div className="flex flex-wrap gap-1.5 mb-3">
                   {categoryFilters.size > 0 && (
                     <button
@@ -4090,8 +4456,81 @@ export default function DashboardPage() {
               )}
             </>
           )}
-          {taskViewMode !== "priorities" && <div className="space-y-2">
-            {(taskViewMode === "categories" && expandedCategory
+          {taskBoardView === "lanes" && (
+            <div className="space-y-5">
+              {LANE_SECTION_ORDER.map((laneKey) => {
+                const laneTasks = filteredTasks.filter((t) =>
+                  laneKey === "unset" ? !normalizedActionLane(t) : normalizedActionLane(t) === laneKey
+                );
+                if (laneTasks.length === 0) return null;
+                const title = laneKey === "unset" ? "Unset" : LANE_LABELS[laneKey].title;
+                const hint = laneKey === "unset" ? "Classify with AI or tap a lane" : LANE_LABELS[laneKey].hint;
+                const bar =
+                  laneKey === "do"
+                    ? "border-l-emerald-500"
+                    : laneKey === "delegate"
+                      ? "border-l-blue-500"
+                      : laneKey === "automate"
+                        ? "border-l-cyan-500"
+                        : laneKey === "delete"
+                          ? "border-l-rose-500"
+                          : "border-l-gray-400";
+                return (
+                  <div key={laneKey} className={`rounded-xl border border-gray-200 bg-white shadow-sm overflow-hidden border-l-4 ${bar}`}>
+                    <div className="px-3 py-2 bg-gray-50/80 border-b border-gray-100">
+                      <h3 className="text-sm font-semibold text-gray-900">{title} <span className="text-gray-400 font-normal">({laneTasks.length})</span></h3>
+                      <p className="text-[10px] text-gray-500 mt-0.5">{hint}</p>
+                    </div>
+                    <ul className="divide-y divide-gray-100">
+                      {laneTasks.map((t) => (
+                        <li key={t._id} className="px-3 py-2 flex flex-col sm:flex-row sm:items-center gap-2">
+                          <span className={`text-sm flex-1 min-w-0 ${t.status === "done" ? "line-through text-gray-400" : "font-medium text-gray-900"}`}>{t.title}</span>
+                          <div className="flex flex-wrap items-center gap-1 shrink-0">
+                            {ACTION_LANES.map((lane) => (
+                              <button
+                                key={lane}
+                                type="button"
+                                onClick={() => {
+                                  const next = normalizedActionLane(t) === lane ? "" : lane;
+                                  const id = t._id;
+                                  if (String(id).startsWith("check-")) return;
+                                  setData((d) => d ? { ...d, tasks: d.tasks.map((task) => task._id === id ? { ...task, actionLane: next || undefined } : task) } : d);
+                                  fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "updateTaskPriority", taskId: id, actionLane: next }) });
+                                }}
+                                disabled={String(t._id).startsWith("check-")}
+                                className={`text-[10px] font-semibold px-2 py-0.5 rounded-md border transition-colors disabled:opacity-40 ${
+                                  normalizedActionLane(t) === lane
+                                    ? "bg-gray-900 text-white border-gray-900"
+                                    : "bg-white text-gray-600 border-gray-200 hover:border-gray-400"
+                                }`}
+                              >
+                                {LANE_LABELS[lane].title}
+                              </button>
+                            ))}
+                            <select
+                              value={t.status}
+                              onChange={(e) => changeTaskStatus(t._id, t.title, e.target.value)}
+                              className="text-[10px] px-1.5 py-0.5 rounded border border-gray-200"
+                            >
+                              <option value="todo">todo</option>
+                              <option value="upcoming">upcoming</option>
+                              <option value="done">done</option>
+                            </select>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                );
+              })}
+              {filteredTasks.length > 0 && LANE_SECTION_ORDER.every((lk) => {
+                const c = filteredTasks.filter((t) => (lk === "unset" ? !normalizedActionLane(t) : normalizedActionLane(t) === lk)).length;
+                return c === 0;
+              }) && <p className="text-sm text-gray-500 italic">No tasks match current filters.</p>}
+            </div>
+          )}
+          {taskBoardView !== "priorities" && taskBoardView !== "lanes" && <div className="space-y-2">
+            {(taskBoardView === "categories" && expandedCategory
               ? activeTasks.filter((t) => (t.categories || []).includes(expandedCategory))
               : filteredTasks
             ).map((t) => {
@@ -4108,7 +4547,7 @@ export default function DashboardPage() {
               return (
                 <div
                   key={t._id}
-                  className={`rounded-lg border border-gray-200 border-l-4 p-2.5 sm:p-3 ${statusColors[t.status] || ""}`}
+                  className={`rounded-lg border border-gray-200 border-l-4 ${tasksSimpleUi ? "p-2" : "p-2.5 sm:p-3"} ${statusColors[t.status] || ""}`}
                 >
                   <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
                     <div className="flex-1 min-w-0">
@@ -4172,13 +4611,13 @@ export default function DashboardPage() {
                         {(t as { _isCheck?: boolean })._isCheck && (
                           <span className="inline-flex items-center text-[10px] font-medium bg-amber-50 text-amber-600 border border-amber-200 rounded-full px-1.5 py-0.5 ml-1">🔔 check</span>
                         )}
-                        {t.initiative && (() => { const ini = (data.initiatives || []).find((i) => i.id === t.initiative); return ini ? (<span className="inline-flex items-center text-[10px] font-medium bg-purple-50 text-purple-600 border border-purple-100 rounded-full px-1.5 py-0.5 ml-1">{ini.name}</span>) : null; })()}
+                        {!tasksSimpleUi && t.initiative && (() => { const ini = (data.initiatives || []).find((i) => i.id === t.initiative); return ini ? (<span className="inline-flex items-center text-[10px] font-medium bg-purple-50 text-purple-600 border border-purple-100 rounded-full px-1.5 py-0.5 ml-1">{ini.name}</span>) : null; })()}
                         {t.subtasks && t.subtasks.length > 0 && (
                           <span className={`inline-flex items-center text-[10px] font-medium rounded-full px-1.5 py-0.5 ml-1 border ${t.subtasks.every((s) => s.done) ? "bg-green-50 text-green-600 border-green-100" : "bg-gray-50 text-gray-500 border-gray-200"}`}>
                             {t.subtasks.filter((s) => s.done).length}/{t.subtasks.length} steps
                           </span>
                         )}
-                        {t.categories && t.categories.length > 0 && t.categories.map((cat) => (
+                        {!tasksSimpleUi && t.categories && t.categories.length > 0 && t.categories.map((cat) => (
                           <button
                             key={cat}
                             onClick={(e) => { e.stopPropagation(); setCategoryFilters((prev) => { const next = new Set(prev); if (next.has(cat)) next.delete(cat); else next.add(cat); return next; }); }}
@@ -4186,15 +4625,40 @@ export default function DashboardPage() {
                           >{cat}</button>
                         ))}
                       </div>
-                      <div className="flex items-center gap-2 mt-0.5">
-                        {t.createdByUsername && (
+                      {!tasksSimpleUi && !(t as { _isCheck?: boolean })._isCheck && (
+                        <div className="flex flex-wrap items-center gap-0.5 mt-1.5">
+                          <span className="text-[9px] text-gray-400 font-semibold uppercase tracking-wide mr-0.5">Lane</span>
+                          {ACTION_LANES.map((lane) => (
+                            <button
+                              key={lane}
+                              type="button"
+                              onClick={() => {
+                                const next = normalizedActionLane(t) === lane ? "" : lane;
+                                setData((d) => d ? { ...d, tasks: d.tasks.map((task) => task._id === t._id ? { ...task, actionLane: next || undefined } : task) } : d);
+                                fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "updateTaskPriority", taskId: t._id, actionLane: next }) });
+                              }}
+                              className={`text-[9px] font-semibold px-1.5 py-0.5 rounded-md border transition-colors ${
+                                normalizedActionLane(t) === lane
+                                  ? "bg-emerald-800 text-white border-emerald-800"
+                                  : "bg-white text-gray-500 border-gray-200 hover:border-emerald-400"
+                              }`}
+                            >
+                              {LANE_LABELS[lane].title}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                      <div className={`flex items-center gap-2 flex-wrap ${tasksSimpleUi ? "mt-0" : "mt-0.5"}`}>
+                        {!tasksSimpleUi && t.createdByUsername && (
                           <span className="text-xs text-gray-400">@{t.createdByUsername}</span>
                         )}
-                        <span className="text-xs text-gray-400">
-                          {t.completedAt
-                            ? `done ${formatRelativeTime(t.completedAt)}`
-                            : formatRelativeTime(t.createdAt)}
-                        </span>
+                        {!tasksSimpleUi && (
+                          <span className="text-xs text-gray-400">
+                            {t.completedAt
+                              ? `done ${formatRelativeTime(t.completedAt)}`
+                              : formatRelativeTime(t.createdAt)}
+                          </span>
+                        )}
                         {editingDateId === t._id ? (
                           <input
                             type="date"
@@ -4267,8 +4731,27 @@ export default function DashboardPage() {
                       </select>
                     )}
                   </div>
+                  {tasksSimpleUi && !(t as { _isCheck?: boolean })._isCheck && t.subtasks && t.subtasks.length > 0 && (
+                    <div className="mt-2 pt-2 border-t border-gray-100/90 space-y-1">
+                      {t.subtasks.map((sub) => (
+                        <div key={sub.id} className="flex items-center gap-2 group/sub">
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              setData((d) => d ? { ...d, tasks: d.tasks.map((task) => task._id === t._id ? { ...task, subtasks: (task.subtasks || []).map((s) => s.id === sub.id ? { ...s, done: !s.done } : s) } : task) } : d);
+                              await fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "toggleSubtask", taskId: t._id, subtaskId: sub.id }) });
+                            }}
+                            className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 transition-colors ${sub.done ? "bg-green-500 border-green-500 text-white" : "border-gray-300 hover:border-indigo-400"}`}
+                          >
+                            {sub.done && <svg className="w-2.5 h-2.5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" /></svg>}
+                          </button>
+                          <span className={`text-[11px] flex-1 min-w-0 leading-snug ${sub.done ? "line-through text-gray-400" : "text-gray-700"}`}>{sub.title}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                   {expandedTaskId === t._id && (
-                    <div className="mt-2 ml-0.5 text-xs text-gray-500 bg-white/60 border border-gray-100 rounded-md px-3 py-2 space-y-1.5">
+                    <div className={`mt-2 ml-0.5 text-xs text-gray-500 bg-white/60 border border-gray-100 rounded-md space-y-1.5 ${tasksSimpleUi ? "px-2 py-1.5" : "px-3 py-2"}`}>
                       {t.description && <p>{t.description}</p>}
                       {t.titleHistory && t.titleHistory.length > 0 && (
                         <div className="text-[10px] text-gray-400">
@@ -4353,7 +4836,7 @@ export default function DashboardPage() {
                             <span className="text-[10px] text-gray-300">{t.subtasks.filter((s) => s.done).length}/{t.subtasks.length} done</span>
                           )}
                         </div>
-                        {t.subtasks && t.subtasks.length > 0 && (
+                        {!tasksSimpleUi && t.subtasks && t.subtasks.length > 0 && (
                           <div className="space-y-0.5 mb-1.5">
                             {t.subtasks.map((sub) => (
                               <div key={sub.id} className="flex items-center gap-1.5 group/sub">
@@ -4377,6 +4860,9 @@ export default function DashboardPage() {
                               </div>
                             ))}
                           </div>
+                        )}
+                        {tasksSimpleUi && t.subtasks && t.subtasks.length > 0 && (
+                          <p className="text-[10px] text-gray-400 mb-1.5">Checklist is on the card above. Regenerate or add steps here if needed.</p>
                         )}
                         <div className="flex items-center gap-1">
                           <input
@@ -4439,7 +4925,7 @@ export default function DashboardPage() {
                 </div>
               );
             })}
-            {(taskViewMode === "categories" && expandedCategory ? activeTasks.filter((t) => (t.categories || []).includes(expandedCategory)) : filteredTasks).length === 0 && (
+            {(taskBoardView === "categories" && expandedCategory ? activeTasks.filter((t) => (t.categories || []).includes(expandedCategory)) : filteredTasks).length === 0 && (
               <p className="text-sm text-gray-400 italic py-4 text-center">No items</p>
             )}
           </div>}
@@ -4460,6 +4946,370 @@ export default function DashboardPage() {
           )}
           </div>
         </section>
+        </>
+        )}
+
+        {workspaceZoom === "house" && (
+          <section className="mb-10 rounded-xl border border-slate-200/90 bg-gradient-to-br from-white to-slate-50/80 shadow-sm p-4 sm:p-5">
+            <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 mb-4">
+              <div>
+                <h2 className="text-lg font-semibold text-slate-900">House</h2>
+                <p className="text-xs text-slate-500 mt-0.5">Executive altitude — drill down with Zoom.</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setWorkspaceZoom("tasks")}
+                className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-slate-900 text-white hover:bg-slate-800 shrink-0"
+              >
+                Open task board →
+              </button>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 sm:gap-3 mb-5">
+              {[
+                { label: "Do now", value: nowLensTasks.length, zoom: "now" as const },
+                { label: "Active tasks", value: activeTasks.length, zoom: "tasks" as const },
+                { label: "People", value: data.people.length, zoom: "people" as const },
+                { label: "Initiatives", value: activeInitiativesLens.length, zoom: "opportunities" as const },
+                { label: "Blockers", value: blockerLensTasks.length, zoom: "blockers" as const },
+              ].map((card) => (
+                <button
+                  key={card.label}
+                  type="button"
+                  onClick={() => setWorkspaceZoom(card.zoom)}
+                  className="text-left rounded-xl border border-slate-200 bg-white/90 px-3 py-2.5 hover:border-slate-400 hover:shadow-sm transition-all"
+                >
+                  <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">{card.label}</div>
+                  <div className="text-2xl font-bold text-slate-900 tabular-nums mt-0.5">{card.value}</div>
+                  <div className="text-[10px] text-slate-500 mt-1">
+                    Open {card.zoom === "now" ? "Now" : card.zoom === "tasks" ? "Tasks" : card.zoom === "people" ? "People" : card.zoom === "opportunities" ? "Opportunities" : "Blockers"}
+                  </div>
+                </button>
+              ))}
+            </div>
+            {activeInitiativesLens.length > 0 && (
+              <div className="mb-4">
+                <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-2">Active initiatives</div>
+                <div className="space-y-2">
+                  {activeInitiativesLens.slice(0, 6).map((ini) => (
+                    <div key={ini.id} className="rounded-lg border border-slate-100 bg-white px-3 py-2">
+                      <div className="text-sm font-medium text-slate-900">{ini.name}</div>
+                      {ini.description && <p className="text-xs text-slate-600 mt-1 line-clamp-2">{ini.description}</p>}
+                    </div>
+                  ))}
+                </div>
+                {activeInitiativesLens.length > 6 && (
+                  <button type="button" onClick={() => setWorkspaceZoom("opportunities")} className="text-xs text-indigo-600 font-medium mt-2 hover:underline">
+                    +{activeInitiativesLens.length - 6} more in Opportunities
+                  </button>
+                )}
+              </div>
+            )}
+            {data.chat.contextSummary ? (
+              <div className="mb-4 rounded-lg border border-slate-100 bg-white px-3 py-2">
+                <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">Context</div>
+                <div className="text-sm text-slate-700 whitespace-pre-wrap line-clamp-6">{data.chat.contextSummary}</div>
+              </div>
+            ) : null}
+            {data.chat.priorityNarrative ? (
+              <details className="mb-2 rounded-lg border border-amber-100 bg-amber-50/50 px-3 py-2">
+                <summary className="text-xs font-semibold text-amber-900 cursor-pointer">Priority narrative</summary>
+                <div
+                  className="text-sm text-amber-900 leading-relaxed mt-2 whitespace-pre-line [&>p]:mb-2"
+                  dangerouslySetInnerHTML={{ __html: data.chat.priorityNarrative.replace(/\*\*(.+?)\*\*/g, '<strong class="text-amber-950">$1</strong>') }}
+                />
+              </details>
+            ) : null}
+            {data.chat.leveragePlay ? (
+              <details className="rounded-lg border border-violet-100 bg-violet-50/40 px-3 py-2">
+                <summary className="text-xs font-semibold text-violet-900 cursor-pointer">Leverage play</summary>
+                <div
+                  className="text-sm text-violet-900 leading-relaxed mt-2"
+                  dangerouslySetInnerHTML={{ __html: data.chat.leveragePlay.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>') }}
+                />
+              </details>
+            ) : null}
+          </section>
+        )}
+
+        {workspaceZoom === "now" && (
+          <section className="mb-10 rounded-xl border border-emerald-300/80 bg-gradient-to-br from-emerald-50/90 via-white to-white shadow-sm p-4 sm:p-5">
+            <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 mb-4">
+              <div>
+                <h2 className="text-lg font-semibold text-emerald-950">Right now</h2>
+                <p className="text-xs text-emerald-800/80 mt-0.5 max-w-xl">
+                  Meat-and-potatoes execution — DMs, brands, comments, assets — plus anything already in the <strong>Do</strong> lane. Everything else can be <strong>delegate · delete · automate · do</strong> on the task board.
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2 shrink-0">
+                <button
+                  type="button"
+                  disabled={laneClassifying || taskBoardAiBusy || activeTasks.length === 0}
+                  onClick={async () => {
+                    setTaskBoardError(null);
+                    setLaneClassifying(true);
+                    try {
+                      const res = await fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "classifyTaskLanes" }) });
+                      const j = await res.json();
+                      if (!j.ok) setTaskBoardError(j.error || "Lane classification failed.");
+                      await fetchData();
+                    } catch {
+                      setTaskBoardError("Network error while classifying lanes.");
+                    }
+                    setLaneClassifying(false);
+                  }}
+                  className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-emerald-700 text-white hover:bg-emerald-800 disabled:opacity-50"
+                >
+                  {laneClassifying ? "Classifying…" : "AI: sort into 4 lanes"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTasksSimpleUi(false);
+                    localStorage.removeItem("tasksSimpleUi");
+                    setTaskViewMode("lanes");
+                    localStorage.setItem("taskViewMode", "lanes");
+                    setWorkspaceZoom("tasks");
+                  }}
+                  className="text-xs font-semibold px-3 py-1.5 rounded-lg border border-emerald-300 bg-white text-emerald-900 hover:bg-emerald-50"
+                >
+                  Lanes view →
+                </button>
+              </div>
+            </div>
+            {nowLensTasks.length === 0 ? (
+              <p className="text-sm text-emerald-900/70">
+                No <strong>Do</strong> lane or meat-and-potatoes matches yet. Run <strong>AI: sort into 4 lanes</strong> or switch to Tasks and set lanes on each card.
+              </p>
+            ) : (
+              <ul className="space-y-2 max-h-[min(65vh,30rem)] overflow-y-auto">
+                {nowLensTasks.map((t) => (
+                  <li key={t._id} className="rounded-lg border border-emerald-100 bg-white px-3 py-2 flex flex-col sm:flex-row sm:items-center gap-2">
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-medium text-gray-900">{t.title}</div>
+                      <div className="flex flex-wrap gap-1 mt-1">
+                        {normalizedActionLane(t) === "do" ? (
+                          <span className="text-[10px] font-semibold text-emerald-800 bg-emerald-100 rounded-full px-2 py-0.5">Do lane</span>
+                        ) : (
+                          <span className="text-[10px] font-semibold text-amber-800 bg-amber-50 rounded-full px-2 py-0.5">Heuristic match</span>
+                        )}
+                        {t.priorityScore != null && t.priorityScore > 0 && (
+                          <span className="text-[10px] text-gray-500">score {t.priorityScore}</span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap gap-0.5 shrink-0">
+                      {ACTION_LANES.map((lane) => (
+                        <button
+                          key={lane}
+                          type="button"
+                          onClick={() => {
+                            const next = normalizedActionLane(t) === lane ? "" : lane;
+                            setData((d) => d ? { ...d, tasks: d.tasks.map((task) => task._id === t._id ? { ...task, actionLane: next || undefined } : task) } : d);
+                            fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "updateTaskPriority", taskId: t._id, actionLane: next }) });
+                          }}
+                          className={`text-[10px] font-semibold px-2 py-0.5 rounded-md border transition-colors ${
+                            normalizedActionLane(t) === lane
+                              ? "bg-emerald-800 text-white border-emerald-800"
+                              : "bg-white text-gray-600 border-gray-200 hover:border-emerald-400"
+                          }`}
+                        >
+                          {LANE_LABELS[lane].title}
+                        </button>
+                      ))}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+        )}
+
+        {workspaceZoom === "people" && (
+          <section className="mb-10 rounded-xl border border-indigo-200/80 bg-white shadow-sm p-4 sm:p-5">
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
+              <h2 className="text-lg font-semibold text-gray-900">People</h2>
+              <button type="button" onClick={() => setWorkspaceZoom("tasks")} className="text-xs font-medium text-indigo-600 hover:underline">
+                Full task board →
+              </button>
+            </div>
+            {workspacePeopleFocus ? (
+              (() => {
+                const p = data.people.find((x) => x._id === workspacePeopleFocus);
+                if (!p) {
+                  return <p className="text-sm text-gray-500">Person not found.</p>;
+                }
+                const pt = tasksAssignedToPerson(activeTasks, p);
+                const label = p.username || p.firstName || "Unknown";
+                return (
+                  <div>
+                    <button
+                      type="button"
+                      onClick={() => setWorkspacePeopleFocus(null)}
+                      className="text-xs font-semibold text-indigo-600 mb-3 hover:underline"
+                    >
+                      ← All people
+                    </button>
+                    <div className="flex items-center gap-2 mb-3">
+                      <div className="w-9 h-9 rounded-full bg-indigo-100 flex items-center justify-center text-sm font-bold text-indigo-800">
+                        {label[0]?.toUpperCase() ?? "?"}
+                      </div>
+                      <div>
+                        <div className="font-semibold text-gray-900">{label}</div>
+                        {p.role && p.role !== "null" && <div className="text-xs text-gray-500">{p.role}</div>}
+                      </div>
+                    </div>
+                    {p.intentions && p.intentions.length > 0 && (
+                      <div className="mb-3">
+                        <div className="text-[10px] font-bold uppercase text-gray-400 mb-1">Intentions</div>
+                        <div className="flex flex-wrap gap-1">
+                          {[...new Map(p.intentions.map((i) => [i.toLowerCase(), i])).values()].map((i) => (
+                            <span key={i} className="text-[10px] px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-800 border border-indigo-100">{i}</span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    <div className="text-[10px] font-bold uppercase text-gray-400 mb-1">Active work ({pt.length})</div>
+                    {pt.length === 0 ? (
+                      <p className="text-sm text-gray-500 italic">No open tasks tagged with this person.</p>
+                    ) : (
+                      <ul className="space-y-1.5 max-h-[min(60vh,28rem)] overflow-y-auto">
+                        {pt.map((t) => (
+                          <li key={t._id} className="text-sm border border-gray-100 rounded-lg px-2.5 py-1.5 bg-gray-50/80">
+                            <span className="font-medium text-gray-900">{t.title}</span>
+                            <span className="text-[10px] text-gray-400 ml-2">{t.status}</span>
+                            {t.momentum && (t.momentum === "blocked" || t.momentum === "stalled") && (
+                              <span className="ml-2 text-[10px] text-amber-700 font-medium">· {t.momentum}</span>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                );
+              })()
+            ) : (
+              <div className="grid gap-2 sm:grid-cols-2">
+                {data.people.map((p) => {
+                  const pt = tasksAssignedToPerson(activeTasks, p);
+                  const label = p.username || p.firstName || "Unknown";
+                  return (
+                    <button
+                      key={p._id}
+                      type="button"
+                      onClick={() => setWorkspacePeopleFocus(p._id)}
+                      className="text-left rounded-xl border border-gray-200 bg-gray-50/50 px-3 py-2.5 hover:border-indigo-300 hover:bg-white transition-all"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-medium text-sm text-gray-900 truncate">{label}</span>
+                        <span className="text-xs tabular-nums text-gray-500 shrink-0">{pt.length} open</span>
+                      </div>
+                      {p.personType === "contact" && <span className="text-[10px] text-gray-400">Contact</span>}
+                      {pt.slice(0, 2).map((t) => (
+                        <div key={t._id} className="text-[11px] text-gray-600 truncate mt-1">· {t.title}</div>
+                      ))}
+                      {pt.length > 2 && <div className="text-[10px] text-indigo-600 mt-1">+{pt.length - 2} more →</div>}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+        )}
+
+        {workspaceZoom === "blockers" && (
+          <section className="mb-10 rounded-xl border border-amber-200/90 bg-amber-50/20 shadow-sm p-4 sm:p-5">
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
+              <h2 className="text-lg font-semibold text-gray-900">Blockers</h2>
+              <button type="button" onClick={() => setWorkspaceZoom("tasks")} className="text-xs font-medium text-amber-800 hover:underline">
+                Edit on task board →
+              </button>
+            </div>
+            {blockerLensTasks.length === 0 ? (
+              <p className="text-sm text-gray-600">
+                Nothing flagged as blocked or stalled, and no <span className="font-medium">blocked by</span> / <span className="font-medium">waiting on</span> text. Use Tasks view to set momentum or notes.
+              </p>
+            ) : (
+              <ul className="space-y-2 max-h-[min(70vh,32rem)] overflow-y-auto">
+                {blockerLensTasks.map((t) => (
+                  <li key={t._id} className="rounded-lg border border-amber-100 bg-white px-3 py-2">
+                    <div className="font-medium text-gray-900 text-sm">{t.title}</div>
+                    <div className="flex flex-wrap gap-2 mt-1 text-[10px] text-gray-600">
+                      {t.momentum && <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 font-medium">{t.momentum}</span>}
+                      {t.status && <span className="text-gray-500">{t.status}</span>}
+                    </div>
+                    {(t.blockedBy || "").trim() ? (
+                      <p className="text-xs text-gray-700 mt-1.5"><span className="font-semibold text-gray-500">Blocked by:</span> {t.blockedBy}</p>
+                    ) : null}
+                    {(t.waitingOn || "").trim() ? (
+                      <p className="text-xs text-gray-700 mt-1"><span className="font-semibold text-gray-500">Waiting on:</span> {t.waitingOn}</p>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+        )}
+
+        {workspaceZoom === "opportunities" && (
+          <section className="mb-10 rounded-xl border border-emerald-200/80 bg-gradient-to-br from-emerald-50/40 to-white shadow-sm p-4 sm:p-5">
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
+              <h2 className="text-lg font-semibold text-gray-900">Opportunities</h2>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowFeed(false); setShowPeople(false); setShowInitiatives(false); setShowContext(false); setShowDump(false); setShowGuidance(false); setShowActions(false); setShowWatch(false); setShowWallet(false); setShowAbilities(false); setShowDataSources(false); setShowSocial(false); setShowAiQuestions(false); setShowMenu(false); setShowWorkMode(false);
+                  setShowOffers(true);
+                  setWorkspaceZoom("tasks");
+                }}
+                className="text-xs font-medium text-emerald-800 hover:underline"
+              >
+                Open offer research →
+              </button>
+            </div>
+            {activeInitiativesLens.length > 0 && (
+              <div className="mb-5">
+                <div className="text-[10px] font-bold uppercase tracking-wider text-gray-400 mb-2">Initiatives</div>
+                <div className="space-y-2">
+                  {activeInitiativesLens.map((ini) => (
+                    <div key={ini.id} className="rounded-lg border border-emerald-100 bg-white px-3 py-2">
+                      <div className="text-sm font-semibold text-gray-900">{ini.name}</div>
+                      {ini.description && <p className="text-xs text-gray-600 mt-1">{ini.description}</p>}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {opportunityOffersLens.length > 0 && (
+              <div className="mb-5">
+                <div className="text-[10px] font-bold uppercase tracking-wider text-gray-400 mb-2">Offers (by confidence)</div>
+                <ul className="space-y-2">
+                  {opportunityOffersLens.slice(0, 8).map((o) => (
+                    <li key={o.id} className="rounded-lg border border-gray-100 bg-white px-3 py-2 text-sm">
+                      <div className="font-medium text-gray-900">{o.name}</div>
+                      <div className="text-[10px] text-gray-500 mt-0.5">{o.status} · score {o.confidenceScore ?? "—"}</div>
+                      {o.whyNow && <p className="text-xs text-gray-600 mt-1 line-clamp-2">{o.whyNow}</p>}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {opportunityFeedLens.length > 0 ? (
+              <div>
+                <div className="text-[10px] font-bold uppercase tracking-wider text-gray-400 mb-2">AI feed (signals)</div>
+                <ul className="space-y-2 max-h-[min(50vh,24rem)] overflow-y-auto">
+                  {opportunityFeedLens.map((item) => (
+                    <li key={item._id} className="rounded-lg border border-gray-100 bg-white px-3 py-2 text-xs">
+                      <span className="text-[10px] font-semibold text-emerald-700 uppercase">{item.type}</span>
+                      <p className="text-gray-800 mt-1 whitespace-pre-wrap line-clamp-4">{item.content}</p>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : (
+              <p className="text-sm text-gray-500">No feed items matched opportunity-style heuristics. Enable AI feed or add initiatives/offers.</p>
+            )}
+          </section>
+        )}
 
         {/* Checks are now merged into the task board above */}
 
@@ -4623,6 +5473,12 @@ export default function DashboardPage() {
                       } else {
                         setRollupModal(null);
                         setRollupApplyError(null);
+                        setTasksSimpleUi(true);
+                        localStorage.setItem("tasksSimpleUi", "1");
+                        setTaskViewMode("list");
+                        localStorage.setItem("taskViewMode", "list");
+                        setCategoryFilters(new Set());
+                        setExpandedCategory(null);
                         await fetchData();
                       }
                     } catch {

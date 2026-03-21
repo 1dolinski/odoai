@@ -5,6 +5,8 @@ export type Momentum = "new" | "in-motion" | "stalled" | "blocked";
 export type EffortLevel = "low" | "medium" | "high";
 export type ImpactLevel = "low" | "medium" | "high";
 export type ExecutionType = "automated" | "human" | "hybrid";
+/** delegate | delete | automate | do — how the task should be handled (4-bucket triage). */
+export type ActionLane = "do" | "delegate" | "automate" | "delete";
 
 export interface ISubtask {
   id: string;
@@ -36,6 +38,8 @@ export interface ITask extends Document {
   effort: EffortLevel;
   impact: ImpactLevel;
   executionType: ExecutionType;
+  /** Empty string = not classified yet */
+  actionLane: ActionLane | "";
   costEstimate: string;
   revenueEstimate: string;
   blockedBy: string;
@@ -65,6 +69,7 @@ const TaskSchema = new Schema<ITask>(
     effort: { type: String, enum: ["low", "medium", "high"], default: "medium" },
     impact: { type: String, enum: ["low", "medium", "high"], default: "medium" },
     executionType: { type: String, enum: ["automated", "human", "hybrid"], default: "human" },
+    actionLane: { type: String, enum: ["", "do", "delegate", "automate", "delete"], default: "" },
     costEstimate: { type: String, default: "" },
     revenueEstimate: { type: String, default: "" },
     blockedBy: { type: String, default: "" },
