@@ -62,6 +62,26 @@ function truncateTaskTitle(s: string, max: number) {
   return t.length <= max ? t : `${t.slice(0, max - 1)}…`;
 }
 
+function Spinner({ className = "h-4 w-4", label }: { className?: string; label?: string }) {
+  return (
+    <svg
+      className={`animate-spin ${className}`}
+      viewBox="0 0 24 24"
+      fill="none"
+      aria-hidden={label ? undefined : true}
+      aria-label={label || "Loading"}
+      role={label ? "status" : undefined}
+    >
+      <circle className="opacity-20" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+      <path
+        className="opacity-90"
+        fill="currentColor"
+        d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+      />
+    </svg>
+  );
+}
+
 interface Initiative {
   id: string;
   name: string;
@@ -334,6 +354,8 @@ export default function DashboardPage() {
     rollups: { mergeTaskIds: string[]; parentTitle: string; parentDescription?: string; subtasks: { title: string }[]; rationale: string }[];
     deferrals: { taskId: string; reason: string }[];
   } | null>(null);
+  const [taskBoardError, setTaskBoardError] = useState<string | null>(null);
+  const [rollupApplyError, setRollupApplyError] = useState<string | null>(null);
   const [taskViewMode, setTaskViewMode] = useState<"list" | "categories" | "priorities">(() => {
     if (typeof window !== "undefined") {
       const cached = localStorage.getItem("taskViewMode");
@@ -915,8 +937,12 @@ export default function DashboardPage() {
 
   if (!data) {
     return (
-      <div className="min-h-screen bg-gray-50 text-gray-900 flex items-center justify-center">
-        <div className="animate-pulse text-gray-400">Loading dashboard...</div>
+      <div className="min-h-screen bg-gray-50 text-gray-900 flex flex-col items-center justify-center gap-4 px-4">
+        <Spinner className="h-10 w-10 text-indigo-600" label="Loading dashboard" />
+        <div className="text-center">
+          <p className="text-sm font-medium text-gray-800">Loading dashboard</p>
+          <p className="text-xs text-gray-500 mt-1">Fetching tasks, people, and context…</p>
+        </div>
       </div>
     );
   }
@@ -941,6 +967,22 @@ export default function DashboardPage() {
   const allCategories = [...new Set(activeTasks.flatMap((t) => t.categories || []))].sort().slice(0, 5);
   const statusFiltered = taskFilters.size === 3 ? allTasks : allTasks.filter((t) => taskFilters.has(t.status));
   const filteredTasks = categoryFilters.size === 0 ? statusFiltered : statusFiltered.filter((t) => (t.categories || []).some((c) => categoryFilters.has(c)));
+
+  const taskBoardAiBusy = categorizing || rollupLoading || prioritizing;
+  const taskBoardAiTitle = rollupLoading
+    ? "Building roll-up plan"
+    : categorizing
+      ? "Tagging tasks with AI"
+      : prioritizing
+        ? "Prioritizing the board"
+        : "";
+  const taskBoardAiHint = rollupLoading
+    ? "Grouping related work and safe deferrals. You’ll confirm every merge before anything is deleted."
+    : categorizing
+      ? "Assigning shared topic tags (max 5 buckets). Almost done…"
+      : prioritizing
+        ? "Ranking by impact, momentum, and switching cost. Almost done…"
+        : "";
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 via-white to-gray-100 text-gray-900">
@@ -3527,11 +3569,29 @@ export default function DashboardPage() {
         </section>
 
         {/* Task Board */}
-        <section className="mb-10">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
+        <section className="mb-10 relative rounded-xl border border-gray-100/80 bg-white/40 shadow-sm" aria-busy={taskBoardAiBusy}>
+          {taskBoardAiBusy && (
+            <div
+              className="absolute inset-0 z-20 flex items-center justify-center rounded-xl bg-white/85 backdrop-blur-sm px-4 py-16"
+              role="status"
+              aria-live="polite"
+              aria-label={taskBoardAiTitle}
+            >
+              <div className="flex flex-col items-center max-w-sm text-center rounded-2xl border border-gray-200 bg-white px-8 py-7 shadow-lg">
+                <Spinner className="h-10 w-10 text-violet-600 mb-1" label={taskBoardAiTitle} />
+                <p className="text-sm font-semibold text-gray-900 mt-3">{taskBoardAiTitle}</p>
+                <p className="text-xs text-gray-500 mt-2 leading-relaxed">{taskBoardAiHint}</p>
+                <div className="mt-5 h-2 w-full max-w-[220px] rounded-full bg-violet-100 overflow-hidden">
+                  <div className="h-full w-full rounded-full bg-violet-500/80 animate-pulse" />
+                </div>
+              </div>
+            </div>
+          )}
+          <div className="p-3 sm:p-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-3">
             <h2 className="text-lg font-semibold text-gray-800">Tasks <span className="text-sm font-normal text-gray-400">({filteredTasks.length})</span></h2>
             <div className="flex flex-wrap items-center gap-2">
-              <div className="flex gap-1 bg-gray-100 rounded-lg p-1">
+              <div className="flex gap-1 bg-gray-100 rounded-lg p-1 border border-gray-200/80">
                 {([
                   { key: "todo", label: "Todo", count: allTasks.filter((t) => t.status === "todo").length },
                   { key: "upcoming", label: "Upcoming", count: allTasks.filter((t) => t.status === "upcoming").length },
@@ -3541,6 +3601,7 @@ export default function DashboardPage() {
                   return (
                     <button
                       key={f.key}
+                      type="button"
                       onClick={() => {
                         setTaskFilters((prev) => {
                           const next = new Set(prev);
@@ -3550,32 +3611,45 @@ export default function DashboardPage() {
                           return next;
                         });
                       }}
-                      className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
+                      className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all border ${
                         active
-                          ? "bg-white text-gray-900 shadow-sm"
-                          : "text-gray-500 hover:text-gray-700"
+                          ? "bg-white text-gray-900 shadow-sm border-gray-200"
+                          : "text-gray-600 border-transparent hover:bg-gray-50 hover:border-gray-200 hover:text-gray-900"
                       }`}
                     >
-                      {f.label} ({f.count})
+                      {f.label} <span className="tabular-nums text-gray-500">({f.count})</span>
                     </button>
                   );
                 })}
               </div>
-              <button
-                disabled={categorizing}
-                onClick={async () => {
-                  setCategorizing(true);
-                  await fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "categorizeTasks" }) });
-                  await fetchData();
-                  setCategorizing(false);
-                }}
-                className="text-[10px] text-gray-400 hover:text-gray-600 font-medium transition-colors disabled:opacity-50"
-              >{categorizing ? "..." : activeTasks.some((t) => !t.categories || t.categories.length === 0) && allCategories.length > 0 ? "⟳ Re-categorize" : "⟳ Categorize"}</button>
+              <div className="flex flex-wrap items-center gap-1.5">
               <button
                 type="button"
-                disabled={rollupLoading || activeTasks.length < 2}
+                disabled={categorizing || taskBoardAiBusy}
+                onClick={async () => {
+                  setTaskBoardError(null);
+                  setCategorizing(true);
+                  try {
+                    const res = await fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "categorizeTasks" }) });
+                    const j = await res.json();
+                    if (!j.ok) setTaskBoardError(j.error || "Couldn’t categorize tasks.");
+                    await fetchData();
+                  } catch {
+                    setTaskBoardError("Network error while categorizing.");
+                  }
+                  setCategorizing(false);
+                }}
+                className="inline-flex items-center justify-center gap-1.5 min-h-[32px] px-2.5 py-1.5 rounded-lg border border-gray-200 bg-white text-[10px] font-semibold text-gray-700 hover:bg-gray-50 hover:border-gray-300 disabled:opacity-55 disabled:pointer-events-none transition-colors"
+              >
+                {categorizing ? <Spinner className="h-3.5 w-3.5 text-gray-600" /> : <span className="text-gray-400" aria-hidden>⟳</span>}
+                {categorizing ? "Tagging…" : activeTasks.some((t) => !t.categories || t.categories.length === 0) && allCategories.length > 0 ? "Re-categorize" : "Categorize"}
+              </button>
+              <button
+                type="button"
+                disabled={rollupLoading || taskBoardAiBusy || activeTasks.length < 2}
                 title={activeTasks.length < 2 ? "Need 2+ active tasks" : "AI proposes merges + backlog deferrals — you confirm"}
                 onClick={async () => {
+                  setTaskBoardError(null);
                   setRollupLoading(true);
                   try {
                     const res = await fetch("/api/dashboard", {
@@ -3585,9 +3659,10 @@ export default function DashboardPage() {
                     });
                     const j = await res.json();
                     if (!j.ok) {
-                      alert(j.error || "Roll-up plan failed");
+                      setTaskBoardError(j.error || "Roll-up plan failed.");
                       setRollupModal(null);
                     } else {
+                      setRollupApplyError(null);
                       setRollupModal({
                         narrative: j.narrative || "",
                         rollups: j.rollups || [],
@@ -3595,52 +3670,91 @@ export default function DashboardPage() {
                       });
                     }
                   } catch {
-                    alert("Roll-up request failed");
+                    setTaskBoardError("Couldn’t reach the server for roll-up.");
                   }
                   setRollupLoading(false);
                 }}
-                className="text-[10px] text-violet-600 hover:text-violet-800 font-medium transition-colors disabled:opacity-40 disabled:hover:text-violet-600"
+                className="inline-flex items-center justify-center gap-1.5 min-h-[32px] px-2.5 py-1.5 rounded-lg border border-violet-200 bg-violet-50 text-[10px] font-semibold text-violet-800 hover:bg-violet-100 hover:border-violet-300 disabled:opacity-50 disabled:pointer-events-none transition-colors"
               >
-                {rollupLoading ? "…" : "⟋ Roll up & focus"}
+                {rollupLoading ? <Spinner className="h-3.5 w-3.5 text-violet-700" /> : <span aria-hidden>⟋</span>}
+                {rollupLoading ? "Planning…" : "Roll up & focus"}
               </button>
-              <div className="flex gap-0.5 bg-gray-100 rounded-md p-0.5">
-                <button onClick={() => { setTaskViewMode("list"); localStorage.setItem("taskViewMode", "list"); }} className={`px-2 py-1 rounded text-[10px] font-medium transition-all ${taskViewMode === "list" ? "bg-white text-gray-900 shadow-sm" : "text-gray-500"}`}>List</button>
+              </div>
+              <div className="flex gap-0.5 bg-gray-100 rounded-lg p-0.5 border border-gray-200/80">
+                <button
+                  type="button"
+                  onClick={() => { setTaskViewMode("list"); localStorage.setItem("taskViewMode", "list"); }}
+                  className={`px-2.5 py-1.5 rounded-md text-[10px] font-semibold transition-all border ${taskViewMode === "list" ? "bg-white text-gray-900 shadow-sm border-gray-200" : "text-gray-600 border-transparent hover:bg-gray-50 hover:text-gray-900"}`}
+                >
+                  List
+                </button>
                 {allCategories.length > 0 && (
                   <button
-                    disabled={categorizing}
+                    type="button"
+                    disabled={categorizing || taskBoardAiBusy}
                     onClick={async () => {
                       if (taskViewMode === "categories") { setTaskViewMode("list"); localStorage.setItem("taskViewMode", "list"); return; }
                       if (allCategories.length === 0) {
+                        setTaskBoardError(null);
                         setCategorizing(true);
-                        await fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "categorizeTasks" }) });
-                        await fetchData();
+                        try {
+                          const res = await fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "categorizeTasks" }) });
+                          const j = await res.json();
+                          if (!j.ok) setTaskBoardError(j.error || "Categorize failed.");
+                          await fetchData();
+                        } catch {
+                          setTaskBoardError("Network error while categorizing.");
+                        }
                         setCategorizing(false);
                       }
                       setTaskViewMode("categories");
                       localStorage.setItem("taskViewMode", "categories");
                     }}
-                    className={`px-2 py-1 rounded text-[10px] font-medium transition-all ${taskViewMode === "categories" ? "bg-white text-gray-900 shadow-sm" : "text-gray-500"} disabled:opacity-50`}
-                  >{categorizing ? "..." : "Categories"}</button>
+                    className={`inline-flex items-center justify-center gap-1 px-2.5 py-1.5 rounded-md text-[10px] font-semibold transition-all border ${taskViewMode === "categories" ? "bg-white text-gray-900 shadow-sm border-gray-200" : "text-gray-600 border-transparent hover:bg-gray-50 hover:text-gray-900"} disabled:opacity-50`}
+                  >
+                    {categorizing && taskViewMode !== "categories" ? <Spinner className="h-3 w-3" /> : null}
+                    Categories
+                  </button>
                 )}
                 <button
-                  disabled={prioritizing}
+                  type="button"
+                  disabled={prioritizing || taskBoardAiBusy}
                   onClick={async () => {
                     if (taskViewMode === "priorities") { setTaskViewMode("list"); localStorage.setItem("taskViewMode", "list"); return; }
                     const hasPriorities = activeTasks.some((t) => (t.priorityScore ?? 0) > 0);
                     if (!hasPriorities) {
+                      setTaskBoardError(null);
                       setPrioritizing(true);
-                      await fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "prioritizeTasks" }) });
-                      await fetchData();
+                      try {
+                        const res = await fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, action: "prioritizeTasks" }) });
+                        const j = await res.json();
+                        if (j.error) setTaskBoardError(String(j.error));
+                        await fetchData();
+                      } catch {
+                        setTaskBoardError("Network error while prioritizing.");
+                      }
                       setPrioritizing(false);
                     }
                     setTaskViewMode("priorities");
                     localStorage.setItem("taskViewMode", "priorities");
                   }}
-                  className={`px-2 py-1 rounded text-[10px] font-medium transition-all ${taskViewMode === "priorities" ? "bg-white text-gray-900 shadow-sm" : "text-gray-500"} disabled:opacity-50`}
-                >{prioritizing ? "..." : "Priorities"}</button>
+                  className={`inline-flex items-center justify-center gap-1 px-2.5 py-1.5 rounded-md text-[10px] font-semibold transition-all border ${taskViewMode === "priorities" ? "bg-white text-gray-900 shadow-sm border-gray-200" : "text-gray-600 border-transparent hover:bg-gray-50 hover:text-gray-900"} disabled:opacity-50`}
+                >
+                  {prioritizing ? <Spinner className="h-3 w-3" /> : null}
+                  Priorities
+                </button>
               </div>
             </div>
           </div>
+
+          {taskBoardError && (
+            <div className="mb-3 flex items-start justify-between gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-900" role="alert">
+              <span className="leading-snug pt-0.5">{taskBoardError}</span>
+              <button type="button" onClick={() => setTaskBoardError(null)} className="shrink-0 font-semibold text-red-700 hover:text-red-900">
+                Dismiss
+              </button>
+            </div>
+          )}
 
           {taskViewMode === "priorities" ? (
             <div className="mb-4">
@@ -4344,6 +4458,7 @@ export default function DashboardPage() {
               )}
             </div>
           )}
+          </div>
         </section>
 
         {/* Checks are now merged into the task board above */}
@@ -4405,7 +4520,7 @@ export default function DashboardPage() {
             role="dialog"
             aria-modal="true"
             aria-labelledby="rollup-modal-title"
-            onClick={() => !rollupApplying && setRollupModal(null)}
+            onClick={() => { if (!rollupApplying) { setRollupModal(null); setRollupApplyError(null); } }}
           >
             <div
               className="bg-white rounded-xl shadow-2xl w-full max-w-lg max-h-[88vh] overflow-hidden flex flex-col border border-gray-200"
@@ -4419,7 +4534,7 @@ export default function DashboardPage() {
                 <button
                   type="button"
                   disabled={rollupApplying}
-                  onClick={() => setRollupModal(null)}
+                  onClick={() => { setRollupModal(null); setRollupApplyError(null); }}
                   className="text-gray-400 hover:text-gray-700 text-lg leading-none px-1"
                 >
                   ×
@@ -4470,11 +4585,16 @@ export default function DashboardPage() {
                   </div>
                 )}
               </div>
+              {rollupApplyError && (
+                <div className="px-4 py-2.5 border-t border-red-100 bg-red-50 text-xs text-red-900 leading-snug" role="alert">
+                  {rollupApplyError}
+                </div>
+              )}
               <div className="px-4 py-3 border-t border-gray-100 flex flex-wrap justify-end gap-2 bg-gray-50/90">
                 <button
                   type="button"
                   disabled={rollupApplying}
-                  onClick={() => setRollupModal(null)}
+                  onClick={() => { setRollupModal(null); setRollupApplyError(null); }}
                   className="text-xs font-medium px-3 py-1.5 rounded-lg border border-gray-200 text-gray-700 hover:bg-white"
                 >
                   Cancel
@@ -4484,6 +4604,7 @@ export default function DashboardPage() {
                   disabled={rollupApplying || (rollupModal.rollups.length === 0 && rollupModal.deferrals.length === 0)}
                   onClick={async () => {
                     if (!rollupModal) return;
+                    setRollupApplyError(null);
                     setRollupApplying(true);
                     try {
                       const res = await fetch("/api/dashboard", {
@@ -4498,18 +4619,20 @@ export default function DashboardPage() {
                       });
                       const j = await res.json();
                       if (!j.ok) {
-                        alert(j.error || "Apply failed");
+                        setRollupApplyError(j.error || "Couldn’t apply this plan.");
                       } else {
                         setRollupModal(null);
+                        setRollupApplyError(null);
                         await fetchData();
                       }
                     } catch {
-                      alert("Apply failed");
+                      setRollupApplyError("Network error while applying.");
                     }
                     setRollupApplying(false);
                   }}
-                  className="text-xs font-medium px-3 py-1.5 rounded-lg bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50"
+                  className="inline-flex items-center justify-center gap-2 text-xs font-medium px-3 py-1.5 rounded-lg bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50 min-w-[7rem]"
                 >
+                  {rollupApplying ? <Spinner className="h-3.5 w-3.5 text-white" /> : null}
                   {rollupApplying ? "Applying…" : "Apply plan"}
                 </button>
               </div>
