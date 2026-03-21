@@ -16,6 +16,7 @@ import { getChatAdmins, sendMessage } from "@/lib/telegram";
 import { getAvailableSources, fetchEnabledEndpoints, formatDataForAI, persistSnapshots, getSnapshotHistory, DATA_SOURCE_REGISTRY, fetchEndpoint } from "@/lib/dataSources";
 import { getAllPlatforms, getEndpointsForPlatform, querySocial, pollJobResult, isConfigured as isSocialConfigured, type Platform } from "@/lib/social";
 import DataSnapshot from "@/models/DataSnapshot";
+import mongoose from "mongoose";
 
 export async function GET(req: NextRequest) {
   await connectDB();
@@ -811,6 +812,222 @@ Rules:
     } catch {
       return NextResponse.json({ ok: false, error: "Failed to parse categories" });
     }
+  }
+
+  if (action === "planTaskRollup") {
+    const chatDoc = await Chat.findOne({ telegramChatId: chatId }).lean();
+    const tasks = await Task.find({ telegramChatId: chatId, status: { $in: ["todo", "upcoming"] } }).lean();
+    if (tasks.length < 2) {
+      return NextResponse.json({
+        ok: true,
+        narrative: "Need at least two active tasks before a roll-up makes sense.",
+        rollups: [] as { mergeTaskIds: string[]; parentTitle: string; parentDescription?: string; subtasks: { title: string }[]; rationale: string }[],
+        deferrals: [] as { taskId: string; reason: string }[],
+      });
+    }
+
+    const validIds = new Set(tasks.map((t) => String((t as { _id: unknown })._id)));
+    const taskLines = tasks.map((t) => {
+      const id = String((t as { _id: unknown })._id);
+      const doc = t as {
+        title: string;
+        status: string;
+        description?: string;
+        momentum?: string;
+        categories?: string[];
+        subtasks?: { done: boolean }[];
+        createdAt: Date;
+        createdByUsername?: string;
+      };
+      let line = `${id} | "${doc.title}" | ${doc.status} | created:${new Date(doc.createdAt).toISOString().split("T")[0]}`;
+      if (doc.createdByUsername) line += ` | by:${doc.createdByUsername}`;
+      if (doc.description) line += ` | desc:${String(doc.description).replace(/\s+/g, " ").slice(0, 200)}`;
+      if (doc.momentum) line += ` | momentum:${doc.momentum}`;
+      if (doc.categories?.length) line += ` | tags:${doc.categories.join(",")}`;
+      if (doc.subtasks?.length) {
+        const done = doc.subtasks.filter((s) => s.done).length;
+        line += ` | subtasks:${done}/${doc.subtasks.length}done`;
+      }
+      return line;
+    }).join("\n");
+
+    const abilities = chatDoc && "abilities" in chatDoc ? String((chatDoc as { abilities?: string }).abilities || "").slice(0, 600) : "";
+
+    const response = await aiChat([
+      {
+        role: "system",
+        content: `You are a ruthless-but-fair task portfolio editor. The team has too many granular todos (often from AI/chat extraction and dashboard "add task"). Your job: propose SAFE roll-ups and light deferrals that respect momentum and switching cost.
+
+Respond ONLY with valid JSON (no markdown):
+{
+  "narrative": "3-5 sentences: where to focus limited attention, cost of context-switching, what NOT to disturb if it's already moving, and how roll-ups help.",
+  "rollups": [
+    {
+      "mergeTaskIds": ["<mongoObjectId>", "..."],
+      "parentTitle": "one umbrella todo title (clear, <= 120 chars)",
+      "parentDescription": "optional merged context paragraph",
+      "subtasks": [{ "title": "short step" }],
+      "rationale": "one line why these belong together"
+    }
+  ],
+  "deferrals": [
+    { "taskId": "<mongoObjectId>", "reason": "why park to Upcoming (not delete)" }
+  ]
+}
+
+RULES:
+- mergeTaskIds: ONLY ids from the user list; minimum 2 tasks per rollup; each id appears in AT MOST ONE rollup. Do not overlap.
+- Put the task whose people/dates/status you want to KEEP first in mergeTaskIds (anchor). We keep that document and delete the others after merging.
+- Prefer merging tasks that share a prefix like "[Offer] Same Name" or obvious duplicates / micro-steps of one outcome.
+- subtasks: 3–10 concrete steps distilled from merged titles (not copy-paste spam). If tasks were offer-execution splinters, steps should read as a single workflow.
+- deferrals: tasks that are valid but lower priority — we set status to upcoming (backlog), never delete. Do not defer a task that is in a rollup merge set.
+- If nothing is safe to merge, return rollups: []. Empty rollups is OK.
+- Never invent ids. Never merge unrelated domains.
+- Cap at 6 rollups and 12 deferrals.`,
+      },
+      {
+        role: "user",
+        content: `TEAM ABILITIES (for context):\n${abilities || "unknown"}
+
+ACTIVE TASKS (todo + upcoming):\n${taskLines}`,
+      },
+    ], "openai/gpt-4o-mini");
+
+    try {
+      const cleaned = response.replace(/```json?\n?/g, "").replace(/```/g, "").trim();
+      const result = JSON.parse(cleaned) as {
+        narrative?: string;
+        rollups?: { mergeTaskIds?: string[]; parentTitle?: string; parentDescription?: string; subtasks?: { title?: string }[]; rationale?: string }[];
+        deferrals?: { taskId?: string; reason?: string }[];
+      };
+
+      const used = new Set<string>();
+      const rollups: { mergeTaskIds: string[]; parentTitle: string; parentDescription?: string; subtasks: { title: string }[]; rationale: string }[] = [];
+
+      for (const r of result.rollups || []) {
+        const ids = (r.mergeTaskIds || []).filter((id) => typeof id === "string" && mongoose.Types.ObjectId.isValid(id) && validIds.has(id));
+        const unique = [...new Set(ids)].filter((id) => !used.has(id));
+        if (unique.length < 2) continue;
+        unique.forEach((id) => used.add(id));
+        const title = (r.parentTitle || "Rolled-up work").trim().slice(0, 500);
+        const subs = (r.subtasks || [])
+          .map((s) => (typeof s.title === "string" ? s.title.trim().slice(0, 240) : ""))
+          .filter(Boolean)
+          .slice(0, 12);
+        rollups.push({
+          mergeTaskIds: unique,
+          parentTitle: title,
+          parentDescription: typeof r.parentDescription === "string" ? r.parentDescription.trim().slice(0, 2000) : undefined,
+          subtasks: subs.map((t) => ({ title: t })),
+          rationale: (typeof r.rationale === "string" ? r.rationale : "").trim().slice(0, 400) || "Grouped related work.",
+        });
+        if (rollups.length >= 6) break;
+      }
+
+      const deferrals: { taskId: string; reason: string }[] = [];
+      for (const d of result.deferrals || []) {
+        if (typeof d.taskId !== "string" || !mongoose.Types.ObjectId.isValid(d.taskId)) continue;
+        if (!validIds.has(d.taskId) || used.has(d.taskId)) continue;
+        deferrals.push({
+          taskId: d.taskId,
+          reason: (typeof d.reason === "string" ? d.reason : "").trim().slice(0, 400) || "Parked from roll-up review.",
+        });
+        if (deferrals.length >= 12) break;
+      }
+
+      return NextResponse.json({
+        ok: true,
+        narrative: typeof result.narrative === "string" ? result.narrative.trim() : "",
+        rollups,
+        deferrals,
+      });
+    } catch {
+      return NextResponse.json({ ok: false, error: "Failed to parse roll-up plan" });
+    }
+  }
+
+  if (action === "applyTaskRollup") {
+    const rollups = body.rollups as
+      | { mergeTaskIds: string[]; parentTitle: string; parentDescription?: string; subtasks: { title: string }[]; rationale?: string }[]
+      | undefined;
+    const deferrals = body.deferrals as { taskId: string; reason: string }[] | undefined;
+    if (!Array.isArray(rollups) || !Array.isArray(deferrals)) {
+      return NextResponse.json({ error: "rollups and deferrals arrays required" }, { status: 400 });
+    }
+
+    const deletedIds = new Set<string>();
+    let mergedCount = 0;
+    let deletedCount = 0;
+
+    for (const r of rollups) {
+      const ids = (r.mergeTaskIds || []).filter((id: string) => mongoose.Types.ObjectId.isValid(id));
+      const unique = [...new Set(ids)];
+      if (unique.length < 2) continue;
+
+      const toMerge = await Task.find({ _id: { $in: unique }, telegramChatId: chatId }).lean();
+      if (toMerge.length !== unique.length) continue;
+
+      const anchorId = unique[0];
+      const rest = unique.slice(1);
+      const anchor = await Task.findOne({ _id: anchorId, telegramChatId: chatId });
+      if (!anchor) continue;
+
+      const title = (r.parentTitle || anchor.title).trim().slice(0, 500);
+      const descParts = [r.parentDescription, anchor.description, ...(toMerge as { description?: string }[]).map((t) => t.description)].filter(
+        (x): x is string => typeof x === "string" && x.trim().length > 0
+      );
+      let description = [...new Set(descParts.map((s) => s.trim()))].join("\n\n---\n\n").slice(0, 8000);
+
+      let subtasks = (r.subtasks || [])
+        .filter((s: { title?: string }) => typeof s.title === "string" && s.title.trim())
+        .map((s: { title: string }, i: number) => ({
+          id: `ru-${Date.now()}-${i}-${Math.random().toString(36).slice(2, 5)}`,
+          title: s.title.trim().slice(0, 240),
+          done: false,
+        }))
+        .slice(0, 14);
+
+      if (subtasks.length === 0) {
+        subtasks = (toMerge as { title: string }[]).slice(1).map((t, i) => ({
+          id: `ru-fb-${Date.now()}-${i}`,
+          title: t.title.replace(/^\[Offer\]\s*[^—:]+?\s*[—:]\s*/i, "").trim().slice(0, 240) || t.title.slice(0, 240),
+          done: false,
+        }));
+      }
+
+      anchor.title = title;
+      anchor.description = description;
+      anchor.subtasks = subtasks;
+      await anchor.save();
+
+      const del = await Task.deleteMany({ _id: { $in: rest }, telegramChatId: chatId });
+      deletedCount += del.deletedCount || 0;
+      rest.forEach((id) => deletedIds.add(String(id)));
+      mergedCount += 1;
+
+      Activity.create({
+        telegramChatId: chatId,
+        type: "task_added",
+        title: `Roll-up → ${title}`,
+        detail: `Merged ${unique.length} tasks`,
+        actor: "dashboard",
+      }).catch(console.error);
+    }
+
+    let deferredCount = 0;
+    for (const d of deferrals) {
+      if (!d.taskId || !mongoose.Types.ObjectId.isValid(d.taskId)) continue;
+      if (deletedIds.has(d.taskId)) continue;
+      const t = await Task.findOne({ _id: d.taskId, telegramChatId: chatId, status: { $in: ["todo", "upcoming"] } });
+      if (!t) continue;
+      const note = `\n\n[Roll-up: moved to Upcoming] ${d.reason || ""}`.trim();
+      t.status = "upcoming";
+      t.description = `${(t.description || "").trim()}${note}`.slice(0, 8000);
+      await t.save();
+      deferredCount += 1;
+    }
+
+    return NextResponse.json({ ok: true, mergedClusters: mergedCount, tasksRemoved: deletedCount, deferred: deferredCount });
   }
 
   if (action === "prioritizeTasks") {

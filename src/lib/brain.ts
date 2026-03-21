@@ -260,7 +260,8 @@ Respond ONLY with valid JSON (no markdown fences). Extract:
 
 Rules:
 - Only extract NEW items not already in existing lists
-- Break EVERY item into its own entry. "buy stands and book hotel" = 2 tasks, never 1. "met John and Sarah" = 2 people.
+- Break distinct commitments into separate tasks. "buy stands and book hotel" = 2 tasks. BUT if two lines are the same workstream (e.g. both about one event activation), prefer ONE task with a combined title instead of splintering — fewer tasks beats false granularity.
+- "met John and Sarah" = 2 people.
 - Infer tasks from commitments ("I'll do X", "we need to Y", "let's Z by Friday")
 - Infer relationships from context ("my cofounder", "works with", "knows X from Y")
 - Infer intentions from what people say they want or plan to do

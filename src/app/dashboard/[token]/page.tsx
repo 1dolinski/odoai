@@ -327,6 +327,13 @@ export default function DashboardPage() {
   });
   const [categoryFilters, setCategoryFilters] = useState<Set<string>>(new Set());
   const [categorizing, setCategorizing] = useState(false);
+  const [rollupLoading, setRollupLoading] = useState(false);
+  const [rollupApplying, setRollupApplying] = useState(false);
+  const [rollupModal, setRollupModal] = useState<{
+    narrative: string;
+    rollups: { mergeTaskIds: string[]; parentTitle: string; parentDescription?: string; subtasks: { title: string }[]; rationale: string }[];
+    deferrals: { taskId: string; reason: string }[];
+  } | null>(null);
   const [taskViewMode, setTaskViewMode] = useState<"list" | "categories" | "priorities">(() => {
     if (typeof window !== "undefined") {
       const cached = localStorage.getItem("taskViewMode");
@@ -3564,6 +3571,38 @@ export default function DashboardPage() {
                 }}
                 className="text-[10px] text-gray-400 hover:text-gray-600 font-medium transition-colors disabled:opacity-50"
               >{categorizing ? "..." : activeTasks.some((t) => !t.categories || t.categories.length === 0) && allCategories.length > 0 ? "⟳ Re-categorize" : "⟳ Categorize"}</button>
+              <button
+                type="button"
+                disabled={rollupLoading || activeTasks.length < 2}
+                title={activeTasks.length < 2 ? "Need 2+ active tasks" : "AI proposes merges + backlog deferrals — you confirm"}
+                onClick={async () => {
+                  setRollupLoading(true);
+                  try {
+                    const res = await fetch("/api/dashboard", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ token, action: "planTaskRollup" }),
+                    });
+                    const j = await res.json();
+                    if (!j.ok) {
+                      alert(j.error || "Roll-up plan failed");
+                      setRollupModal(null);
+                    } else {
+                      setRollupModal({
+                        narrative: j.narrative || "",
+                        rollups: j.rollups || [],
+                        deferrals: j.deferrals || [],
+                      });
+                    }
+                  } catch {
+                    alert("Roll-up request failed");
+                  }
+                  setRollupLoading(false);
+                }}
+                className="text-[10px] text-violet-600 hover:text-violet-800 font-medium transition-colors disabled:opacity-40 disabled:hover:text-violet-600"
+              >
+                {rollupLoading ? "…" : "⟋ Roll up & focus"}
+              </button>
               <div className="flex gap-0.5 bg-gray-100 rounded-md p-0.5">
                 <button onClick={() => { setTaskViewMode("list"); localStorage.setItem("taskViewMode", "list"); }} className={`px-2 py-1 rounded text-[10px] font-medium transition-all ${taskViewMode === "list" ? "bg-white text-gray-900 shadow-sm" : "text-gray-500"}`}>List</button>
                 {allCategories.length > 0 && (
@@ -4359,6 +4398,124 @@ export default function DashboardPage() {
         )}
 
         {/* (Context Summary moved to top toolbar) */}
+
+        {rollupModal && data && (
+          <div
+            className="fixed inset-0 z-[200] flex items-end sm:items-center justify-center p-3 sm:p-6 bg-black/45"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="rollup-modal-title"
+            onClick={() => !rollupApplying && setRollupModal(null)}
+          >
+            <div
+              className="bg-white rounded-xl shadow-2xl w-full max-w-lg max-h-[88vh] overflow-hidden flex flex-col border border-gray-200"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="px-4 py-3 border-b border-gray-100 flex items-start justify-between gap-2">
+                <div>
+                  <h3 id="rollup-modal-title" className="text-sm font-semibold text-gray-900">Roll up & focus</h3>
+                  <p className="text-[10px] text-gray-500 mt-0.5">Review before applying — merges delete duplicate tasks (keeps first id as parent).</p>
+                </div>
+                <button
+                  type="button"
+                  disabled={rollupApplying}
+                  onClick={() => setRollupModal(null)}
+                  className="text-gray-400 hover:text-gray-700 text-lg leading-none px-1"
+                >
+                  ×
+                </button>
+              </div>
+              <div className="px-4 py-3 overflow-y-auto flex-1 space-y-3 text-xs">
+                {rollupModal.narrative && (
+                  <div className="bg-violet-50 border border-violet-100 rounded-lg px-3 py-2 text-violet-950 leading-relaxed">
+                    {rollupModal.narrative}
+                  </div>
+                )}
+                {rollupModal.rollups.length === 0 && rollupModal.deferrals.length === 0 && (
+                  <p className="text-gray-500 italic">No safe merges or deferrals suggested. Try again after more tasks accumulate, or clean up manually.</p>
+                )}
+                {rollupModal.rollups.map((r, ri) => (
+                  <div key={ri} className="border border-gray-200 rounded-lg p-3 bg-gray-50/80">
+                    <div className="font-medium text-gray-900 mb-1">{r.parentTitle}</div>
+                    <p className="text-[10px] text-gray-500 mb-2">{r.rationale}</p>
+                    <div className="text-[10px] text-gray-600 mb-1 font-medium">Merges into one task:</div>
+                    <ul className="text-[10px] text-gray-700 list-disc list-inside mb-2 space-y-0.5">
+                      {r.mergeTaskIds.map((id) => (
+                        <li key={id} className="truncate">{data.tasks.find((t) => t._id === id)?.title || id}</li>
+                      ))}
+                    </ul>
+                    {r.subtasks.length > 0 && (
+                      <>
+                        <div className="text-[10px] text-gray-600 mb-0.5 font-medium">Subtasks</div>
+                        <ol className="text-[10px] text-gray-700 list-decimal list-inside space-y-0.5">
+                          {r.subtasks.map((s, si) => (
+                            <li key={si}>{s.title}</li>
+                          ))}
+                        </ol>
+                      </>
+                    )}
+                  </div>
+                ))}
+                {rollupModal.deferrals.length > 0 && (
+                  <div>
+                    <div className="text-[10px] font-semibold uppercase tracking-wide text-amber-800 mb-1">Park to Upcoming</div>
+                    <ul className="space-y-1.5">
+                      {rollupModal.deferrals.map((d, di) => (
+                        <li key={di} className="text-[10px] border border-amber-100 bg-amber-50/60 rounded px-2 py-1.5">
+                          <span className="font-medium text-gray-800">{data.tasks.find((t) => t._id === d.taskId)?.title || d.taskId}</span>
+                          <span className="text-gray-600"> — {d.reason}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+              <div className="px-4 py-3 border-t border-gray-100 flex flex-wrap justify-end gap-2 bg-gray-50/90">
+                <button
+                  type="button"
+                  disabled={rollupApplying}
+                  onClick={() => setRollupModal(null)}
+                  className="text-xs font-medium px-3 py-1.5 rounded-lg border border-gray-200 text-gray-700 hover:bg-white"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={rollupApplying || (rollupModal.rollups.length === 0 && rollupModal.deferrals.length === 0)}
+                  onClick={async () => {
+                    if (!rollupModal) return;
+                    setRollupApplying(true);
+                    try {
+                      const res = await fetch("/api/dashboard", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                          token,
+                          action: "applyTaskRollup",
+                          rollups: rollupModal.rollups,
+                          deferrals: rollupModal.deferrals,
+                        }),
+                      });
+                      const j = await res.json();
+                      if (!j.ok) {
+                        alert(j.error || "Apply failed");
+                      } else {
+                        setRollupModal(null);
+                        await fetchData();
+                      }
+                    } catch {
+                      alert("Apply failed");
+                    }
+                    setRollupApplying(false);
+                  }}
+                  className="text-xs font-medium px-3 py-1.5 rounded-lg bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50"
+                >
+                  {rollupApplying ? "Applying…" : "Apply plan"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
