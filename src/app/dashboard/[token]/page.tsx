@@ -220,6 +220,9 @@ interface DashboardData {
 
 type AiStyle = "concise" | "detailed" | "casual" | "professional" | "technical";
 
+/** How many execution lines show before "Show more" on offer cards. */
+const OFFER_EXECUTION_PREVIEW = 3;
+
 const AI_STYLES: { value: AiStyle; label: string; desc: string }[] = [
   { value: "concise", label: "Concise", desc: "Short, direct answers" },
   { value: "detailed", label: "Detailed", desc: "Thorough explanations" },
@@ -334,6 +337,7 @@ export default function DashboardPage() {
   const [prioritizing, setPrioritizing] = useState(false);
   const [researchingOffers, setResearchingOffers] = useState(false);
   const [offerCopyFlash, setOfferCopyFlash] = useState<string | null>(null);
+  const [offerExecutionExpanded, setOfferExecutionExpanded] = useState<Record<string, boolean>>({});
   const [expandedCategory, setExpandedCategory] = useState<string | null>(null);
   const [showCalendar, setShowCalendar] = useState(false);
   const [syncingMembers, setSyncingMembers] = useState(false);
@@ -1226,12 +1230,17 @@ export default function DashboardPage() {
                                   )}
                                 </div>
                               )}
-                              {o.standoutActions?.length > 0 && (
+                              {o.standoutActions?.length > 0 && (() => {
+                                const execExpanded = !!offerExecutionExpanded[o.id];
+                                const execAll = o.standoutActions;
+                                const execVisible = execExpanded ? execAll : execAll.slice(0, OFFER_EXECUTION_PREVIEW);
+                                const execMore = Math.max(0, execAll.length - OFFER_EXECUTION_PREVIEW);
+                                return (
                                 <div className="mt-1.5 pt-1.5 border-t border-gray-100">
                                   <p className="text-[9px] font-semibold uppercase tracking-wide text-gray-600 mb-0.5">Execution</p>
                                   <p className="text-[9px] text-gray-500 mb-1 leading-snug">Ops, logistics, proof, handoffs — the boring stuff that wins.</p>
                                   <ul className="space-y-1">
-                                    {o.standoutActions.map((action, i) => (
+                                    {execVisible.map((action, i) => (
                                       <li key={i} className="flex gap-2 items-start text-[10px] text-gray-800">
                                         <span className="flex-1 min-w-0 leading-snug"><span className="font-semibold text-gray-400 mr-1">{i + 1}.</span>{action}</span>
                                         {o.status !== "rejected" && (
@@ -1247,8 +1256,18 @@ export default function DashboardPage() {
                                       </li>
                                     ))}
                                   </ul>
+                                  {execMore > 0 && (
+                                    <button
+                                      type="button"
+                                      onClick={() => setOfferExecutionExpanded((prev) => ({ ...prev, [o.id]: !prev[o.id] }))}
+                                      className="mt-1.5 text-[9px] font-medium text-gray-600 hover:text-gray-900 underline underline-offset-2 decoration-gray-300 hover:decoration-gray-600"
+                                    >
+                                      {execExpanded ? "Show less" : `Show ${execMore} more`}
+                                    </button>
+                                  )}
                                 </div>
-                              )}
+                                );
+                              })()}
                               {o.creativePlays?.length > 0 && (
                                 <div className="mt-1.5 pt-1.5 border-t border-fuchsia-100">
                                   <p className="text-[9px] font-semibold uppercase tracking-wide text-fuchsia-800 mb-0.5">Creative & differentiation</p>

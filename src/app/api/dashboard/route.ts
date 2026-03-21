@@ -1218,7 +1218,7 @@ FOR EACH OFFER, provide:
 - validationNotes: ONE focused test — the single next experiment to increase confidence (hypothesis + how you'll know it worked)
 - meatAndPotatoes: exactly 2-3 SHORT bullets — the non-negotiable core buyers actually get (deliverable spine: what ships on the day, what's in scope). No adjectives, no strategy — just the substance.
 - teamLeverage: 2-4 SHORT bullets — how THIS team wins on this offer. Reference real first names or @usernames from the TEAM list when possible ("Taynara: …"); if unknown, tie to roles from ABILITIES. Each bullet = who + what they own.
-- standoutActions: exactly 3-5 SHORT imperative bullets — EXECUTION / ops only (logistics, runbooks, contracts, metrics capture, handoffs, QA, follow-up). NOT creative ideas — those go in creativePlays. Must differ from validationNotes.
+- standoutActions: 8-12 SHORT imperative bullets — EXECUTION / ops only (logistics, runbooks, contracts, metrics capture, handoffs, QA, follow-up, contingencies, cleanup). Front-load the 3-4 most urgent; later bullets can be depth (edge cases, scale, documentation). NOT creative ideas — those go in creativePlays. Must differ from validationNotes; no duplicates within the list.
 - creativePlays: 2-4 SHORT imperative bullets — differentiated / creative moves (story angle, partnership twist, content stunt, VIP experience detail, PR hook). Must not repeat standoutActions.
 - chatSignals: 2-4 SHORT bullets — specific signals you'd see in the team's Telegram/group chat when this offer is THRIVING (e.g. named buyer commits, dates locked, pricing agreed, assets requested). NOT generic "good engagement" — tie to this offer.
 - teamPing: ONE paste-ready paragraph (2-4 sentences, casual tone) the team can drop in chat to align on this offer: what matters this week, who owns what, one clear ask. No markdown.
@@ -1305,7 +1305,7 @@ ${prevLogBlock ? `PREVIOUS RESEARCH LOG:\n${prevLogBlock}` : ""}` },
         validationNotes: o.validationNotes || "",
         meatAndPotatoes: normalizeStringList(o.meatAndPotatoes, 3),
         teamLeverage: normalizeStringList(o.teamLeverage, 4),
-        standoutActions: normalizeStringList(o.standoutActions, 5),
+        standoutActions: normalizeStringList(o.standoutActions, 12),
         creativePlays: normalizeStringList(o.creativePlays, 4),
         chatSignals: normalizeStringList(o.chatSignals, 4),
         teamPing: typeof o.teamPing === "string" ? o.teamPing.trim().slice(0, 1200) : "",

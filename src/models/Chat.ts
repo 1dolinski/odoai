@@ -89,7 +89,7 @@ export interface IOffer {
   meatAndPotatoes: string[];
   /** How named people / roles from the team plug in (from context). */
   teamLeverage: string[];
-  /** 3–5 operational execution moves (logistics, proof, handoffs, ops). */
+  /** Operational execution moves (logistics, proof, handoffs, ops); UI shows a preview then expand. */
   standoutActions: string[];
   /** 2–4 differentiated / creative moves (story, partnerships, wow moments). */
   creativePlays: string[];
