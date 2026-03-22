@@ -98,9 +98,11 @@ async function gatherContext(chatId: string, userGuidance: string): Promise<Full
   let qmdMemory = "";
   const searchQuery = userGuidance || chatDoc.leveragePlay || chatDoc.contextSummary || "business strategy next steps";
   try {
-    const results = await qmdSearch(searchQuery, 10);
+    const qmdPromise = qmdSearch(searchQuery, 10);
+    const timeout = new Promise<never>((_, reject) => setTimeout(() => reject(new Error("qmd_timeout")), 5000));
+    const results = await Promise.race([qmdPromise, timeout]);
     if (results.length) qmdMemory = formatQMDResults(results);
-  } catch { /* QMD unavailable — continue without */ }
+  } catch { /* QMD unavailable or slow — continue without */ }
 
   return {
     chatTitle: chatDoc.chatTitle || "Team Chat",
