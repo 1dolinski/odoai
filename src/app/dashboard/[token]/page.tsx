@@ -574,25 +574,78 @@ export default function DashboardPage() {
   } | null>(null);
   const [forecastHorizon, setForecastHorizon] = useState<"1d" | "3d" | "7d" | "30d">("1d");
   const [forecastError, setForecastError] = useState<string | null>(null);
+  const [forecastLogs, setForecastLogs] = useState<string[]>([]);
+  const [forecastElapsed, setForecastElapsed] = useState(0);
 
   const runForecastAction = useCallback(async () => {
     if (!token) return;
     setForecastLoading(true);
     setForecastError(null);
+    setForecastResult(null);
+    setForecastLogs(["Starting forecast..."]);
+    setForecastElapsed(0);
+
+    const startTime = Date.now();
+    const timer = setInterval(() => setForecastElapsed(Math.floor((Date.now() - startTime) / 1000)), 1000);
+
+    const addLog = (msg: string) => setForecastLogs((prev) => [...prev, msg]);
+
     try {
+      addLog("Connecting to API (SSE stream)...");
       const res = await fetch("/api/forecast", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token, guidance: forecastGuidance, iterations: 2 }),
+        body: JSON.stringify({ token, guidance: forecastGuidance, iterations: 1 }),
       });
+
       if (!res.ok) {
         const err = await res.json().catch(() => ({ error: "Request failed" }));
         throw new Error(err.error || `HTTP ${res.status}`);
       }
-      setForecastResult(await res.json());
+
+      const reader = res.body?.getReader();
+      if (!reader) throw new Error("No response stream");
+
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+
+        let currentEvent = "";
+        for (const line of lines) {
+          if (line.startsWith("event: ")) {
+            currentEvent = line.slice(7).trim();
+          } else if (line.startsWith("data: ")) {
+            const raw = line.slice(6);
+            try {
+              const data = JSON.parse(raw);
+              if (currentEvent === "log" && data.msg) {
+                addLog(data.msg);
+              } else if (currentEvent === "result") {
+                addLog("Forecast complete!");
+                setForecastResult(data);
+              } else if (currentEvent === "error") {
+                throw new Error(data.error || "Server error");
+              }
+            } catch (parseErr) {
+              if (currentEvent === "error") throw parseErr;
+            }
+            currentEvent = "";
+          }
+        }
+      }
     } catch (err) {
-      setForecastError(err instanceof Error ? err.message : String(err));
+      const msg = err instanceof Error ? err.message : String(err);
+      addLog(`Error: ${msg}`);
+      setForecastError(msg);
     } finally {
+      clearInterval(timer);
       setForecastLoading(false);
     }
   }, [token, forecastGuidance]);
@@ -5982,11 +6035,41 @@ export default function DashboardPage() {
                 </div>
               )}
 
-              {forecastLoading && !forecastResult && (
-                <div className="text-center py-10">
-                  <Spinner className="h-6 w-6 text-violet-500 mx-auto mb-3" />
-                  <p className="text-sm text-gray-500">Generating your chat future across all horizons…</p>
-                  <p className="text-[11px] text-gray-400 mt-1">This takes 30-60 seconds (running iterations for each time horizon)</p>
+              {forecastLoading && (
+                <div className="py-4">
+                  <div className="flex items-center gap-3 mb-3">
+                    <Spinner className="h-4 w-4 text-violet-500" />
+                    <span className="text-sm font-medium text-gray-700">Generating forecast…</span>
+                    <span className="text-xs tabular-nums text-gray-400 ml-auto">{forecastElapsed}s</span>
+                  </div>
+                  <div className="rounded-lg border border-gray-200 bg-gray-900 p-3 font-mono text-[11px] leading-relaxed max-h-48 overflow-y-auto">
+                    {forecastLogs.map((log, i) => (
+                      <div key={i} className={`${i === forecastLogs.length - 1 ? "text-emerald-400" : "text-gray-500"}`}>
+                        <span className="text-gray-600 select-none">[{String(i).padStart(2, "0")}] </span>
+                        {log}
+                      </div>
+                    ))}
+                    <div className="text-gray-600 animate-pulse mt-1">
+                      {forecastElapsed < 5 && "▸ Gathering context from MongoDB (tasks, people, offers, activities)..."}
+                      {forecastElapsed >= 5 && forecastElapsed < 15 && "▸ QMD knowledge search..."}
+                      {forecastElapsed >= 15 && forecastElapsed < 30 && "▸ Sending to LLM — generating 4 horizons in parallel..."}
+                      {forecastElapsed >= 30 && forecastElapsed < 60 && "▸ LLM is writing simulated conversations (this is the slow part)..."}
+                      {forecastElapsed >= 60 && forecastElapsed < 120 && "▸ Still generating — large context window takes longer..."}
+                      {forecastElapsed >= 120 && forecastElapsed < 240 && "▸ Almost there — parsing and validating JSON responses..."}
+                      {forecastElapsed >= 240 && "▸ Taking longer than expected — server may be under load..."}
+                    </div>
+                  </div>
+                  <div className="mt-2 flex items-center gap-4">
+                    <div className="flex-1 bg-gray-100 rounded-full h-1.5 overflow-hidden">
+                      <div
+                        className="h-full bg-violet-500 rounded-full transition-all duration-1000 ease-out"
+                        style={{ width: `${Math.min(95, (forecastElapsed / 70) * 100)}%` }}
+                      />
+                    </div>
+                    <span className="text-[10px] text-gray-400 shrink-0">
+                      {forecastElapsed < 30 ? "preparing" : forecastElapsed < 60 ? "generating" : "finalizing"}
+                    </span>
+                  </div>
                 </div>
               )}
             </div>

@@ -435,24 +435,40 @@ Rules for valid JSON:
   };
 }
 
+export type ForecastLogger = (msg: string) => void;
+
 export async function runForecast(
   chatId: string,
   userGuidance: string,
-  { iterations = 1, horizons = ["1d", "3d", "7d", "30d"] as Horizon[], model }: { iterations?: number; horizons?: Horizon[]; model?: string } = {},
+  { iterations = 1, horizons = ["1d", "3d", "7d", "30d"] as Horizon[], model, log }: { iterations?: number; horizons?: Horizon[]; model?: string; log?: ForecastLogger } = {},
 ): Promise<ForecastResult> {
+  const emit = log || (() => {});
+
+  emit("Gathering context from MongoDB...");
   const ctx = await gatherContext(chatId, userGuidance);
+  emit(`Context loaded — ${ctx.todoTasks.length} tasks, ${ctx.people.length} people, ${ctx.activities.length} activities, ${ctx.offers.length} offers`);
+  if (ctx.qmdMemory) emit("QMD semantic memory loaded");
+  else emit("QMD unavailable — proceeding without semantic memory");
+  emit(`Building context block (${ctx.recentMessages.length} messages, ${ctx.doneTasks.length} completed tasks)`);
+
+  const useModel = (model || "moonshotai/kimi-k2.5").trim();
+  emit(`Model: ${useModel}`);
+  emit(`Starting ${horizons.length} horizons in parallel: ${horizons.join(", ")}`);
 
   const runHorizon = async (horizon: Horizon): Promise<HorizonForecast> => {
     let best: HorizonForecast | undefined;
     for (let i = 0; i < iterations; i++) {
+      const label = HORIZON_META[horizon].label;
+      emit(`[${label}] Iteration ${i + 1}/${iterations} — sending to LLM...`);
       const attempt = await generateForecast(ctx, userGuidance, horizon, best, model);
+      emit(`[${label}] Got ${attempt.messages.length} messages, score ${attempt.score}/10, ${attempt.keyMilestones.length} milestones`);
       if (!best || attempt.score > best.score) best = attempt;
     }
     return best!;
   };
 
-  // Run all horizons in parallel
   const results = await Promise.all(horizons.map(runHorizon));
+  emit(`All horizons complete — scores: ${results.map((r) => `${r.label}=${r.score}/10`).join(", ")}`);
 
   return {
     guidance: userGuidance,
