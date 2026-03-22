@@ -6475,12 +6475,7 @@ function DashboardCoachBar({
     setCoachLoading(false);
   }, [token, viewContext]);
 
-  useEffect(() => {
-    const t = setTimeout(() => {
-      void loadBrief();
-    }, 450);
-    return () => clearTimeout(t);
-  }, [viewKey, loadBrief]);
+  // Coach loads on button click only — not on every page load/zoom change
 
   async function sendCoachMessage(e: React.FormEvent) {
     e.preventDefault();
@@ -6611,7 +6606,7 @@ function DashboardCoachBar({
                 </div>
               </div>
             ) : (
-              <p className="text-sm text-gray-500 mt-2">{coachErr || "Coach is waking up…"}</p>
+              <p className="text-sm text-gray-500 mt-2">{coachErr || "Hit \"Run Coach\" to get a pointed take on what to do next."}</p>
             )}
             {coachErr && brief && <p className="text-xs text-amber-700 mt-2">{coachErr}</p>}
           </div>
@@ -6623,7 +6618,7 @@ function DashboardCoachBar({
                 onClick={() => void loadBrief()}
                 className="text-xs font-semibold min-h-[36px] px-3 py-2 rounded-xl border border-indigo-200 bg-white text-indigo-800 hover:bg-indigo-50 disabled:opacity-50"
               >
-                {coachLoading ? "Refreshing…" : "Refresh"}
+                {coachLoading ? "Thinking…" : brief ? "Refresh" : "Run Coach"}
               </button>
               <button
                 type="button"
