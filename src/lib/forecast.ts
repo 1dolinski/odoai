@@ -284,6 +284,73 @@ function buildContextBlock(ctx: FullContext): string {
   return parts.join("\n\n");
 }
 
+function repairAndParseJSON(raw: string): { messages: SimulatedMessage[]; keyMilestones: string[]; score: number } {
+  // Strip markdown fences
+  let s = raw.replace(/```json\s*/gi, "").replace(/```\s*/gi, "").trim();
+
+  // Extract the outermost JSON object
+  const firstBrace = s.indexOf("{");
+  const lastBrace = s.lastIndexOf("}");
+  if (firstBrace === -1 || lastBrace === -1) throw new Error("No JSON object found in response");
+  s = s.slice(firstBrace, lastBrace + 1);
+
+  // Try direct parse first
+  try {
+    return JSON.parse(s);
+  } catch { /* continue to repair */ }
+
+  // Repair common LLM JSON mistakes
+  // 1. Trailing commas before ] or }
+  s = s.replace(/,\s*([}\]])/g, "$1");
+  // 2. Single quotes → double quotes (but not inside double-quoted strings)
+  // 3. Unescaped newlines inside strings
+  s = s.replace(/[\r\n]+/g, " ");
+  // 4. Control characters
+  s = s.replace(/[\x00-\x1f]/g, (ch) => {
+    if (ch === "\t") return "\\t";
+    if (ch === "\n") return "\\n";
+    if (ch === "\r") return "\\r";
+    return "";
+  });
+
+  try {
+    return JSON.parse(s);
+  } catch { /* continue */ }
+
+  // Last resort: try to extract messages array and milestones separately via regex
+  const messagesMatch = s.match(/"messages"\s*:\s*(\[[\s\S]*?\])\s*[,}]/);
+  const milestonesMatch = s.match(/"keyMilestones"\s*:\s*(\[[\s\S]*?\])\s*[,}]/);
+  const scoreMatch = s.match(/"score"\s*:\s*(\d+)/);
+
+  if (messagesMatch) {
+    let msgStr = messagesMatch[1].replace(/,\s*\]/g, "]").replace(/[\r\n]+/g, " ");
+    let messages: SimulatedMessage[] = [];
+    try {
+      messages = JSON.parse(msgStr);
+    } catch {
+      // Try removing the last potentially broken element
+      const lastGoodBracket = msgStr.lastIndexOf("},");
+      if (lastGoodBracket > 0) {
+        msgStr = msgStr.slice(0, lastGoodBracket + 1) + "]";
+        try { messages = JSON.parse(msgStr); } catch { /* give up on messages */ }
+      }
+    }
+
+    let milestones: string[] = [];
+    if (milestonesMatch) {
+      try { milestones = JSON.parse(milestonesMatch[1].replace(/,\s*\]/g, "]")); } catch { /* skip */ }
+    }
+
+    return {
+      messages,
+      keyMilestones: milestones,
+      score: scoreMatch ? parseInt(scoreMatch[1]) : 5,
+    };
+  }
+
+  throw new Error("Failed to parse forecast JSON after repair attempts");
+}
+
 async function generateForecast(
   ctx: FullContext,
   userGuidance: string,
@@ -319,28 +386,22 @@ Critical rules:
 - The conversation should build on what's already in motion — don't start from scratch.
 - 8-15 messages for 1d, 12-20 for 3d, 15-25 for 7d, 20-35 for 30d.
 
-Respond in this exact JSON format:
-{
-  "messages": [
-    {"role": "user"|"assistant", "author": "Name", "content": "message text", "timestamp": "relative timestamp"}
-  ],
-  "keyMilestones": ["milestone 1", "milestone 2", ...],
-  "score": <1-10 self-score on specificity, realism, and groundedness in actual context>
-}
+Respond in VALID JSON. No markdown fences. No trailing commas. Escape all quotes inside strings with backslash.
 
-JSON only, no markdown fences.`;
+Example of the EXACT format (follow this structure precisely):
+{"messages":[{"role":"user","author":"Chris","content":"Hey team, just got off the call","timestamp":"Tomorrow 9am"},{"role":"assistant","author":"odoai","content":"Nice — that aligns with the pitch deck task","timestamp":"Tomorrow 9:05am"}],"keyMilestones":["First client call booked","Pitch deck sent"],"score":7}
+
+Rules for valid JSON:
+- role must be exactly "user" or "assistant" (strings, not union types)
+- All strings must use double quotes
+- No trailing commas after the last element in arrays or objects
+- Escape any double quotes inside content strings with backslash
+- No comments, no ellipsis (...), no placeholders`;
 
   const raw = await aiChat([{ role: "user", content: prompt }], model);
-  const cleaned = raw.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
 
   let parsed: { messages: SimulatedMessage[]; keyMilestones: string[]; score: number };
-  try {
-    parsed = JSON.parse(cleaned);
-  } catch {
-    const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) throw new Error("Failed to parse forecast response");
-    parsed = JSON.parse(jsonMatch[0]);
-  }
+  parsed = repairAndParseJSON(raw);
 
   return {
     horizon,
