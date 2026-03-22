@@ -6,6 +6,7 @@ import Task from "@/models/Task";
 import Person from "@/models/Person";
 import Job from "@/models/Job";
 import Activity from "@/models/Activity";
+import Check from "@/models/Check";
 
 const SUMMARIZE_EVERY = 10;
 const EXTRACT_EVERY = 5;
@@ -489,6 +490,136 @@ Be genuinely helpful, not performative. Don't repeat what was just said. Don't b
   const trimmed = suggestion.trim();
   if (trimmed === "PASS" || trimmed.length < 5) return null;
   return trimmed;
+}
+
+export async function generateStatusReport(
+  chatId: string,
+  statusUpdate?: string
+): Promise<string> {
+  const now = new Date();
+  const threeDaysAgo = new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000);
+
+  const [chatDoc, todoTasks, upcomingTasks, recentDone, people, activeJobs, pendingChecks, recentActivity] = await Promise.all([
+    Chat.findOne({ telegramChatId: chatId }),
+    Task.find({ telegramChatId: chatId, status: "todo" }).sort({ priorityScore: -1, updatedAt: -1 }).lean(),
+    Task.find({ telegramChatId: chatId, status: "upcoming" }).sort({ dueDate: 1, updatedAt: -1 }).lean(),
+    Task.find({ telegramChatId: chatId, status: "done", completedAt: { $gte: threeDaysAgo } }).sort({ completedAt: -1 }).limit(10).lean(),
+    Person.find({ telegramChatId: chatId }).lean(),
+    Job.find({ telegramChatId: chatId, status: "active" }).lean(),
+    Check.find({ telegramChatId: chatId, status: "pending" }).sort({ scheduledFor: 1 }).lean(),
+    Activity.find({ telegramChatId: chatId, createdAt: { $gte: threeDaysAgo } }).sort({ createdAt: -1 }).limit(20).lean(),
+  ]);
+
+  const model = getModel(chatDoc);
+
+  const formatTask = (t: Record<string, unknown>) => {
+    let line = `• ${t.title}`;
+    if (t.momentum && t.momentum !== "new") line += ` [${t.momentum}]`;
+    if (t.blockedBy) line += ` ⛔ blocked by: ${t.blockedBy}`;
+    if (t.waitingOn) line += ` ⏳ waiting on: ${t.waitingOn}`;
+    if (t.dueDate) line += ` (due ${new Date(t.dueDate as string).toISOString().split("T")[0]})`;
+    if ((t.people as string[])?.length) line += ` → ${(t.people as string[]).join(", ")}`;
+    if (t.actionLane) line += ` [${t.actionLane}]`;
+    if (t.effort) line += ` effort:${t.effort}`;
+    if (t.impact) line += ` impact:${t.impact}`;
+    if (t.initiative) line += ` #${t.initiative}`;
+    return line;
+  };
+
+  const todoBlock = todoTasks.length ? todoTasks.map(formatTask).join("\n") : "(none)";
+  const upcomingBlock = upcomingTasks.length ? upcomingTasks.map(formatTask).join("\n") : "(none)";
+  const doneBlock = recentDone.length
+    ? recentDone.map((t) => `• ✅ ${t.title} (${t.completedAt ? new Date(t.completedAt).toISOString().split("T")[0] : "recently"})`).join("\n")
+    : "(none recently)";
+
+  const jobBlock = activeJobs.length
+    ? activeJobs.map((j) => `• ${j.title}: ${j.description || "no desc"}`).join("\n")
+    : "(none)";
+
+  const checkBlock = pendingChecks.length
+    ? pendingChecks.map((c) => `• ${c.description} (${c.scheduledFor.toISOString().split("T")[0]})`).join("\n")
+    : "(none)";
+
+  const activityBlock = recentActivity.length
+    ? recentActivity.slice(0, 10).map((a) => `• [${a.type}] ${a.title}`).join("\n")
+    : "(quiet)";
+
+  const initiatives = (chatDoc?.initiatives || []).filter((i: { status: string }) => i.status === "active");
+  const initiativeBlock = initiatives.length
+    ? initiatives.map((i: { name: string; description?: string }) => `• ${i.name}${i.description ? `: ${i.description}` : ""}`).join("\n")
+    : "(none)";
+
+  const membersBlock = people.length
+    ? people.map((p) => {
+        let line = `• @${p.username || p.firstName || p.telegramUserId}`;
+        if (p.role) line += ` (${p.role})`;
+        if (p.intentions?.length) line += ` — ${p.intentions.slice(0, 3).join(", ")}`;
+        return line;
+      }).join("\n")
+    : "(none tracked)";
+
+  const blocked = todoTasks.filter((t) => t.momentum === "blocked" || t.blockedBy);
+  const stalled = todoTasks.filter((t) => t.momentum === "stalled");
+  const overdue = [...todoTasks, ...upcomingTasks].filter((t) => t.dueDate && new Date(t.dueDate) < now);
+
+  const flagsBlock = [
+    blocked.length ? `🚫 BLOCKED (${blocked.length}): ${blocked.map((t) => t.title).join(", ")}` : null,
+    stalled.length ? `🐌 STALLED (${stalled.length}): ${stalled.map((t) => t.title).join(", ")}` : null,
+    overdue.length ? `⏰ OVERDUE (${overdue.length}): ${overdue.map((t) => t.title).join(", ")}` : null,
+  ].filter(Boolean).join("\n") || "No flags — things look clean.";
+
+  const prompt = `You are odoai generating a status report for this team's Telegram chat.
+
+${statusUpdate ? `THE USER JUST GAVE THIS STATUS UPDATE:\n"${statusUpdate}"\n\nAcknowledge their update, incorporate it into your analysis, and reconcile it with the task state below.\n` : ""}
+FULL TASK STATE:
+
+TODO (active, needs doing):
+${todoBlock}
+
+UPCOMING (planned/queued):
+${upcomingBlock}
+
+RECENTLY COMPLETED (last 3 days):
+${doneBlock}
+
+FLAGS:
+${flagsBlock}
+
+ACTIVE JOBS:
+${jobBlock}
+
+PENDING CHECKS:
+${checkBlock}
+
+INITIATIVES:
+${initiativeBlock}
+
+TEAM:
+${membersBlock}
+
+RECENT ACTIVITY:
+${activityBlock}
+
+MODE: ${chatDoc?.mode || "passive"}
+CONTEXT: ${chatDoc?.contextSummary?.substring(0, 500) || "none"}
+
+---
+
+Generate a status report in this format:
+
+1. PROGRESS SNAPSHOT — What's been accomplished recently, momentum assessment. Be specific.
+2. CURRENT STATE — Where things stand right now across all active work. Group by initiative if applicable.
+3. FLAGS — Anything blocked, stalled, overdue, or at risk. If nothing, say so.
+4. SUGGESTED NEXT STEPS — The 2-4 most natural, high-impact things to do next based on task state, dependencies, momentum, and what was recently completed. Be concrete and actionable — not generic advice. Consider what's blocked and what unblocks other work.${statusUpdate ? "\n5. STATUS UPDATE RESPONSE — Respond to what the user shared. Connect their update to the task state. If their update implies tasks should be marked done, moved, or created, say so." : ""}
+
+Keep it tight. No fluff. Use Telegram-friendly formatting (bold with *, no underscores). Max ~400 words.`;
+
+  const report = await aiChat([
+    { role: "system", content: prompt },
+    { role: "user", content: statusUpdate ? `My status update: ${statusUpdate}` : "Give me a full status report." },
+  ], model);
+
+  return report.trim();
 }
 
 export async function deepProcessDump(

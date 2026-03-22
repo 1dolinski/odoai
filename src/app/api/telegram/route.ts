@@ -6,7 +6,7 @@ import { sendMessage, sendMessageWithButtons, getChatAdmins, reactToMessage, rea
 import { chat as aiChat, chatWithUsage } from "@/lib/openrouter";
 import { webSearch } from "@/lib/search";
 import { qmdSearch, qmdStatus, formatQMDResults, writePeopleSnapshot } from "@/lib/knowledge";
-import { buildSystemPrompt, maybeUpdateContext, autoExtract, extractPersonInfo, deepProcessDump, maybeProactiveSuggest } from "@/lib/brain";
+import { buildSystemPrompt, maybeUpdateContext, autoExtract, extractPersonInfo, deepProcessDump, maybeProactiveSuggest, generateStatusReport } from "@/lib/brain";
 import Chat from "@/models/Chat";
 import Task from "@/models/Task";
 import Job from "@/models/Job";
@@ -291,28 +291,11 @@ async function cmdActive(chatId: number, userId: string, username: string | unde
   );
 }
 
-async function cmdStatus(chatId: number) {
-  const [chatDoc, taskCount, personCount, activeJobs, qmdStatusText] = await Promise.all([
-    Chat.findOne({ telegramChatId: String(chatId) }),
-    Task.countDocuments({ telegramChatId: String(chatId), status: { $ne: "done" } }),
-    Person.countDocuments({ telegramChatId: String(chatId) }),
-    Job.find({ telegramChatId: String(chatId), status: "active" }),
-    qmdStatus(),
-  ]);
+async function cmdStatus(chatId: number, statusUpdate?: string) {
+  const cid = String(chatId);
 
-  const mode = chatDoc?.mode || "passive";
-  let msg = `*📊 Status*\n\n`;
-  msg += `*Mode:* ${mode === "active" ? "🟢 Active" : "👁 Passive"}\n`;
-  msg += `*Active tasks:* ${taskCount}\n`;
-  msg += `*People tracked:* ${personCount}\n`;
-  if (chatDoc?.contextSummary) msg += `*Context:* Yes (${chatDoc.messages?.length || 0} messages observed)\n`;
-  msg += `*QMD:* ${qmdStatusText.substring(0, 100)}\n`;
-  if (activeJobs.length) {
-    msg += `\n*Active Jobs:*\n`;
-    for (const j of activeJobs) msg += `• ${j.title}\n`;
-  }
-
-  return sendMessage(chatId, msg);
+  const report = await generateStatusReport(cid, statusUpdate || undefined);
+  return sendMessage(chatId, report);
 }
 
 async function cmdDashboard(chatId: number) {
@@ -868,7 +851,7 @@ export async function POST(req: NextRequest) {
         case "/active":
           return ok(await cmdActive(chatId, userId, username, args));
         case "/status":
-          return ok(await cmdStatus(chatId));
+          return ok(await cmdStatus(chatId, args));
         case "/dashboard":
           return ok(await cmdDashboard(chatId));
       }
