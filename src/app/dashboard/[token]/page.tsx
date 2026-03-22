@@ -321,7 +321,7 @@ function isMeatPotatoesTask(t: { title: string; description?: string }): boolean
   return /\b(dm|dms|direct message|outreach|email|comment|comments|reply|post|tweet|thread|reel|stor(y|ies)|carousel|image|images|video|shoot|brand|brands|caption|engagement|follow[\s-]?up|send|pitch|slide|deck|landing|generate)\b/.test(hay);
 }
 
-type WorkspaceZoom = "house" | "now" | "tasks" | "people" | "blockers" | "opportunities";
+type WorkspaceZoom = "house" | "now" | "tasks" | "people" | "blockers" | "opportunities" | "forecast";
 
 const WORKSPACE_ZOOM_LEVELS: { id: WorkspaceZoom; label: string; hint: string }[] = [
   { id: "house", label: "House", hint: "North star, initiatives, and pulse — then drill down with Zoom." },
@@ -330,10 +330,11 @@ const WORKSPACE_ZOOM_LEVELS: { id: WorkspaceZoom; label: string; hint: string }[
   { id: "people", label: "People", hint: "Per-person load and intentions" },
   { id: "blockers", label: "Blockers", hint: "Stalled, blocked, waiting-on" },
   { id: "opportunities", label: "Opportunities", hint: "Initiatives, offers, feed signals" },
+  { id: "forecast", label: "Future", hint: "See your chat future — what winning looks like" },
 ];
 
 function parseWorkspaceZoom(raw: string | null): WorkspaceZoom {
-  if (raw === "house" || raw === "now" || raw === "tasks" || raw === "people" || raw === "blockers" || raw === "opportunities") return raw;
+  if (raw === "house" || raw === "now" || raw === "tasks" || raw === "people" || raw === "blockers" || raw === "opportunities" || raw === "forecast") return raw;
   return "tasks";
 }
 
@@ -556,6 +557,45 @@ export default function DashboardPage() {
   const [actionForm, setActionForm] = useState({ type: "todo" as string, title: "", dueDate: "", personName: "", personRole: "", statusTaskSearch: "", statusNewStatus: "done" as string, dumpText: "", dumpCategory: "general", dumpSubject: "", taskPeople: [] as string[], taskInitiative: "" });
   const [actionSaving, setActionSaving] = useState(false);
   const [actionDone, setActionDone] = useState("");
+
+  const [forecastGuidance, setForecastGuidance] = useState("");
+  const [forecastLoading, setForecastLoading] = useState(false);
+  const [forecastResult, setForecastResult] = useState<{
+    guidance: string;
+    horizons: {
+      horizon: string;
+      label: string;
+      messages: { role: "user" | "assistant"; author: string; content: string; timestamp: string }[];
+      keyMilestones: string[];
+      score: number;
+    }[];
+    iterations: number;
+    generatedAt: string;
+  } | null>(null);
+  const [forecastHorizon, setForecastHorizon] = useState<"1d" | "3d" | "7d" | "30d">("1d");
+  const [forecastError, setForecastError] = useState<string | null>(null);
+
+  const runForecastAction = useCallback(async () => {
+    if (!token) return;
+    setForecastLoading(true);
+    setForecastError(null);
+    try {
+      const res = await fetch("/api/forecast", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token, guidance: forecastGuidance, iterations: 2 }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: "Request failed" }));
+        throw new Error(err.error || `HTTP ${res.status}`);
+      }
+      setForecastResult(await res.json());
+    } catch (err) {
+      setForecastError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setForecastLoading(false);
+    }
+  }, [token, forecastGuidance]);
 
   const [showWorkMode, setShowWorkMode] = useState(false);
   const [workModePersonId, setWorkModePersonId] = useState<string>("");
@@ -5821,6 +5861,135 @@ export default function DashboardPage() {
             ) : (
               <p className="text-sm text-gray-500">No feed items matched opportunity-style heuristics. Enable AI feed or add initiatives/offers.</p>
             )}
+          </section>
+        )}
+
+        {workspaceZoom === "forecast" && (
+          <section className="mb-10 rounded-2xl border border-violet-200/80 bg-gradient-to-br from-violet-50/30 via-white to-indigo-50/20 shadow-sm overflow-hidden">
+            <div className="px-4 py-6 sm:px-6 sm:py-8 bg-gradient-to-br from-slate-900 via-indigo-950 to-violet-950 text-white">
+              <h2 className="text-xl sm:text-2xl font-bold tracking-tight mb-1">Chat Future</h2>
+              <p className="text-sm text-white/60">See what a winning conversation looks like for your team.</p>
+            </div>
+
+            <div className="p-4 sm:p-6">
+              <div className="mb-5">
+                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Guide the future</label>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={forecastGuidance}
+                    onChange={(e) => setForecastGuidance(e.target.value)}
+                    placeholder="e.g. Land first paying client, close the deal with Sarah, ship the MVP..."
+                    className="flex-1 rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-violet-500/30 focus:border-violet-400"
+                    onKeyDown={(e) => { if (e.key === "Enter" && !forecastLoading) runForecastAction(); }}
+                  />
+                  <button
+                    type="button"
+                    onClick={runForecastAction}
+                    disabled={forecastLoading}
+                    className="px-5 py-2.5 rounded-xl bg-violet-600 text-white text-sm font-semibold hover:bg-violet-500 disabled:opacity-50 disabled:cursor-wait transition-all shadow-sm"
+                  >
+                    {forecastLoading ? (
+                      <span className="flex items-center gap-2">
+                        <Spinner className="h-3.5 w-3.5" />
+                        Generating…
+                      </span>
+                    ) : "See Future"}
+                  </button>
+                </div>
+                {forecastError && <p className="text-xs text-red-600 mt-2">{forecastError}</p>}
+              </div>
+
+              {forecastResult && (
+                <>
+                  <div className="flex gap-1 mb-4 bg-gray-100 rounded-xl p-1">
+                    {(["1d", "3d", "7d", "30d"] as const).map((h) => {
+                      const hr = forecastResult.horizons.find((x) => x.horizon === h);
+                      return (
+                        <button
+                          key={h}
+                          type="button"
+                          onClick={() => setForecastHorizon(h)}
+                          className={`flex-1 px-3 py-2 rounded-lg text-xs font-semibold transition-all ${
+                            forecastHorizon === h
+                              ? "bg-white text-violet-700 shadow-sm"
+                              : "text-gray-500 hover:text-gray-700"
+                          }`}
+                        >
+                          {hr?.label || h}
+                          {hr && <span className="ml-1 text-[10px] font-normal opacity-60">{hr.score}/10</span>}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {(() => {
+                    const active = forecastResult.horizons.find((x) => x.horizon === forecastHorizon);
+                    if (!active) return <p className="text-sm text-gray-400">No forecast for this horizon.</p>;
+                    return (
+                      <div>
+                        {active.keyMilestones.length > 0 && (
+                          <div className="mb-4 flex flex-wrap gap-1.5">
+                            {active.keyMilestones.map((m, i) => (
+                              <span key={i} className="inline-flex items-center gap-1 bg-violet-100 text-violet-800 text-[11px] font-medium px-2.5 py-1 rounded-full">
+                                <span className="w-1 h-1 rounded-full bg-violet-500" />
+                                {m}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                        <div className="space-y-1">
+                          {active.messages.map((msg, i) => (
+                            <div key={i} className={`flex gap-2.5 ${msg.role === "assistant" ? "flex-row-reverse" : ""}`}>
+                              <div
+                                className={`max-w-[80%] rounded-2xl px-3.5 py-2 text-sm ${
+                                  msg.role === "assistant"
+                                    ? "bg-violet-600 text-white rounded-tr-md"
+                                    : "bg-gray-100 text-gray-900 rounded-tl-md"
+                                }`}
+                              >
+                                <div className={`text-[10px] font-semibold mb-0.5 ${msg.role === "assistant" ? "text-violet-200" : "text-gray-500"}`}>
+                                  {msg.author} · {msg.timestamp}
+                                </div>
+                                <p className="whitespace-pre-wrap leading-relaxed">{msg.content}</p>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                        <div className="mt-4 pt-3 border-t border-gray-100 flex items-center justify-between">
+                          <span className="text-[10px] text-gray-400">{active.messages.length} messages · score {active.score}/10 · {forecastResult.iterations} iterations</span>
+                          <button
+                            type="button"
+                            onClick={runForecastAction}
+                            disabled={forecastLoading}
+                            className="text-xs font-medium text-violet-600 hover:text-violet-800 disabled:opacity-50"
+                          >
+                            Regenerate
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </>
+              )}
+
+              {!forecastResult && !forecastLoading && (
+                <div className="text-center py-10">
+                  <div className="text-3xl mb-3">🔮</div>
+                  <p className="text-sm text-gray-500 max-w-sm mx-auto">
+                    Enter your direction above and hit &ldquo;See Future&rdquo; to generate what a winning conversation looks like at 1 day, 3 days, 1 week, and 1 month.
+                  </p>
+                </div>
+              )}
+
+              {forecastLoading && !forecastResult && (
+                <div className="text-center py-10">
+                  <Spinner className="h-6 w-6 text-violet-500 mx-auto mb-3" />
+                  <p className="text-sm text-gray-500">Generating your chat future across all horizons…</p>
+                  <p className="text-[11px] text-gray-400 mt-1">This takes 30-60 seconds (running iterations for each time horizon)</p>
+                </div>
+              )}
+            </div>
           </section>
         )}
 
