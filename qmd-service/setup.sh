@@ -12,7 +12,7 @@ qmd collection add "$KNOWLEDGE_DIR" --name odoai || true
 echo "==> Adding context"
 qmd context add qmd://odoai "odoai Telegram bot knowledge base — dumps, context summaries, people, tasks" || true
 
-echo "==> Initial index"
+echo "==> Light index (no embedding at startup to avoid OOM)"
 qmd update || true
 
-echo "==> Setup complete"
+echo "==> Setup complete — embedding will run on first ingest"

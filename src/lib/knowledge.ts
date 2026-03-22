@@ -3,12 +3,20 @@ const QMD_API_KEY = process.env.QMD_API_KEY || "";
 
 // ---- QMD HTTP client ----
 
+let qmdDown = false;
+let qmdDownUntil = 0;
+
 async function qmdFetch(path: string, body?: unknown) {
+  // Circuit breaker: if QMD failed recently, skip for 60s
+  if (qmdDown && Date.now() < qmdDownUntil) {
+    throw new Error("QMD circuit open — skipping");
+  }
+
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (QMD_API_KEY) headers["Authorization"] = `Bearer ${QMD_API_KEY}`;
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 8000);
+  const timeout = setTimeout(() => controller.abort(), 4000);
   try {
     const res = await fetch(`${QMD_URL}${path}`, {
       method: body ? "POST" : "GET",
@@ -23,10 +31,14 @@ async function qmdFetch(path: string, body?: unknown) {
       throw new Error(`QMD ${path} error ${res.status}: ${text}`);
     }
 
+    qmdDown = false;
     return res.json();
   } catch (e) {
     clearTimeout(timeout);
-    if ((e as Error).name === "AbortError") throw new Error(`QMD ${path} timeout (>15s)`);
+    // Trip circuit breaker on timeout
+    qmdDown = true;
+    qmdDownUntil = Date.now() + 60000;
+    if ((e as Error).name === "AbortError") throw new Error(`QMD ${path} timeout`);
     throw e;
   }
 }
@@ -149,8 +161,7 @@ export async function qmdSearch(query: string, limit = 8): Promise<QMDResult[]> 
       score: typeof r.score === "number" ? r.score : 0.5,
       context: r.context as string | undefined,
     }));
-  } catch (err) {
-    console.error("QMD search error:", err);
+  } catch {
     return [];
   }
 }

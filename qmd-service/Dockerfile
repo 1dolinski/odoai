@@ -23,4 +23,4 @@ RUN mkdir -p /data/knowledge
 
 EXPOSE 8181
 
-CMD ["sh", "-c", "./setup.sh && node server.js"]
+CMD ["sh", "-c", "./setup.sh && node --max-old-space-size=512 server.js"]
