@@ -1137,6 +1137,48 @@ If you agree the current lane is fine, set suggestedLane, suggestedReason, and s
       });
 
       const memory = String(chatDoc.dashboardCoachMemory || "").slice(0, 3500);
+
+      const topTasks = await Task.find({ telegramChatId: chatId, status: { $in: ["todo", "upcoming"] } })
+        .sort({ priorityScore: -1, createdAt: -1 })
+        .limit(12)
+        .select({ title: 1, status: 1, actionLane: 1, dueDate: 1, people: 1, priorityScore: 1, momentum: 1, blockedBy: 1, revenueEstimate: 1 })
+        .lean();
+      const taskSnapshot = topTasks.length
+        ? topTasks.map((t) => {
+            const row = t as { title: string; status: string; actionLane?: string; dueDate?: Date; people?: string[]; priorityScore?: number; momentum?: string; blockedBy?: string; revenueEstimate?: string };
+            let line = `- [${row.status}] ${row.title}`;
+            if (row.actionLane) line += ` {${row.actionLane}}`;
+            if (row.dueDate) line += ` due:${new Date(row.dueDate).toISOString().split("T")[0]}`;
+            if (row.people?.length) line += ` @${row.people.join(",")}`;
+            if (row.priorityScore) line += ` p:${row.priorityScore}`;
+            if (row.momentum && row.momentum !== "new") line += ` (${row.momentum})`;
+            if (row.blockedBy) line += ` BLOCKED:${row.blockedBy}`;
+            if (row.revenueEstimate) line += ` rev:${row.revenueEstimate}`;
+            return line;
+          }).join("\n")
+        : "(no active tasks)";
+
+      const leveragePlay = chatDoc.leveragePlay || "";
+      const priorityNarrative = chatDoc.priorityNarrative || "";
+      const contextSummary = (chatDoc.contextSummary || "").slice(0, 600);
+      const guidance = chatDoc.guidance || "";
+
+      const activeOffers = (chatDoc.offers || [])
+        .filter((o: { status: string }) => o.status !== "rejected")
+        .slice(0, 5)
+        .map((o: { name: string; status: string; confidenceScore?: number; whyNow?: string; chatSignals?: string[] }) => {
+          let line = `- ${o.name} [${o.status}] conf:${o.confidenceScore ?? "?"}`;
+          if (o.whyNow) line += ` — ${o.whyNow.slice(0, 80)}`;
+          if (o.chatSignals?.length) line += ` | signals: ${o.chatSignals.slice(0, 2).join("; ")}`;
+          return line;
+        }).join("\n");
+
+      const blockedTasks = topTasks.filter((t) => (t as { blockedBy?: string }).blockedBy || (t as { momentum?: string }).momentum === "blocked");
+      const overdueTasks = topTasks.filter((t) => {
+        const d = (t as { dueDate?: Date }).dueDate;
+        return d && new Date(d) < now;
+      });
+
       const userBlock = `CURRENT_TIME_ET: ${et}
 DASHBOARD_VIEW:
 - workspace zoom: ${JSON.stringify((vc as { workspaceZoom?: string }).workspaceZoom)}
@@ -1153,6 +1195,26 @@ OTHER:
 - now-queue estimate: ${(vc as { nowQueueCount?: number }).nowQueueCount ?? "?"}
 - blocker-style tasks: ${(vc as { blockerCount?: number }).blockerCount ?? "?"}
 - last prioritize: ${(vc as { lastPrioritizedAt?: string | null }).lastPrioritizedAt || "never"}
+- overdue tasks: ${overdueTasks.length}
+- blocked tasks: ${blockedTasks.length}
+
+LEVERAGE_PLAY (the team's current highest-leverage direction):
+${leveragePlay || "(not set)"}
+
+PRIORITY_NARRATIVE:
+${priorityNarrative || "(not set)"}
+
+CONTEXT (what the team is doing):
+${contextSummary || "(no context yet)"}
+
+TEAM_GUIDANCE:
+${guidance || "(none)"}
+
+TOP_TASKS (highest priority active tasks — THIS IS WHAT MATTERS):
+${taskSnapshot}
+
+ACTIVE_OFFERS:
+${activeOffers || "(none)"}
 
 RECENT_ACTIVITY:
 ${actLines || "(none)"}
@@ -1167,27 +1229,40 @@ ${memory || "(none yet)"}`;
         [
           {
             role: "system",
-            content: `You are the conversational guide on a team ops dashboard (tasks, people, initiatives, offers, zoom levels). Write in second person ("you"). Warm, direct, no filler.
+            content: `You are a sharp, opinionated business coach on a team ops dashboard. You see their ACTUAL tasks, offers, leverage play, and context. Be SPECIFIC — name tasks, offers, people, deadlines. Never say generic things like "review your tasks" or "focus on what matters."
 
-If RECENT_ACTIVITY or LAST_MOVES_DONE says they were omitted, do not invent recent completions — stay forward-looking.
+WRONG: "Review your task backlog and prioritize what's important."
+RIGHT: "The Colcci pitch deck is due Thursday and you haven't started. That's your $10K deal — do that first."
+
+WRONG: "Consider what needs to get done this week."
+RIGHT: "3 tasks are overdue. The MotoGP display artwork blocks Thursday's activation — knock it out now."
+
+Rules:
+- Reference SPECIFIC tasks, offers, and people by name.
+- Call out overdue/blocked items directly.
+- Connect tasks to revenue/offers — "this task feeds your $10K Colcci deal."
+- If they have a leverage play, tie your advice to it.
+- Be blunt about what to drop, delegate, or do RIGHT NOW.
+- Time-aware (ET): morning=plan the day's attack, midday=execute highest-leverage item, evening=clear blockers for tomorrow.
+- If RECENT_ACTIVITY or LAST_MOVES_DONE says they were omitted, do not invent recent completions.
 
 Return ONLY valid JSON:
 {
-  "viewTitle": "short headline, 4-10 words",
-  "viewExplained": "1-2 sentences: what this view is for.",
-  "guidance": "2-5 sentences: how to work here; use time of day in ET (morning=plan/review, midday=execute, late afternoon=ship, evening=wrap); reference recent activity when it helps.",
-  "recommendedAction": "short imperative, e.g. Classify tasks into lanes",
-  "recommendedDetail": "one sentence why that next step fits now",
+  "viewTitle": "punchy headline naming the ONE thing, 4-8 words",
+  "viewExplained": "1 sentence connecting this view to their actual situation.",
+  "guidance": "2-4 sentences: specific, named tasks/offers/people. What to do NOW and why it matters for revenue/momentum. No generic advice.",
+  "recommendedAction": "specific imperative naming the task/offer, e.g. Finish Colcci pitch deck",
+  "recommendedDetail": "why this specific action matters NOW — tie to deadline, revenue, or blocker",
   "suggestedExecuteKind": "prioritize" | "lanes" | "messaging_drafts" | "none"
 }
 
-suggestedExecuteKind — pick ONE for the primary CTA the dashboard will show:
-- "prioritize" if the best next step is to score/rank tasks, analyze priorities, momentum, impact, or "what to do first".
-- "lanes" if the best next step is bucketing tasks into do/delegate/automate/delete or cleaning lane hygiene.
-- "messaging_drafts" if the best next step is DMs, emails, outreach, follow-ups, pinging people, or writing to someone.
-- "none" if there is no clear one-click AI action (e.g. purely reflective advice) or the step is manual-only.
+suggestedExecuteKind — pick ONE for the primary CTA:
+- "prioritize" if tasks need scoring/ranking (many unscored, stale priorities, unclear what's first).
+- "lanes" if tasks need triage into do/delegate/automate/delete.
+- "messaging_drafts" if the highest-leverage move is outreach, follow-ups, or pinging someone.
+- "none" if the best advice is a specific manual action.
 
-If both prioritize and lanes could apply, prefer "prioritize" unless the copy is explicitly about the four lanes.`,
+Prefer "messaging_drafts" when there are outreach/communication tasks that could close deals. Prefer "none" when you can name a specific task they should just go do.`,
           },
           { role: "user", content: userBlock },
         ],
