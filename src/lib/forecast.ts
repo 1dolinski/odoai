@@ -23,7 +23,6 @@ async function forecastChat(messages: { role: string; content: string }[], model
   }
 }
 
-import { qmdSearch, formatQMDResults } from "@/lib/knowledge";
 import { pickNorthStarSnapshot, type NorthStarSnapshot } from "@/lib/northStarHistory";
 import Chat from "@/models/Chat";
 import Task from "@/models/Task";
@@ -120,14 +119,11 @@ async function gatherContext(chatId: string, userGuidance: string): Promise<Full
   const offerResearchLog = (chatDoc.offerResearchLog || []).slice(-5);
 
   let qmdMemory = "";
-  if (process.env.QMD_URL && process.env.QMD_URL !== "http://localhost:8181") {
-    try {
-      const qmdPromise = qmdSearch(userGuidance || chatDoc.leveragePlay || chatDoc.contextSummary || "next steps", 8);
-      const timeout = new Promise<never>((_, reject) => setTimeout(() => reject(new Error("qmd_skip")), 3000));
-      const results = await Promise.race([qmdPromise, timeout]);
-      if (results.length) qmdMemory = formatQMDResults(results);
-    } catch { /* QMD unavailable — skip silently */ }
-  }
+  try {
+    const { qmdTextSearch, formatQMDResults } = await import("@/lib/knowledge");
+    const results = await qmdTextSearch(userGuidance || chatDoc.leveragePlay || chatDoc.contextSummary || "next steps", 8);
+    if (results.length) qmdMemory = formatQMDResults(results);
+  } catch { /* QMD unavailable */ }
 
   return {
     chatTitle: chatDoc.chatTitle || "Team Chat",

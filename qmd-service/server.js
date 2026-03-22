@@ -211,4 +211,15 @@ const server = createServer(async (req, res) => {
 server.listen(PORT, () => {
   console.log(`QMD service listening on :${PORT}`);
   console.log(`Knowledge dir: ${KNOWLEDGE_DIR}`);
+
+  // Run embedding 30s after startup so healthcheck passes first
+  setTimeout(async () => {
+    console.log("[qmd] Starting deferred embed (30s after boot)...");
+    try {
+      await exec(QMD_BIN, ["embed"], { timeout: 600000 });
+      console.log("[qmd] Embedding complete — semantic search ready");
+    } catch (err) {
+      console.error("[qmd] Embed failed (will retry on next ingest):", err.message);
+    }
+  }, 30000);
 });

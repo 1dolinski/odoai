@@ -146,6 +146,23 @@ export interface QMDResult {
   context?: string;
 }
 
+export async function qmdTextSearch(query: string, limit = 8): Promise<QMDResult[]> {
+  try {
+    const data = await qmdFetch("/search", { query, limit });
+    const results = data.results || data || [];
+    if (!Array.isArray(results)) return [];
+    return results.map((r: Record<string, unknown>) => ({
+      title: (r.title as string) || "",
+      displayPath: (r.displayPath as string) || (r.path as string) || "",
+      snippet: (r.snippet as string) || (r.content as string) || "",
+      score: typeof r.score === "number" ? r.score : 0.5,
+      context: r.context as string | undefined,
+    }));
+  } catch {
+    return [];
+  }
+}
+
 export async function qmdSearch(query: string, limit = 8): Promise<QMDResult[]> {
   try {
     const data = await qmdFetch("/query", { query, limit });
