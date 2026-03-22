@@ -1,4 +1,28 @@
-import { chat as aiChat } from "@/lib/openrouter";
+const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY!;
+
+async function forecastChat(messages: { role: string; content: string }[], model: string): Promise<string> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 180000);
+  try {
+    const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ model, messages, max_tokens: 8000 }),
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    if (!res.ok) throw new Error(`OpenRouter error: ${await res.text()}`);
+    const data = await res.json();
+    return data.choices?.[0]?.message?.content || "";
+  } catch (e) {
+    clearTimeout(timeout);
+    throw e;
+  }
+}
+
 import { qmdSearch, formatQMDResults } from "@/lib/knowledge";
 import { pickNorthStarSnapshot, type NorthStarSnapshot } from "@/lib/northStarHistory";
 import Chat from "@/models/Chat";
@@ -398,10 +422,12 @@ Rules for valid JSON:
 - Escape any double quotes inside content strings with backslash
 - No comments, no ellipsis (...), no placeholders`;
 
-  const raw = await aiChat([{ role: "user", content: prompt }], model);
+  const useModel = (model || "moonshotai/kimi-k2.5").trim();
+  const raw = await forecastChat([{ role: "user", content: prompt }], useModel);
 
-  let parsed: { messages: SimulatedMessage[]; keyMilestones: string[]; score: number };
-  parsed = repairAndParseJSON(raw);
+  if (!raw) throw new Error("Model returned empty response — may have hit token limit");
+
+  const parsed = repairAndParseJSON(raw);
 
   return {
     horizon,
