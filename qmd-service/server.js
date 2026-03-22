@@ -137,7 +137,7 @@ const server = createServer(async (req, res) => {
       }
 
       const args = ["search", query, "-n", String(limit || 8), "--json"];
-      const { stdout } = await exec(QMD_BIN, args);
+      const { stdout } = await exec(QMD_BIN, args, { timeout: 12000 });
       const results = JSON.parse(stdout);
       json(res, 200, { results });
       return;
@@ -157,7 +157,7 @@ const server = createServer(async (req, res) => {
       }
 
       const args = ["query", query, "-n", String(limit || 8), "--json"];
-      const { stdout } = await exec(QMD_BIN, args);
+      const { stdout } = await exec(QMD_BIN, args, { timeout: 12000 });
       const results = JSON.parse(stdout);
       json(res, 200, { results });
       return;
@@ -174,7 +174,7 @@ const server = createServer(async (req, res) => {
     // Status — GET /status
     if (url.pathname === "/status" && req.method === "GET") {
       try {
-        const { stdout } = await exec(QMD_BIN, ["status"]);
+        const { stdout } = await exec(QMD_BIN, ["status"], { timeout: 5000 });
         json(res, 200, { status: stdout.trim() });
       } catch {
         json(res, 200, { status: "QMD not initialized yet" });

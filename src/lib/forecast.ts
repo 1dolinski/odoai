@@ -120,13 +120,14 @@ async function gatherContext(chatId: string, userGuidance: string): Promise<Full
   const offerResearchLog = (chatDoc.offerResearchLog || []).slice(-5);
 
   let qmdMemory = "";
-  const searchQuery = userGuidance || chatDoc.leveragePlay || chatDoc.contextSummary || "business strategy next steps";
-  try {
-    const qmdPromise = qmdSearch(searchQuery, 10);
-    const timeout = new Promise<never>((_, reject) => setTimeout(() => reject(new Error("qmd_timeout")), 5000));
-    const results = await Promise.race([qmdPromise, timeout]);
-    if (results.length) qmdMemory = formatQMDResults(results);
-  } catch { /* QMD unavailable or slow — continue without */ }
+  if (process.env.QMD_URL && process.env.QMD_URL !== "http://localhost:8181") {
+    try {
+      const qmdPromise = qmdSearch(userGuidance || chatDoc.leveragePlay || chatDoc.contextSummary || "next steps", 8);
+      const timeout = new Promise<never>((_, reject) => setTimeout(() => reject(new Error("qmd_skip")), 3000));
+      const results = await Promise.race([qmdPromise, timeout]);
+      if (results.length) qmdMemory = formatQMDResults(results);
+    } catch { /* QMD unavailable — skip silently */ }
+  }
 
   return {
     chatTitle: chatDoc.chatTitle || "Team Chat",
@@ -441,24 +442,21 @@ Rules for valid JSON:
 export async function runForecast(
   chatId: string,
   userGuidance: string,
-  { iterations = 2, horizons = ["1d", "3d", "7d", "30d"] as Horizon[], model }: { iterations?: number; horizons?: Horizon[]; model?: string } = {},
+  { iterations = 1, horizons = ["1d", "3d", "7d", "30d"] as Horizon[], model }: { iterations?: number; horizons?: Horizon[]; model?: string } = {},
 ): Promise<ForecastResult> {
   const ctx = await gatherContext(chatId, userGuidance);
 
-  const results: HorizonForecast[] = [];
-
-  for (const horizon of horizons) {
+  const runHorizon = async (horizon: Horizon): Promise<HorizonForecast> => {
     let best: HorizonForecast | undefined;
-
     for (let i = 0; i < iterations; i++) {
       const attempt = await generateForecast(ctx, userGuidance, horizon, best, model);
-      if (!best || attempt.score > best.score) {
-        best = attempt;
-      }
+      if (!best || attempt.score > best.score) best = attempt;
     }
+    return best!;
+  };
 
-    results.push(best!);
-  }
+  // Run all horizons in parallel
+  const results = await Promise.all(horizons.map(runHorizon));
 
   return {
     guidance: userGuidance,
