@@ -1,9 +1,38 @@
 export const maxDuration = 300;
 
-import { NextRequest } from "next/server";
+import { NextRequest, NextResponse, after } from "next/server";
 import { connectDB } from "@/lib/mongodb";
 import Chat from "@/models/Chat";
+import Forecast from "@/models/Forecast";
 import { runForecast, type Horizon } from "@/lib/forecast";
+
+function normalizeForecast(f: Record<string, unknown>) {
+  const horizons = (f.horizons as unknown[]) || [];
+  const status =
+    (f.status as string) || (horizons.length > 0 ? "complete" : "running");
+  const legacyModel = f.model as string | undefined;
+  const llmModel = (f.llmModel as string | undefined) || legacyModel || "";
+  const { model: _drop, ...rest } = f;
+  return { ...rest, llmModel, model: llmModel, status };
+}
+
+export async function GET(req: NextRequest) {
+  await connectDB();
+  const token = req.nextUrl.searchParams.get("token");
+  if (!token) return NextResponse.json({ error: "token required" }, { status: 400 });
+
+  const chat = await Chat.findOne({ dashboardToken: token }).lean();
+  if (!chat) return NextResponse.json({ error: "invalid token" }, { status: 404 });
+
+  const forecasts = await Forecast.find({ telegramChatId: chat.telegramChatId })
+    .sort({ createdAt: -1 })
+    .limit(20)
+    .lean();
+
+  return NextResponse.json({
+    forecasts: forecasts.map((f) => normalizeForecast(f as unknown as Record<string, unknown>)),
+  });
+}
 
 export async function POST(req: NextRequest) {
   await connectDB();
@@ -16,48 +45,107 @@ export async function POST(req: NextRequest) {
     iterations?: number;
   };
 
-  if (!token) return new Response(JSON.stringify({ error: "token required" }), { status: 400, headers: { "Content-Type": "application/json" } });
+  if (!token) return NextResponse.json({ error: "token required" }, { status: 400 });
 
   const chat = await Chat.findOne({ dashboardToken: token }).lean();
-  if (!chat) return new Response(JSON.stringify({ error: "invalid token" }), { status: 404, headers: { "Content-Type": "application/json" } });
+  if (!chat) return NextResponse.json({ error: "invalid token" }, { status: 404 });
 
-  const encoder = new TextEncoder();
+  const useModel = (chat.aiModel || "moonshotai/kimi-k2.5").trim();
+  const iters = Math.min(iterations || 1, 4);
+  const hz = horizons || (["1d", "3d", "7d", "30d"] as Horizon[]);
 
-  const stream = new ReadableStream({
-    async start(controller) {
-      const send = (event: string, data: unknown) => {
-        controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
-      };
+  const pending = await Forecast.create({
+    telegramChatId: chat.telegramChatId,
+    guidance: guidance || "",
+    horizons: [],
+    iterations: iters,
+    llmModel: useModel,
+    status: "running",
+    generatedAt: new Date(),
+    lastLog: "Queued on server",
+    progressLogs: ["Job started — you can close this tab; it will finish in the background."],
+  });
 
-      const log = (msg: string) => send("log", { msg, ts: Date.now() });
+  const forecastId = pending._id.toString();
+  const telegramChatId = chat.telegramChatId;
+  const userGuidance = guidance || "";
+  const aiModel = chat.aiModel || undefined;
 
-      log("Connected to forecast API");
-
+  after(async () => {
+    const id = forecastId;
+    const pushLog = async (msg: string) => {
       try {
-        const result = await runForecast(chat.telegramChatId, guidance || "", {
-          iterations: Math.min(iterations || 1, 4),
-          horizons: horizons || ["1d", "3d", "7d", "30d"],
-          model: chat.aiModel || undefined,
-          log,
-        });
-
-        send("result", result);
-        log("Forecast complete");
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        log(`Error: ${msg}`);
-        send("error", { error: msg });
-      } finally {
-        controller.close();
+        await Forecast.updateOne(
+          { _id: id },
+          {
+            $set: { lastLog: msg },
+            $push: { progressLogs: { $each: [msg], $slice: -100 } },
+          },
+        );
+      } catch {
+        /* ignore log write failures */
       }
-    },
+    };
+
+    try {
+      await connectDB();
+      await pushLog("Background worker: gathering context & calling LLM…");
+
+      const result = await runForecast(telegramChatId, userGuidance, {
+        iterations: iters,
+        horizons: hz,
+        model: aiModel,
+        log: pushLog,
+      });
+
+      await Forecast.updateOne(
+        { _id: id },
+        {
+          $set: {
+            status: "complete",
+            horizons: result.horizons,
+            iterations: result.iterations,
+            generatedAt: result.generatedAt,
+            lastLog: "Forecast complete",
+          },
+          $push: { progressLogs: { $each: ["Saved to history."], $slice: -100 } },
+        },
+      );
+    } catch (err) {
+      const e = err instanceof Error ? err : new Error(String(err));
+      const msg = e.message;
+      const stack = e.stack?.slice(0, 8000) || "";
+      const lines = [
+        "--- forecast job failed ---",
+        `Error: ${msg}`,
+        ...(stack ? [`Stack:\n${stack}`] : []),
+        `Time: ${new Date().toISOString()}`,
+      ];
+      try {
+        await connectDB();
+        await Forecast.updateOne(
+          { _id: id },
+          {
+            $set: {
+              status: "failed",
+              errorMessage: msg,
+              errorStack: stack || undefined,
+              lastLog: msg,
+            },
+            $push: { progressLogs: { $each: lines, $slice: -100 } },
+          },
+        );
+      } catch {
+        /* ignore */
+      }
+    }
   });
 
-  return new Response(stream, {
-    headers: {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache",
-      Connection: "keep-alive",
-    },
-  });
+  const obj = pending.toObject();
+  const forecast = normalizeForecast({
+    ...obj,
+    _id: forecastId,
+  } as unknown as Record<string, unknown>);
+
+  return NextResponse.json({ forecastId, forecast });
 }

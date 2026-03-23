@@ -1,5 +1,33 @@
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY!;
 
+function summarizeOpenRouterBody(data: Record<string, unknown>): string {
+  const choices = data.choices as unknown[] | undefined;
+  const choice = (choices?.[0] as Record<string, unknown> | undefined) ?? undefined;
+  const msg = choice?.message as Record<string, unknown> | undefined;
+  const usage = data.usage as Record<string, unknown> | undefined;
+  const meta = {
+    http_model: data.model,
+    id: data.id,
+    finish_reason: choice?.finish_reason,
+    native_finish_reason: choice?.native_finish_reason,
+    refusal: msg?.refusal,
+    content_type: msg?.content === null ? "null" : typeof msg?.content,
+    content_len: typeof msg?.content === "string" ? msg.content.length : undefined,
+    usage: usage
+      ? {
+          prompt_tokens: usage.prompt_tokens,
+          completion_tokens: usage.completion_tokens,
+          total_tokens: usage.total_tokens,
+        }
+      : undefined,
+  };
+  try {
+    return JSON.stringify(meta);
+  } catch {
+    return String(data);
+  }
+}
+
 async function forecastChat(messages: { role: string; content: string }[], model: string): Promise<string> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 180000);
@@ -14,11 +42,41 @@ async function forecastChat(messages: { role: string; content: string }[], model
       signal: controller.signal,
     });
     clearTimeout(timeout);
-    if (!res.ok) throw new Error(`OpenRouter error: ${await res.text()}`);
-    const data = await res.json();
-    return data.choices?.[0]?.message?.content || "";
+    const text = await res.text();
+    if (!res.ok) {
+      let detail = text.slice(0, 2000);
+      try {
+        const j = JSON.parse(text) as { error?: { message?: string; code?: string }; message?: string };
+        if (j.error?.message) detail = `${j.error.code || "error"}: ${j.error.message}`;
+        else if (j.message) detail = j.message;
+      } catch {
+        /* keep raw */
+      }
+      throw new Error(`OpenRouter HTTP ${res.status} (${model}): ${detail}`);
+    }
+    let data: Record<string, unknown>;
+    try {
+      data = JSON.parse(text) as Record<string, unknown>;
+    } catch {
+      throw new Error(`OpenRouter returned non-JSON (model ${model}): ${text.slice(0, 500)}`);
+    }
+    const choices = data.choices as unknown[] | undefined;
+    const choice = choices?.[0] as Record<string, unknown> | undefined;
+    const message = choice?.message as Record<string, unknown> | undefined;
+    const content = message?.content;
+    const str = typeof content === "string" ? content : "";
+    if (!str.trim()) {
+      throw new Error(
+        `Empty model output for ${model}. Provider meta: ${summarizeOpenRouterBody(data)}. ` +
+          `If completion_tokens=0, the prompt may exceed context or the model refused; try a smaller chat or another model.`,
+      );
+    }
+    return str;
   } catch (e) {
     clearTimeout(timeout);
+    if (e instanceof Error && e.name === "AbortError") {
+      throw new Error(`OpenRouter request timed out (180s) for model ${model}`);
+    }
     throw e;
   }
 }
@@ -422,9 +480,16 @@ Rules for valid JSON:
   const useModel = (model || "moonshotai/kimi-k2.5").trim();
   const raw = await forecastChat([{ role: "user", content: prompt }], useModel);
 
-  if (!raw) throw new Error("Model returned empty response — may have hit token limit");
-
-  const parsed = repairAndParseJSON(raw);
+  let parsed: { messages: SimulatedMessage[]; keyMilestones: string[]; score: number };
+  try {
+    parsed = repairAndParseJSON(raw);
+  } catch (parseErr) {
+    const hint = parseErr instanceof Error ? parseErr.message : String(parseErr);
+    const preview = raw.replace(/\s+/g, " ").slice(0, 400);
+    throw new Error(
+      `[${meta.label} / ${horizon}] JSON parse failed: ${hint}. First 400 chars of model output: ${preview}${raw.length > 400 ? "…" : ""}`,
+    );
+  }
 
   return {
     horizon,
@@ -435,40 +500,63 @@ Rules for valid JSON:
   };
 }
 
-export type ForecastLogger = (msg: string) => void;
+export type ForecastLogger = (msg: string) => void | Promise<void>;
 
 export async function runForecast(
   chatId: string,
   userGuidance: string,
   { iterations = 1, horizons = ["1d", "3d", "7d", "30d"] as Horizon[], model, log }: { iterations?: number; horizons?: Horizon[]; model?: string; log?: ForecastLogger } = {},
 ): Promise<ForecastResult> {
-  const emit = log || (() => {});
+  const emit = async (msg: string) => {
+    if (log) await Promise.resolve(log(msg));
+  };
 
-  emit("Gathering context from MongoDB...");
+  await emit("Gathering context from MongoDB...");
   const ctx = await gatherContext(chatId, userGuidance);
-  emit(`Context loaded — ${ctx.todoTasks.length} tasks, ${ctx.people.length} people, ${ctx.activities.length} activities, ${ctx.offers.length} offers`);
-  if (ctx.qmdMemory) emit("QMD semantic memory loaded");
-  else emit("QMD unavailable — proceeding without semantic memory");
-  emit(`Building context block (${ctx.recentMessages.length} messages, ${ctx.doneTasks.length} completed tasks)`);
+  await emit(`Context loaded — ${ctx.todoTasks.length} tasks, ${ctx.people.length} people, ${ctx.activities.length} activities, ${ctx.offers.length} offers`);
+  if (ctx.qmdMemory) await emit("QMD semantic memory loaded");
+  else await emit("QMD unavailable — proceeding without semantic memory");
+  await emit(`Building context block (${ctx.recentMessages.length} messages, ${ctx.doneTasks.length} completed tasks)`);
 
   const useModel = (model || "moonshotai/kimi-k2.5").trim();
-  emit(`Model: ${useModel}`);
-  emit(`Starting ${horizons.length} horizons in parallel: ${horizons.join(", ")}`);
+  await emit(`Model: ${useModel}`);
+  await emit(`Starting ${horizons.length} horizons in parallel: ${horizons.join(", ")}`);
 
   const runHorizon = async (horizon: Horizon): Promise<HorizonForecast> => {
     let best: HorizonForecast | undefined;
     for (let i = 0; i < iterations; i++) {
       const label = HORIZON_META[horizon].label;
-      emit(`[${label}] Iteration ${i + 1}/${iterations} — sending to LLM...`);
+      await emit(`[${label}] Iteration ${i + 1}/${iterations} — sending to LLM...`);
       const attempt = await generateForecast(ctx, userGuidance, horizon, best, model);
-      emit(`[${label}] Got ${attempt.messages.length} messages, score ${attempt.score}/10, ${attempt.keyMilestones.length} milestones`);
+      await emit(`[${label}] Got ${attempt.messages.length} messages, score ${attempt.score}/10, ${attempt.keyMilestones.length} milestones`);
       if (!best || attempt.score > best.score) best = attempt;
     }
     return best!;
   };
 
-  const results = await Promise.all(horizons.map(runHorizon));
-  emit(`All horizons complete — scores: ${results.map((r) => `${r.label}=${r.score}/10`).join(", ")}`);
+  const settled = await Promise.allSettled(horizons.map(runHorizon));
+  const failures: string[] = [];
+  const results: HorizonForecast[] = [];
+  for (let i = 0; i < settled.length; i++) {
+    const s = settled[i];
+    const hz = horizons[i];
+    if (s.status === "fulfilled") {
+      results.push(s.value);
+    } else {
+      const reason = s.reason;
+      const line =
+        reason instanceof Error
+          ? reason.message
+          : `[${hz}] ${String(reason)}`;
+      failures.push(line);
+    }
+  }
+  if (failures.length) {
+    await emit(`FAILED — ${failures.length} horizon(s) errored:\n${failures.map((l) => `  • ${l}`).join("\n")}`);
+    throw new Error(failures.join("\n"));
+  }
+
+  await emit(`All horizons complete — scores: ${results.map((r) => `${r.label}=${r.score}/10`).join(", ")}`);
 
   return {
     guidance: userGuidance,

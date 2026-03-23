@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { useParams } from "next/navigation";
 import { parseISO, format } from "date-fns";
 import { markdownLiteToHtml, toBriefVision } from "@/lib/markdownLite";
@@ -561,6 +561,7 @@ export default function DashboardPage() {
   const [forecastGuidance, setForecastGuidance] = useState("");
   const [forecastLoading, setForecastLoading] = useState(false);
   const [forecastResult, setForecastResult] = useState<{
+    _id?: string;
     guidance: string;
     horizons: {
       horizon: string;
@@ -574,81 +575,186 @@ export default function DashboardPage() {
   } | null>(null);
   const [forecastHorizon, setForecastHorizon] = useState<"1d" | "3d" | "7d" | "30d">("1d");
   const [forecastError, setForecastError] = useState<string | null>(null);
+  const [forecastErrorStack, setForecastErrorStack] = useState<string | null>(null);
   const [forecastLogs, setForecastLogs] = useState<string[]>([]);
   const [forecastElapsed, setForecastElapsed] = useState(0);
+  const [forecastHistory, setForecastHistory] = useState<{
+    _id: string;
+    guidance: string;
+    horizons: { horizon: string; label: string; messages: { role: "user" | "assistant"; author: string; content: string; timestamp: string }[]; keyMilestones: string[]; score: number }[];
+    iterations: number;
+    model: string;
+    generatedAt: string;
+    createdAt: string;
+    status?: string;
+    errorMessage?: string;
+    errorStack?: string;
+    lastLog?: string;
+    progressLogs?: string[];
+  }[]>([]);
+  const [forecastHistoryLoading, setForecastHistoryLoading] = useState(false);
+
+  const forecastPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const forecastElapsedRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const forecastPollingJobIdRef = useRef<string | null>(null);
+
+  const stopForecastPolling = useCallback(() => {
+    if (forecastPollRef.current) {
+      clearInterval(forecastPollRef.current);
+      forecastPollRef.current = null;
+    }
+    if (forecastElapsedRef.current) {
+      clearInterval(forecastElapsedRef.current);
+      forecastElapsedRef.current = null;
+    }
+    forecastPollingJobIdRef.current = null;
+  }, []);
+
+  const loadForecastHistory = useCallback(async () => {
+    if (!token) return;
+    setForecastHistoryLoading(true);
+    try {
+      const res = await fetch(`/api/forecast?token=${token}`);
+      if (res.ok) {
+        const data = await res.json();
+        setForecastHistory(data.forecasts || []);
+      }
+    } catch { /* silent */ }
+    setForecastHistoryLoading(false);
+  }, [token]);
+
+  useEffect(() => {
+    if (workspaceZoom === "forecast") loadForecastHistory();
+  }, [workspaceZoom, loadForecastHistory]);
+
+  const startForecastPolling = useCallback(
+    (jobId: string) => {
+      if (!token) return;
+      if (forecastPollingJobIdRef.current === jobId && forecastPollRef.current) return;
+
+      stopForecastPolling();
+      forecastPollingJobIdRef.current = jobId;
+      setForecastLoading(true);
+      setForecastElapsed(0);
+      forecastElapsedRef.current = setInterval(() => {
+        setForecastElapsed((s) => s + 1);
+      }, 1000);
+
+      forecastPollRef.current = setInterval(async () => {
+        try {
+          const res = await fetch(`/api/forecast?token=${token}`);
+          if (!res.ok) return;
+          const data = await res.json();
+          const list = data.forecasts || [];
+          setForecastHistory(list);
+          const f = list.find((x: { _id: string }) => x._id === jobId);
+          if (!f) return;
+
+          const st = f.status === "running" || f.status === "failed" || f.status === "complete"
+            ? f.status
+            : f.horizons?.length
+              ? "complete"
+              : "running";
+
+          if (f.progressLogs?.length) setForecastLogs(f.progressLogs);
+
+          if (st === "complete") {
+            setForecastResult({
+              _id: f._id,
+              guidance: f.guidance,
+              horizons: f.horizons,
+              iterations: f.iterations,
+              generatedAt: f.generatedAt,
+            });
+            setForecastHorizon("1d");
+            stopForecastPolling();
+            setForecastLoading(false);
+          } else if (st === "failed") {
+            if (!f.progressLogs?.length) setForecastLogs([f.errorMessage || "Forecast failed"]);
+            setForecastError(f.errorMessage || "Forecast failed");
+            setForecastErrorStack(f.errorStack || null);
+            stopForecastPolling();
+            setForecastLoading(false);
+          }
+        } catch { /* ignore */ }
+      }, 2000);
+    },
+    [token, stopForecastPolling],
+  );
+
+  useEffect(() => {
+    if (workspaceZoom !== "forecast") {
+      stopForecastPolling();
+      setForecastLoading(false);
+    }
+  }, [workspaceZoom, stopForecastPolling]);
+
+  useEffect(() => {
+    if (workspaceZoom !== "forecast" || !token) return;
+    const running = forecastHistory.find((f) => {
+      if (f.status === "running") return true;
+      if (f.status === "failed" || f.status === "complete") return false;
+      return !(f.horizons?.length > 0);
+    });
+    if (running) startForecastPolling(running._id);
+  }, [workspaceZoom, forecastHistory, token, startForecastPolling]);
+
+  useEffect(() => () => stopForecastPolling(), [stopForecastPolling]);
 
   const runForecastAction = useCallback(async () => {
     if (!token) return;
     setForecastLoading(true);
     setForecastError(null);
+    setForecastErrorStack(null);
     setForecastResult(null);
-    setForecastLogs(["Starting forecast..."]);
+    setForecastLogs(["Queueing job on server…"]);
     setForecastElapsed(0);
 
-    const startTime = Date.now();
-    const timer = setInterval(() => setForecastElapsed(Math.floor((Date.now() - startTime) / 1000)), 1000);
-
-    const addLog = (msg: string) => setForecastLogs((prev) => [...prev, msg]);
-
     try {
-      addLog("Connecting to API (SSE stream)...");
       const res = await fetch("/api/forecast", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ token, guidance: forecastGuidance, iterations: 1 }),
       });
+      const data = (await res.json().catch(() => ({}))) as {
+        forecastId?: string;
+        forecast?: {
+          _id: string;
+          guidance: string;
+          horizons: {
+            horizon: string;
+            label: string;
+            messages: { role: "user" | "assistant"; author: string; content: string; timestamp: string }[];
+            keyMilestones: string[];
+            score: number;
+          }[];
+          iterations: number;
+          model: string;
+          generatedAt: string;
+          createdAt: string;
+          status?: string;
+          progressLogs?: string[];
+        };
+        error?: string;
+      };
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      const forecastId = data.forecastId;
+      const forecast = data.forecast;
+      if (!forecastId || !forecast) throw new Error("Invalid server response");
 
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: "Request failed" }));
-        throw new Error(err.error || `HTTP ${res.status}`);
-      }
-
-      const reader = res.body?.getReader();
-      if (!reader) throw new Error("No response stream");
-
-      const decoder = new TextDecoder();
-      let buffer = "";
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
-
-        let currentEvent = "";
-        for (const line of lines) {
-          if (line.startsWith("event: ")) {
-            currentEvent = line.slice(7).trim();
-          } else if (line.startsWith("data: ")) {
-            const raw = line.slice(6);
-            try {
-              const data = JSON.parse(raw);
-              if (currentEvent === "log" && data.msg) {
-                addLog(data.msg);
-              } else if (currentEvent === "result") {
-                addLog("Forecast complete!");
-                setForecastResult(data);
-              } else if (currentEvent === "error") {
-                throw new Error(data.error || "Server error");
-              }
-            } catch (parseErr) {
-              if (currentEvent === "error") throw parseErr;
-            }
-            currentEvent = "";
-          }
-        }
-      }
+      setForecastHistory((prev) => [forecast, ...prev.filter((x) => x._id !== forecastId)]);
+      setForecastLogs(forecast.progressLogs || ["Job started"]);
+      startForecastPolling(forecastId);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      addLog(`Error: ${msg}`);
+      const stack = err instanceof Error ? err.stack : undefined;
+      setForecastLogs((prev) => [...prev, `Error: ${msg}`, ...(stack ? [`Stack:\n${stack}`] : [])]);
       setForecastError(msg);
-    } finally {
-      clearInterval(timer);
+      setForecastErrorStack(stack || null);
+      stopForecastPolling();
       setForecastLoading(false);
     }
-  }, [token, forecastGuidance]);
+  }, [token, forecastGuidance, startForecastPolling, stopForecastPolling]);
 
   const [showWorkMode, setShowWorkMode] = useState(false);
   const [workModePersonId, setWorkModePersonId] = useState<string>("");
@@ -5950,7 +6056,49 @@ export default function DashboardPage() {
                     ) : "See Future"}
                   </button>
                 </div>
-                {forecastError && <p className="text-xs text-red-600 mt-2">{forecastError}</p>}
+                {forecastError && (
+                  <div className="mt-3 rounded-xl border border-red-200 bg-red-50/50 p-3">
+                    <div className="flex items-center justify-between gap-2 mb-2">
+                      <span className="text-xs font-bold uppercase tracking-wide text-red-800">Error log</span>
+                      <button
+                        type="button"
+                        className="text-[10px] font-semibold text-red-700 hover:text-red-900 underline"
+                        onClick={() => {
+                          const blob = [
+                            forecastError,
+                            "",
+                            ...(forecastErrorStack ? ["--- stack ---", forecastErrorStack, ""] : []),
+                            "--- progress ---",
+                            ...forecastLogs,
+                          ].join("\n");
+                          void navigator.clipboard.writeText(blob);
+                        }}
+                      >
+                        Copy all
+                      </button>
+                    </div>
+                    <p className="text-xs text-red-700 font-medium mb-2 whitespace-pre-wrap break-words">{forecastError}</p>
+                    <div className="rounded-lg border border-red-900/20 bg-gray-950 p-3 font-mono text-[10px] leading-relaxed max-h-56 overflow-y-auto text-left">
+                      {forecastLogs.map((log, i) => (
+                        <div key={i} className={i === forecastLogs.length - 1 ? "text-red-300" : "text-gray-500"}>
+                          <span className="text-gray-600 select-none">[{String(i).padStart(2, "0")}] </span>
+                          <span className="whitespace-pre-wrap break-words">{log}</span>
+                        </div>
+                      ))}
+                    </div>
+                    {forecastErrorStack && (
+                      <details className="mt-2 text-[10px] text-red-800/80">
+                        <summary className="cursor-pointer font-semibold">Stack trace</summary>
+                        <pre className="mt-1 whitespace-pre-wrap break-all font-mono text-red-900/90 max-h-40 overflow-y-auto">{forecastErrorStack}</pre>
+                      </details>
+                    )}
+                  </div>
+                )}
+                {forecastLoading && (
+                  <p className="text-[11px] text-violet-600/90 mt-2">
+                    Runs on the server — you can close this tab or switch zoom; open <span className="font-semibold">Future</span> again to watch progress.
+                  </p>
+                )}
               </div>
 
               {forecastResult && (
@@ -6026,7 +6174,7 @@ export default function DashboardPage() {
                 </>
               )}
 
-              {!forecastResult && !forecastLoading && (
+              {!forecastResult && !forecastLoading && !forecastError && (
                 <div className="text-center py-10">
                   <div className="text-3xl mb-3">🔮</div>
                   <p className="text-sm text-gray-500 max-w-sm mx-auto">
@@ -6069,6 +6217,137 @@ export default function DashboardPage() {
                     <span className="text-[10px] text-gray-400 shrink-0">
                       {forecastElapsed < 30 ? "preparing" : forecastElapsed < 60 ? "generating" : "finalizing"}
                     </span>
+                  </div>
+                </div>
+              )}
+
+              {forecastHistory.length > 0 && (
+                <div className="mt-6 pt-5 border-t border-gray-200">
+                  <div className="flex items-center justify-between mb-3">
+                    <h3 className="text-sm font-semibold text-gray-700">Past Forecasts</h3>
+                    <button
+                      type="button"
+                      onClick={loadForecastHistory}
+                      disabled={forecastHistoryLoading}
+                      className="text-[10px] text-gray-400 hover:text-gray-600"
+                    >
+                      {forecastHistoryLoading ? "Loading…" : "Refresh"}
+                    </button>
+                  </div>
+                  <div className="space-y-2">
+                    {forecastHistory.map((f) => {
+                      const rowStatus =
+                        f.status === "running" || f.status === "failed" || f.status === "complete"
+                          ? f.status
+                          : f.horizons?.length
+                            ? "complete"
+                            : "running";
+                      const isActive = forecastResult && forecastResult._id === f._id;
+                      const avgScore = f.horizons.length
+                        ? Math.round((f.horizons.reduce((s, h) => s + h.score, 0) / f.horizons.length) * 10) / 10
+                        : 0;
+                      const date = new Date(f.createdAt);
+                      const ago = (() => {
+                        const mins = Math.floor((Date.now() - date.getTime()) / 60000);
+                        if (mins < 1) return "just now";
+                        if (mins < 60) return `${mins}m ago`;
+                        const hrs = Math.floor(mins / 60);
+                        if (hrs < 24) return `${hrs}h ago`;
+                        const days = Math.floor(hrs / 24);
+                        return `${days}d ago`;
+                      })();
+                      return (
+                        <button
+                          key={f._id}
+                          type="button"
+                          disabled={rowStatus === "running"}
+                          onClick={() => {
+                            if (rowStatus === "running") return;
+                            if (rowStatus === "failed") {
+                              setForecastResult(null);
+                              setForecastError(f.errorMessage || "Forecast failed");
+                              setForecastErrorStack(f.errorStack || null);
+                              setForecastLogs(
+                                f.progressLogs?.length ? f.progressLogs : [f.errorMessage || "Forecast failed"],
+                              );
+                              return;
+                            }
+                            setForecastError(null);
+                            setForecastErrorStack(null);
+                            setForecastResult({
+                              _id: f._id,
+                              guidance: f.guidance,
+                              horizons: f.horizons,
+                              iterations: f.iterations,
+                              generatedAt: f.generatedAt,
+                            });
+                            setForecastHorizon("1d");
+                          }}
+                          className={`w-full text-left rounded-xl border px-3.5 py-2.5 transition-all ${
+                            rowStatus === "running" ? "opacity-90 cursor-default" : ""
+                          } ${
+                            isActive
+                              ? "border-violet-300 bg-violet-50 ring-1 ring-violet-200"
+                              : "border-gray-200 bg-white hover:border-violet-200 hover:bg-violet-50/30"
+                          }`}
+                        >
+                          <div className="flex items-center gap-2">
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2">
+                                <p className="text-sm font-medium text-gray-900 truncate">
+                                  {f.guidance || "No guidance (auto)"}
+                                </p>
+                                {rowStatus === "running" && (
+                                  <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wide text-amber-700 bg-amber-100 px-2 py-0.5 rounded-md">
+                                    Generating
+                                  </span>
+                                )}
+                                {rowStatus === "failed" && (
+                                  <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wide text-red-700 bg-red-100 px-2 py-0.5 rounded-md">
+                                    Failed
+                                  </span>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                                <span className="text-[10px] text-gray-400">{ago}</span>
+                                <span className="text-[10px] text-gray-300">·</span>
+                                <span className="text-[10px] text-gray-400">
+                                  {rowStatus === "running" ? "in progress" : `${f.horizons.length} horizons`}
+                                </span>
+                                <span className="text-[10px] text-gray-300">·</span>
+                                <span className="text-[10px] text-gray-400">{f.model?.split("/").pop()}</span>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              {rowStatus === "running" ? (
+                                <Spinner className="h-5 w-5 text-violet-500" />
+                              ) : (
+                                <>
+                                  {f.horizons.map((h) => (
+                                    <span
+                                      key={h.horizon}
+                                      className={`inline-flex items-center justify-center w-7 h-7 rounded-lg text-[10px] font-bold ${
+                                        h.score >= 7
+                                          ? "bg-emerald-100 text-emerald-700"
+                                          : h.score >= 5
+                                            ? "bg-amber-100 text-amber-700"
+                                            : "bg-red-100 text-red-700"
+                                      }`}
+                                      title={`${h.label}: ${h.score}/10`}
+                                    >
+                                      {h.score}
+                                    </span>
+                                  ))}
+                                  <span className="text-xs font-semibold text-gray-500 ml-1" title="Average score">
+                                    {f.horizons.length ? avgScore : "—"}
+                                  </span>
+                                </>
+                              )}
+                            </div>
+                          </div>
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
               )}
