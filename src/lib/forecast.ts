@@ -113,11 +113,39 @@ export interface ForecastResult {
   generatedAt: Date;
 }
 
-const HORIZON_META: Record<Horizon, { label: string; desc: string }> = {
-  "1d": { label: "Tomorrow", desc: "Next 24 hours" },
-  "3d": { label: "3 Days", desc: "Next 3 days" },
-  "7d": { label: "1 Week", desc: "Next 7 days" },
-  "30d": { label: "1 Month", desc: "Next 30 days" },
+const HORIZON_META: Record<
+  Horizon,
+  { label: string; desc: string; timingBrief: string; maxSpanNote: string }
+> = {
+  "1d": {
+    label: "Tomorrow",
+    desc: "Next 24 hours",
+    timingBrief:
+      "Same-day / next-day only: pings, confirmations, on-site tweaks, shipping a mockup, one round of replies. No closing multi-week enterprise deals unless context shows signature is already imminent.",
+    maxSpanNote: "All message timestamps must fall within ~24 hours from now.",
+  },
+  "3d": {
+    label: "3 Days",
+    desc: "Next 3 days",
+    timingBrief:
+      "Fits a tight activation arc: load-in → peak night(s) → teardown OR a 3-day sprint on one initiative. Good for a race weekend slice, pop-up, or partner push — not a full retail rollout.",
+    maxSpanNote: "Timestamps span at most 3 days; keep density realistic (sleep exists).",
+  },
+  "7d": {
+    label: "1 Week",
+    desc: "Next 7 days",
+    timingBrief:
+      "One week: post-event debrief, first follow-ups, case-study draft, 1–2 meaningful pipeline moves. If there was a major event early in the week, later days shift to inbound, logistics, and next activations — not infinite on-site 'event day' energy.",
+    maxSpanNote: "Do not pack a month of outcomes into seven days.",
+  },
+  "30d": {
+    label: "1 Month",
+    desc: "Next 30 days",
+    timingBrief:
+      "~4 calendar weeks with clear phases. On-site events (MotoGP weekend, VIP lounge night, single-city activation) are SHORT — usually a few concentrated days, not a month-long 'MotoGP initiative'. After the event: debrief, case study, retailer pilots, Content Studio delivery, Fashion Week prep — spread across plausible weeks with gaps.",
+    maxSpanNote:
+      "Sequence wins across the month; early window may still be event-adjacent, then pivot narrative to pipeline, revenue, product — never imply the same race weekend is still 'happening' on day 28.",
+  },
 };
 
 interface FullContext {
@@ -441,7 +469,7 @@ async function generateForecast(
   const contextBlock = buildContextBlock(ctx);
 
   const refinementNote = previousAttempt
-    ? `\n\nPREVIOUS ATTEMPT (score: ${previousAttempt.score}/10):\n${JSON.stringify(previousAttempt.messages.slice(0, 8), null, 2)}\n\nMilestones: ${previousAttempt.keyMilestones.join(", ")}\n\nMake this version MORE specific, realistic, and actionable. Use real names, real tasks, real offers from the context. Reference actual deadlines, contacts, and decisions. The previous attempt scored ${previousAttempt.score}/10 — beat it.`
+    ? `\n\nPREVIOUS ATTEMPT (score: ${previousAttempt.score}/10):\n${JSON.stringify(previousAttempt.messages.slice(0, 8), null, 2)}\n\nMilestones: ${previousAttempt.keyMilestones.join(", ")}\n\nMake this version MORE specific, realistic, and actionable. Use real names, real tasks, real offers from the context. Reference actual deadlines, contacts, and decisions. Fix any calendar abuse (e.g. treating a race weekend or single activation as if it lasted the whole horizon, or cramming many multi-week wins into 1d/3d). The previous attempt scored ${previousAttempt.score}/10 — beat it on both specificity AND temporal realism.`
     : "";
 
   const prompt = `You are simulating what the BEST possible group chat conversation looks like over the ${meta.desc} for this team.
@@ -453,6 +481,15 @@ ${refinementNote}
 
 Generate a realistic Telegram group chat conversation that shows what WINNING looks like for this team over the ${meta.desc}. This should feel like reading a real chat where things are going incredibly well — momentum, clarity, action, results.
 
+TEMPORAL REALISM (non-negotiable — low score if violated):
+- This horizon is ONLY: ${meta.timingBrief}
+- ${meta.maxSpanNote}
+- Physical activations (MotoGP / Grand Prix weekend, VIP lounge night, circuit club night, pop-up, booth) are BRIEF: typically hours to a few peak days. They are NOT a month-long initiative. Never write as if the same on-site race event is still "happening" across all 30 days.
+- For "30d": structure time — e.g. days 1–3 event execution + hot follow-up, week 2 debrief + case study + inbound, week 3–4 pilots, contracts, next event prep. Major unrelated wins should sit in later weeks, not all crammed into "day 2" of the month.
+- For "1d" / "3d": if the team has an imminent event, stay inside setup, live night, or immediate aftermath — do not leap to outcomes that need weeks (full kiosk chain rollout, four new enterprise retainers) unless the context already shows those deals at the one-yard line.
+- Each horizon is a different calendar slice: do not recycle the identical "event is live" beat from short horizons into the month view as if no time passed.
+- Timestamps in messages must respect the horizon (no "April 22" outcomes inside a "Tomorrow" simulation).
+
 Critical rules:
 - Use REAL names from the team and contacts. If the AI assistant speaks, use "odoai".
 - Reference REAL tasks by name, real offers, real contacts, real initiatives, real deadlines.
@@ -463,7 +500,7 @@ Critical rules:
 - Show the AI (odoai) being proactive — surfacing insights, connecting dots, suggesting next moves.
 - If there are chatSignals defined on offers, show those exact signals happening naturally.
 - The conversation should build on what's already in motion — don't start from scratch.
-- 8-15 messages for 1d, 12-20 for 3d, 15-25 for 7d, 20-35 for 30d.
+- Message counts: 8-15 for 1d, 12-20 for 3d, 15-25 for 7d, 20-35 for 30d — but fewer messages is better than violating calendar realism.
 
 Respond in VALID JSON. No markdown fences. No trailing commas. Escape all quotes inside strings with backslash.
 
