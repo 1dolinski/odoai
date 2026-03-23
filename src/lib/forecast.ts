@@ -148,6 +148,110 @@ const HORIZON_META: Record<
   },
 };
 
+const HORIZON_DAYS: Record<Horizon, number> = { "1d": 1, "3d": 3, "7d": 7, "30d": 30 };
+
+function forecastTimezone(): string {
+  return process.env.FORECAST_TZ || "America/New_York";
+}
+
+/** Wall-clock anchor so short horizons don't invent April dates, etc. */
+function buildForecastClockBlock(horizon: Horizon): string {
+  const tz = forecastTimezone();
+  const now = new Date();
+  const end = new Date(now.getTime() + HORIZON_DAYS[horizon] * 86400000);
+  const fmt = (d: Date) =>
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: tz,
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+      timeZoneName: "short",
+    }).format(d);
+  return [
+    "FORECAST CLOCK (authoritative — every simulated message timestamp must fall between start and end below):",
+    `- Timezone: ${tz} (override with env FORECAST_TZ, e.g. America/Sao_Paulo)`,
+    `- Simulation "now" (start): ${fmt(now)}`,
+    `- Latest moment in this horizon (${HORIZON_META[horizon].desc}): ${fmt(end)}`,
+    '- Use explicit calendar dates or relative phrases ("Tomorrow 9am") that fit inside this window.',
+    `- For ${horizon}: do not cite months/days outside [start, end] unless you stay inside the ${HORIZON_DAYS[horizon]}-day span.`,
+  ].join("\n");
+}
+
+function buildScheduledAnchors(ctx: FullContext): string {
+  const now = Date.now();
+  const min = now - 2 * 86400000;
+  const max = now + 90 * 86400000;
+  type Row = { t: number; line: string };
+  const rows: Row[] = [];
+
+  for (const t of ctx.todoTasks) {
+    if (!t.dueDate) continue;
+    const d = new Date(t.dueDate).getTime();
+    if (d >= min && d <= max) {
+      rows.push({
+        t: d,
+        line: `Task due ${new Date(t.dueDate).toISOString().slice(0, 10)} — ${t.title}`,
+      });
+    }
+  }
+  for (const t of ctx.upcomingTasks) {
+    if (!t.dueDate) continue;
+    const d = new Date(t.dueDate).getTime();
+    if (d >= min && d <= max) {
+      rows.push({
+        t: d,
+        line: `Upcoming due ${new Date(t.dueDate).toISOString().slice(0, 10)} — ${t.title}`,
+      });
+    }
+  }
+  for (const c of ctx.checks) {
+    const ch = c as { scheduledFor?: Date; description?: string };
+    if (!ch.scheduledFor) continue;
+    const d = new Date(ch.scheduledFor).getTime();
+    if (d >= min && d <= max) {
+      rows.push({
+        t: d,
+        line: `Check ${new Date(ch.scheduledFor).toISOString().slice(0, 10)} — ${ch.description || "check"}`,
+      });
+    }
+  }
+
+  rows.sort((a, b) => a.t - b.t);
+  const seen = new Set<string>();
+  const lines: string[] = [];
+  for (const r of rows) {
+    if (seen.has(r.line)) continue;
+    seen.add(r.line);
+    lines.push(`- ${r.line}`);
+    if (lines.length >= 26) break;
+  }
+
+  if (ctx.initiatives.length) {
+    const names = ctx.initiatives
+      .map((i: { name?: string }) => i.name)
+      .filter(Boolean)
+      .slice(0, 10) as string[];
+    if (names.length) {
+      lines.push(`- Active initiatives (ongoing programs, not tied to a single day): ${names.join("; ")}`);
+    }
+  }
+
+  if (!lines.length) {
+    return [
+      "SCHEDULE ANCHORS: No dated tasks/checks in the next ~90 days — infer timing only from conversation + TEMPORAL REALISM rules.",
+      "Tip for operators: add due dates on event tasks so forecasts lock to real dates.",
+    ].join("\n");
+  }
+
+  return [
+    "SCHEDULE ANCHORS (from task due dates & scheduled checks — prefer these over inventing conflicting dates; place activations near relevant dues):",
+    ...lines,
+  ].join("\n");
+}
+
 interface FullContext {
   chatTitle: string;
   mode: string;
@@ -235,8 +339,11 @@ async function gatherContext(chatId: string, userGuidance: string): Promise<Full
   };
 }
 
-function buildContextBlock(ctx: FullContext): string {
+function buildContextBlock(ctx: FullContext, horizon: Horizon): string {
   const parts: string[] = [];
+
+  parts.push(buildForecastClockBlock(horizon));
+  parts.push(buildScheduledAnchors(ctx));
 
   if (ctx.contextSummary) parts.push(`CONTEXT SUMMARY:\n${ctx.contextSummary}`);
   if (ctx.leveragePlay) parts.push(`CURRENT LEVERAGE PLAY:\n${ctx.leveragePlay}`);
@@ -466,7 +573,7 @@ async function generateForecast(
   model?: string,
 ): Promise<HorizonForecast> {
   const meta = HORIZON_META[horizon];
-  const contextBlock = buildContextBlock(ctx);
+  const contextBlock = buildContextBlock(ctx, horizon);
 
   const refinementNote = previousAttempt
     ? `\n\nPREVIOUS ATTEMPT (score: ${previousAttempt.score}/10):\n${JSON.stringify(previousAttempt.messages.slice(0, 8), null, 2)}\n\nMilestones: ${previousAttempt.keyMilestones.join(", ")}\n\nMake this version MORE specific, realistic, and actionable. Use real names, real tasks, real offers from the context. Reference actual deadlines, contacts, and decisions. Fix any calendar abuse (e.g. treating a race weekend or single activation as if it lasted the whole horizon, or cramming many multi-week wins into 1d/3d). The previous attempt scored ${previousAttempt.score}/10 — beat it on both specificity AND temporal realism.`
@@ -488,7 +595,7 @@ TEMPORAL REALISM (non-negotiable — low score if violated):
 - For "30d": structure time — e.g. days 1–3 event execution + hot follow-up, week 2 debrief + case study + inbound, week 3–4 pilots, contracts, next event prep. Major unrelated wins should sit in later weeks, not all crammed into "day 2" of the month.
 - For "1d" / "3d": if the team has an imminent event, stay inside setup, live night, or immediate aftermath — do not leap to outcomes that need weeks (full kiosk chain rollout, four new enterprise retainers) unless the context already shows those deals at the one-yard line.
 - Each horizon is a different calendar slice: do not recycle the identical "event is live" beat from short horizons into the month view as if no time passed.
-- Timestamps in messages must respect the horizon (no "April 22" outcomes inside a "Tomorrow" simulation).
+- Timestamps in messages must respect both the FORECAST CLOCK window above and this horizon (e.g. no "April 22" inside a "Tomorrow" simulation when clock end is still March).
 
 Critical rules:
 - Use REAL names from the team and contacts. If the AI assistant speaks, use "odoai".

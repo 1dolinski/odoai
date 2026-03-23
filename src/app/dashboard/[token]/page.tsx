@@ -6032,7 +6032,10 @@ export default function DashboardPage() {
 
             <div className="p-4 sm:p-6">
               <div className="mb-5">
-                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Guide the future</label>
+                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Guide the future</label>
+                <p className="text-[10px] text-gray-400 mb-2 leading-snug">
+                  Forecasts anchor to <span className="font-medium text-gray-500">task &amp; check due dates</span> when present — put race weekend / ship dates on tasks so timelines don&apos;t drift.
+                </p>
                 <div className="flex gap-2">
                   <input
                     type="text"
