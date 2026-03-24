@@ -1,5 +1,6 @@
 import { chat as aiChat } from "@/lib/openrouter";
 import { qmdSearch, writeKnowledge, writeDump, writeContextSummary, writePeopleSnapshot, writePersonKnowledge, writeTasksSnapshot, formatQMDResults } from "@/lib/knowledge";
+import { formatDumpsForPrompt } from "@/lib/dumpContext";
 import { fetchEnabledEndpoints, formatDataForAI, persistSnapshots, buildTrendContext, type EnabledEndpoint } from "@/lib/dataSources";
 import Chat, { WATCH_DEFAULTS } from "@/models/Chat";
 import Task from "@/models/Task";
@@ -725,7 +726,10 @@ ${content}`,
       );
     }
 
-    await writeDump(chatId, parsed.title || "Info Dump", parsed.summary || content, username).catch(console.error);
+    const qmdBody = parsed.summary
+      ? `# ${parsed.title || "Info Dump"}\n\n## Summary\n${parsed.summary}\n\n## Source (full)\n\n${content}`
+      : content;
+    await writeDump(chatId, parsed.title || "Info Dump", qmdBody, username).catch(console.error);
     Activity.create({ telegramChatId: chatId, type: "dump", title: parsed.title || "Info Dump", actor: username || userId }).catch(console.error);
 
     return parsed;
@@ -770,9 +774,11 @@ export async function generateAiFeed(chatId: string): Promise<{ type: string; co
 
   const abilitiesBlock = chatDoc.abilities || "";
 
-  const dumps = (chatDoc.dumps || []).slice(-10).map((d: { text: string; category: string; subject: string }) =>
-    `[${d.category}${d.subject ? `:${d.subject}` : ""}] ${d.text.substring(0, 150)}`
-  ).join("\n");
+  const dumps = formatDumpsForPrompt(chatDoc.dumps || [], {
+    maxItems: 10,
+    maxCharsPerDump: 6_000,
+    maxTotalChars: 14_000,
+  });
 
   // Pull relevant context from QMD based on current tasks and recent chat
   const searchQueries = [
@@ -785,7 +791,7 @@ export async function generateAiFeed(chatId: string): Promise<{ type: string; co
     try {
       const results = await qmdSearch(q, 4);
       if (results.length) {
-        qmdContext += results.map((r) => `- ${r.title}: ${r.snippet?.substring(0, 150) || ""}`).join("\n") + "\n";
+        qmdContext += results.map((r) => `- ${r.title}: ${r.snippet?.substring(0, 800) || ""}`).join("\n") + "\n";
       }
     } catch { /* QMD unavailable */ }
   }
@@ -910,9 +916,11 @@ export async function generateAiQuestions(chatId: string): Promise<{ id: string;
 
   const abilitiesBlock = chatDoc.abilities || "";
 
-  const dumps = (chatDoc.dumps || []).slice(-15).map((d: { text: string; category: string; subject: string }) =>
-    `[${d.category}${d.subject ? `:${d.subject}` : ""}] ${d.text.substring(0, 200)}`
-  ).join("\n");
+  const dumps = formatDumpsForPrompt(chatDoc.dumps || [], {
+    maxItems: 15,
+    maxCharsPerDump: 8_000,
+    maxTotalChars: 20_000,
+  });
 
   const existingQA = (chatDoc.aiQuestions || [])
     .filter((q: { answer: string }) => q.answer)
@@ -935,7 +943,7 @@ export async function generateAiQuestions(chatId: string): Promise<{ id: string;
     try {
       const results = await qmdSearch(q, 3);
       if (results.length) {
-        qmdContext += results.map((r) => `- ${r.title}: ${r.snippet?.substring(0, 150) || ""}`).join("\n") + "\n";
+        qmdContext += results.map((r) => `- ${r.title}: ${r.snippet?.substring(0, 800) || ""}`).join("\n") + "\n";
       }
     } catch { /* QMD unavailable */ }
   }

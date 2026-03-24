@@ -12,6 +12,7 @@ import Activity from "@/models/Activity";
 import { autoExtract, maybeUpdateContext, deepProcessDump, generateAiFeed, generateAiQuestions } from "@/lib/brain";
 import { chat as aiChat } from "@/lib/openrouter";
 import { writeKnowledge, writePersonKnowledge, writePeopleSnapshot, qmdSearch, formatQMDResults } from "@/lib/knowledge";
+import { formatDumpsForPrompt } from "@/lib/dumpContext";
 import { getChatAdmins, sendMessage } from "@/lib/telegram";
 import { getAvailableSources, fetchEnabledEndpoints, formatDataForAI, persistSnapshots, getSnapshotHistory, DATA_SOURCE_REGISTRY, fetchEndpoint } from "@/lib/dataSources";
 import { getAllPlatforms, getEndpointsForPlatform, querySocial, pollJobResult, isConfigured as isSocialConfigured, type Platform } from "@/lib/social";
@@ -1729,9 +1730,11 @@ ACTIVE TASKS (todo + upcoming):\n${taskLines}`,
       return `[${d.type}] ${d.title}${d.detail ? ` — ${d.detail}` : ""}${d.actor ? ` (${d.actor})` : ""} ${new Date(d.createdAt).toISOString().split("T")[0]}`;
     }).join("\n");
 
-    const dumps = (chatDoc?.dumps || []).slice(-10).map((d: { text: string; category: string; subject: string }) =>
-      `[${d.category}${d.subject ? `:${d.subject}` : ""}] ${d.text.substring(0, 200)}`
-    ).join("\n");
+    const dumps = formatDumpsForPrompt(chatDoc?.dumps || [], {
+      maxItems: 10,
+      maxCharsPerDump: 10_000,
+      maxTotalChars: 48_000,
+    });
 
     const spendBlock = spendSummary
       ? `Total API cost: $${spendSummary.totalCost?.toFixed(2) || "0"} | ${spendSummary.totalCalls || 0} calls | ${spendSummary.totalTokens || 0} tokens`
@@ -2090,9 +2093,11 @@ ${transcript}`
       return line;
     }).filter(Boolean).join("\n");
 
-    const dumps = (chatDoc.dumps || []).slice(-15).map((d: { text: string; category: string; subject: string }) =>
-      `[${d.category}${d.subject ? `:${d.subject}` : ""}] ${d.text.substring(0, 300)}`
-    ).join("\n");
+    const dumps = formatDumpsForPrompt(chatDoc.dumps || [], {
+      maxItems: 15,
+      maxCharsPerDump: 14_000,
+      maxTotalChars: 72_000,
+    });
 
     const answeredQs = (chatDoc.aiQuestions || [])
       .filter((q: { answer: string }) => q.answer)

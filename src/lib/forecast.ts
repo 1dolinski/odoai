@@ -88,6 +88,7 @@ import Person from "@/models/Person";
 import Activity from "@/models/Activity";
 import Check from "@/models/Check";
 import Job from "@/models/Job";
+import { formatDumpsForPrompt } from "@/lib/dumpContext";
 
 export type Horizon = "1d" | "3d" | "7d" | "30d";
 
@@ -312,7 +313,7 @@ async function gatherContext(chatId: string, userGuidance: string): Promise<Full
   try {
     const { qmdTextSearch, formatQMDResults } = await import("@/lib/knowledge");
     const results = await qmdTextSearch(userGuidance || chatDoc.leveragePlay || chatDoc.contextSummary || "next steps", 8);
-    if (results.length) qmdMemory = formatQMDResults(results);
+    if (results.length) qmdMemory = formatQMDResults(results, { maxSnippetLength: 3000 });
   } catch { /* QMD unavailable */ }
 
   return {
@@ -448,11 +449,13 @@ function buildContextBlock(ctx: FullContext, horizon: Horizon): string {
     parts.push(`ACTIVE INITIATIVES:\n${iList}`);
   }
 
-  // Dumps — team knowledge
+  // Dumps — team knowledge (full text within budget; newest first)
   if (ctx.dumps.length) {
-    const dList = ctx.dumps.map((d) =>
-      `- [${d.category}${d.subject ? `/${d.subject}` : ""}] ${d.text.slice(0, 200)}`
-    ).join("\n");
+    const dList = formatDumpsForPrompt(ctx.dumps, {
+      maxItems: 15,
+      maxCharsPerDump: 16_000,
+      maxTotalChars: 80_000,
+    });
     parts.push(`TEAM KNOWLEDGE DUMPS (${ctx.dumps.length}):\n${dList}`);
   }
 

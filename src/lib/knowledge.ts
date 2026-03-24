@@ -192,13 +192,18 @@ export async function qmdStatus(): Promise<string> {
   }
 }
 
-export function formatQMDResults(results: QMDResult[]): string {
+export function formatQMDResults(
+  results: QMDResult[],
+  opts?: { maxSnippetLength?: number },
+): string {
   if (!results.length) return "No relevant knowledge found.";
+
+  const maxSnip = opts?.maxSnippetLength ?? 200;
 
   return results
     .map((r, i) => {
       let line = `${i + 1}. *${r.title}* (${Math.round(r.score * 100)}%)`;
-      if (r.snippet) line += `\n   ${r.snippet.substring(0, 200)}`;
+      if (r.snippet) line += `\n   ${r.snippet.substring(0, maxSnip)}`;
       return line;
     })
     .join("\n\n");
