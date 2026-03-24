@@ -1,5 +1,16 @@
 import { chat as aiChat } from "@/lib/openrouter";
-import { qmdSearch, writeKnowledge, writeDump, writeContextSummary, writePeopleSnapshot, writePersonKnowledge, writeTasksSnapshot, formatQMDResults } from "@/lib/knowledge";
+import {
+  qmdSearch,
+  qmdTextSearch,
+  writeKnowledge,
+  writeDump,
+  writeContextSummary,
+  writePeopleSnapshot,
+  writePersonKnowledge,
+  writeTasksSnapshot,
+  formatQMDResults,
+  type QMDResult,
+} from "@/lib/knowledge";
 import { formatDumpsForPrompt } from "@/lib/dumpContext";
 import { fetchEnabledEndpoints, formatDataForAI, persistSnapshots, buildTrendContext, type EnabledEndpoint } from "@/lib/dataSources";
 import Chat, { WATCH_DEFAULTS } from "@/models/Chat";
@@ -55,23 +66,97 @@ function getEnabledEndpoints(chatDoc: { dataSources?: { sourceId: string; endpoi
     .map((ds) => ({ sourceId: ds.sourceId, endpointId: ds.endpointId }));
 }
 
-async function getDataSourceContext(chatId: string, chatDoc: { dataSources?: { sourceId: string; endpointId: string; enabled: boolean }[] } | null): Promise<string> {
+function mergeQmdResults(a: QMDResult[], b: QMDResult[], cap = 14): QMDResult[] {
+  const seen = new Set<string>();
+  const out: QMDResult[] = [];
+  for (const r of [...a, ...b]) {
+    const key = `${r.title}|${(r.displayPath || "").slice(0, 80)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(r);
+    if (out.length >= cap) break;
+  }
+  return out;
+}
+
+async function getDataSourceContext(
+  chatId: string,
+  chatDoc: { dataSources?: { sourceId: string; endpointId: string; enabled: boolean }[] } | null,
+  opts?: { userQuery?: string },
+): Promise<string> {
   const enabled = getEnabledEndpoints(chatDoc);
   if (!enabled.length) return "";
 
+  const parts: string[] = [];
+
+  if (opts?.userQuery?.trim()) {
+    try {
+      const dsResults = await fetchEnabledEndpoints(enabled);
+      const formatted = formatDataForAI(dsResults);
+      if (formatted) {
+        parts.push(`LIVE DATA SOURCES (refreshed for this message):\n${formatted.slice(0, 14_000)}`);
+      }
+      persistSnapshots(chatId, dsResults).catch(console.error);
+    } catch {
+      /* optional */
+    }
+  }
+
   try {
     const trendContext = await buildTrendContext(chatId, enabled);
-    return trendContext ? `\nDATA SOURCES (live business data + historical snapshots for trend analysis):\n${trendContext}` : "";
+    if (trendContext) {
+      parts.push(`DATA SOURCES (history / trends):\n${trendContext.slice(0, 12_000)}`);
+    }
   } catch {
-    return "";
+    /* optional */
   }
+
+  return parts.length ? `\n${parts.join("\n\n")}` : "";
 }
 
-export async function buildSystemPrompt(chatId: string, userQuery?: string): Promise<string> {
-  const [chatDoc, people, tasks, activeJobs] = await Promise.all([
+function formatOffersForPrompt(
+  offers: Array<{
+    name: string;
+    description?: string;
+    status: string;
+    pricePoint?: string;
+    targetBuyer?: string;
+    whyNow?: string;
+    confidenceScore?: number;
+    chatSignals?: string[];
+    teamPing?: string;
+  }>,
+): string {
+  const active = offers.filter((o) => o.status !== "rejected");
+  if (!active.length) return "";
+  return active
+    .map((o) => {
+      const bits = [
+        `- ${o.name} [${o.status}] conf:${o.confidenceScore ?? "?"}`,
+        o.description && `  ${String(o.description).slice(0, 450)}`,
+        (o.pricePoint || o.targetBuyer) && `  Price: ${o.pricePoint || "?"} | Buyer: ${o.targetBuyer || "?"}`,
+        o.whyNow && `  Why now: ${String(o.whyNow).slice(0, 220)}`,
+        o.chatSignals?.length && `  Chat signals: ${o.chatSignals.join("; ")}`,
+        o.teamPing && `  Align: ${String(o.teamPing).slice(0, 320)}`,
+      ].filter(Boolean);
+      return bits.join("\n");
+    })
+    .join("\n\n");
+}
+
+export async function buildSystemPrompt(
+  chatId: string,
+  userQuery?: string,
+  opts?: { refreshLiveDataSources?: boolean },
+): Promise<string> {
+  const [chatDoc, people, tasks, doneRecent, activeJobs] = await Promise.all([
     Chat.findOne({ telegramChatId: chatId }),
     Person.find({ telegramChatId: chatId }),
     Task.find({ telegramChatId: chatId, status: { $ne: "done" } }),
+    Task.find({ telegramChatId: chatId, status: "done" })
+      .sort({ completedAt: -1 })
+      .limit(14)
+      .lean(),
     Job.find({ telegramChatId: chatId, status: "active" }),
   ]);
 
@@ -128,15 +213,48 @@ export async function buildSystemPrompt(chatId: string, userQuery?: string): Pro
     ? activeJobs.map((j) => `- ${j.title}: ${j.description}`).join("\n")
     : "No active jobs.";
 
+  const doneBlock = doneRecent.length
+    ? (doneRecent as { title: string; completedAt?: Date }[])
+        .map((t) => `- ${t.title}${t.completedAt ? ` (done ${new Date(t.completedAt).toISOString().split("T")[0]})` : ""}`)
+        .join("\n")
+    : "None recently.";
+
+  const dumpsBlock = formatDumpsForPrompt(chatDoc?.dumps || [], {
+    maxItems: 14,
+    maxCharsPerDump: 5_000,
+    maxTotalChars: 28_000,
+  });
+
+  const offersBlock = formatOffersForPrompt(chatDoc?.offers || []);
+
+  const menuItems = chatDoc?.menu || [];
+  const menuBlock = menuItems.length
+    ? menuItems
+        .slice(0, 35)
+        .map((m: { name: string; description: string; price: string; category: string }) =>
+          `- ${m.name} — ${m.description || ""} (${m.price || "?"}) [${m.category || "general"}]`,
+        )
+        .join("\n")
+    : "";
+
+  const leverageBlock = [chatDoc?.leveragePlay && `LEVERAGE PLAY:\n${chatDoc.leveragePlay}`, chatDoc?.priorityNarrative && `PRIORITY NARRATIVE:\n${chatDoc.priorityNarrative}`]
+    .filter(Boolean)
+    .join("\n\n");
+
   let knowledgeBlock = "";
-  if (userQuery) {
-    const results = await qmdSearch(userQuery);
-    if (results.length) {
-      knowledgeBlock = `\nRELEVANT KNOWLEDGE (from memory):\n${formatQMDResults(results)}`;
+  if (userQuery?.trim()) {
+    const q = userQuery.trim();
+    const primary = await qmdSearch(q, 10);
+    const textHits = await qmdTextSearch(q, 8);
+    const merged = mergeQmdResults(primary, textHits, 14);
+    if (merged.length) {
+      knowledgeBlock = `\nRELEVANT KNOWLEDGE (semantic memory — query "${q.slice(0, 120)}"):\n${formatQMDResults(merged, { maxSnippetLength: 1400 })}`;
     }
   }
 
-  const dataSourceBlock = await getDataSourceContext(chatId, chatDoc);
+  const dataSourceBlock = await getDataSourceContext(chatId, chatDoc, {
+    userQuery: opts?.refreshLiveDataSources && userQuery?.trim() ? userQuery : undefined,
+  });
 
   const watchLines = [
     watch.deadlines && "deadlines/dates",
@@ -160,6 +278,18 @@ ${mode === "passive" ? "PASSIVE: You silently observe. Only respond when directl
 CONTEXT SUMMARY:
 ${contextSummary}
 
+${leverageBlock ? `${leverageBlock}\n\n` : ""}TEAM KNOWLEDGE DUMPS (pasted notes / initiative context — use for "what we know", positioning, history):
+${dumpsBlock || "None yet — encourage the team to use /dump or the dashboard."}
+
+OFFERS (researched sellable offers — use for "best offer", pricing, what to push):
+${offersBlock || "None yet — run Offer Research on the dashboard."}
+
+MENU / CATALOG ITEMS (if any):
+${menuBlock || "None listed."}
+
+RECENTLY COMPLETED TASKS:
+${doneBlock}
+
 CHAT MEMBERS (people in this Telegram group):
 ${membersBlock}
 
@@ -179,6 +309,8 @@ WATCHING FOR: ${watchLines.join(", ")}
 
 WHEN MENTIONED OR IN DM:
 You have just been synced — you've caught up on all recent messages. Look at the conversation history to understand what the user wants. Infer their intent from context. If they mentioned something earlier that needs action (web search, adding a task, looking something up), do it NOW without being asked again.
+
+GROUNDING: Answer from TEAM KNOWLEDGE DUMPS, OFFERS, MENU, tasks, people, and RELEVANT KNOWLEDGE above — not generic advice. If they ask "best offer" or "what should we sell", compare concrete offers (confidence, buyer, price, signals) and dumps. If data is missing, say what you need them to add.
 
 You work ALONGSIDE the team. You are not a command executor — you are a collaborator. If someone says "search for X and add it in", you search and add tasks. If they say "get to work", review recent history and act on anything pending. If they just want to chat, chat.
 

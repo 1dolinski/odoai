@@ -147,7 +147,7 @@ async function cmdOptimize(chatId: number) {
     : "";
 
   const chatDoc = await Chat.findOne({ telegramChatId: String(chatId) });
-  const systemPrompt = await buildSystemPrompt(String(chatId), taskList);
+  const systemPrompt = await buildSystemPrompt(String(chatId), taskList, { refreshLiveDataSources: true });
   const response = await aiChat([
     { role: "system", content: systemPrompt },
     {
@@ -363,7 +363,7 @@ async function handleConversation(
   const cid = String(chatId);
 
   const [systemPrompt, chatDoc] = await Promise.all([
-    buildSystemPrompt(cid, text),
+    buildSystemPrompt(cid, text, { refreshLiveDataSources: true }),
     Chat.findOne({ telegramChatId: cid }),
   ]);
   const recentMessages = chatDoc?.messages?.slice(-20) || [];
