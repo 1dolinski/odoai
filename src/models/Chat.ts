@@ -156,6 +156,8 @@ export interface IChat extends Document {
   messagesSinceSummary: number;
   dashboardCoachMemory?: string;
   dashboardCoachChat?: { role: "user" | "assistant"; content: string; createdAt: Date }[];
+  /** When false, private Telegram DMs are limited until the user subscribes (see TELEGRAM_REQUIRE_SUBSCRIPTION). */
+  subscriptionActive?: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -250,6 +252,7 @@ const ChatSchema = new Schema<IChat>(
       type: [{ role: { type: String, enum: ["user", "assistant"] }, content: String, createdAt: { type: Date, default: Date.now } }],
       default: [],
     },
+    subscriptionActive: { type: Boolean, default: true },
   },
   { timestamps: true }
 );

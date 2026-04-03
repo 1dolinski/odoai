@@ -128,6 +128,7 @@ export async function GET(req: NextRequest) {
         content: m.content,
         createdAt: typeof m.createdAt === "string" ? m.createdAt : new Date(m.createdAt).toISOString(),
       })),
+      subscriptionActive: (chat as { subscriptionActive?: boolean }).subscriptionActive !== false,
     },
     tasks,
     initiatives: chat.initiatives || [],
@@ -217,7 +218,7 @@ export async function PATCH(req: NextRequest) {
   await connectDB();
 
   const body = await req.json();
-  const { token, aiStyle, aiModel, watchSettings, chatTitle, mode, aiFeedEnabled, abilities } = body;
+  const { token, aiStyle, aiModel, watchSettings, chatTitle, mode, aiFeedEnabled, abilities, subscriptionActive } = body;
 
   if (!token) return NextResponse.json({ error: "token required" }, { status: 400 });
 
@@ -225,6 +226,8 @@ export async function PATCH(req: NextRequest) {
   if (!chat) return NextResponse.json({ error: "invalid token" }, { status: 404 });
 
   const update: Record<string, unknown> = {};
+
+  if (typeof subscriptionActive === "boolean") update.subscriptionActive = subscriptionActive;
 
   if (chatTitle && typeof chatTitle === "string") update.chatTitle = chatTitle.trim();
 

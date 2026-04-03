@@ -43,6 +43,29 @@ export async function sendMessageWithButtons(
   return res.json();
 }
 
+/** Inline button that opens the URL inside Telegram as a Mini App (web_app). */
+export async function sendMessageWithWebAppButton(
+  chatId: number | string,
+  text: string,
+  button: { text: string; url: string },
+  parseMode: string = ""
+) {
+  const payload: Record<string, unknown> = {
+    chat_id: chatId,
+    text,
+    reply_markup: {
+      inline_keyboard: [[{ text: button.text, web_app: { url: button.url } }]],
+    },
+  };
+  if (parseMode) payload.parse_mode = parseMode;
+  const res = await fetch(`${BASE}/sendMessage`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return res.json();
+}
+
 const ACTION_EMOJIS = ["👍", "👏", "🔥", "🎉", "🏆"];
 
 export async function reactWithEmoji(

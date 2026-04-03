@@ -235,6 +235,7 @@ interface DashboardData {
     dataSources: { sourceId: string; endpointId: string; enabled: boolean; lastFetchAt?: string }[];
     dashboardCoachMemory?: string;
     dashboardCoachChat?: { role: "user" | "assistant"; content: string; createdAt: string }[];
+    subscriptionActive: boolean;
   };
   initiatives: Initiative[];
   tasks: Task[];
@@ -498,6 +499,8 @@ export default function DashboardPage() {
   const [showDump, setShowDump] = useState(false);
   const [showGuidance, setShowGuidance] = useState(false);
   const [showWallet, setShowWallet] = useState(false);
+  const [showSubscription, setShowSubscription] = useState(false);
+  const [subscriptionSaving, setSubscriptionSaving] = useState(false);
   const [showPeople, setShowPeople] = useState(false);
   const [showInitiatives, setShowInitiatives] = useState(false);
   const [showFeed, setShowFeed] = useState(false);
@@ -593,6 +596,8 @@ export default function DashboardPage() {
     progressLogs?: string[];
   }[]>([]);
   const [forecastHistoryLoading, setForecastHistoryLoading] = useState(false);
+  /** Server job we are tailing without blocking the main "See Future" button (user chose Watch progress). */
+  const [forecastWatchingJobId, setForecastWatchingJobId] = useState<string | null>(null);
 
   const forecastPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const forecastElapsedRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -608,6 +613,7 @@ export default function DashboardPage() {
       forecastElapsedRef.current = null;
     }
     forecastPollingJobIdRef.current = null;
+    setForecastWatchingJobId(null);
   }, []);
 
   const loadForecastHistory = useCallback(async () => {
@@ -628,13 +634,19 @@ export default function DashboardPage() {
   }, [workspaceZoom, loadForecastHistory]);
 
   const startForecastPolling = useCallback(
-    (jobId: string) => {
+    (jobId: string, opts?: { watchOnly?: boolean }) => {
       if (!token) return;
       if (forecastPollingJobIdRef.current === jobId && forecastPollRef.current) return;
 
+      const watchOnly = opts?.watchOnly === true;
       stopForecastPolling();
       forecastPollingJobIdRef.current = jobId;
-      setForecastLoading(true);
+      if (watchOnly) {
+        setForecastWatchingJobId(jobId);
+      } else {
+        setForecastWatchingJobId(null);
+        setForecastLoading(true);
+      }
       setForecastElapsed(0);
       forecastElapsedRef.current = setInterval(() => {
         setForecastElapsed((s) => s + 1);
@@ -689,20 +701,24 @@ export default function DashboardPage() {
     }
   }, [workspaceZoom, stopForecastPolling]);
 
-  useEffect(() => {
-    if (workspaceZoom !== "forecast" || !token) return;
-    const running = forecastHistory.find((f) => {
-      if (f.status === "running") return true;
-      if (f.status === "failed" || f.status === "complete") return false;
-      return !(f.horizons?.length > 0);
-    });
-    if (running) startForecastPolling(running._id);
-  }, [workspaceZoom, forecastHistory, token, startForecastPolling]);
-
   useEffect(() => () => stopForecastPolling(), [stopForecastPolling]);
+
+  const watchForecastProgress = useCallback(
+    (jobId: string, initialLogs?: string[]) => {
+      if (!token) return;
+      setForecastError(null);
+      setForecastErrorStack(null);
+      setForecastResult(null);
+      setForecastLogs(initialLogs?.length ? initialLogs : ["Resuming…"]);
+      setForecastElapsed(0);
+      startForecastPolling(jobId, { watchOnly: true });
+    },
+    [token, startForecastPolling],
+  );
 
   const runForecastAction = useCallback(async () => {
     if (!token) return;
+    stopForecastPolling();
     setForecastLoading(true);
     setForecastError(null);
     setForecastErrorStack(null);
@@ -801,6 +817,24 @@ export default function DashboardPage() {
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const sp = new URLSearchParams(window.location.search);
+    if (sp.get("subscription") === "1") {
+      setShowSubscription(true);
+      setShowWallet(false);
+      setShowFeed(false);
+      setShowPeople(false);
+      setShowContext(false);
+      setShowDump(false);
+      setShowGuidance(false);
+      setShowActions(false);
+      setShowWatch(false);
+      setShowDataSources(false);
+      setShowSocial(false);
+    }
+  }, []);
 
   useEffect(() => {
     if (data?.chat.guidance !== undefined && guidanceText === "" && !guidanceSaved) {
@@ -1652,7 +1686,19 @@ export default function DashboardPage() {
               {syncing ? "..." : "Sync"}
             </button>
             <button
-              onClick={() => { setShowWallet(!showWallet); setShowFeed(false); setShowPeople(false); setShowContext(false); setShowDump(false); setShowGuidance(false); setShowActions(false); setShowWatch(false); setShowDataSources(false); setShowSocial(false); }}
+              onClick={() => {
+                setShowWallet(!showWallet);
+                setShowSubscription(false);
+                setShowFeed(false);
+                setShowPeople(false);
+                setShowContext(false);
+                setShowDump(false);
+                setShowGuidance(false);
+                setShowActions(false);
+                setShowWatch(false);
+                setShowDataSources(false);
+                setShowSocial(false);
+              }}
               className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium border transition-all ${
                 showWallet ? "bg-gray-900 text-white border-gray-900" : "bg-gray-100 text-gray-600 border-gray-200 hover:border-gray-400"
               }`}
@@ -1660,6 +1706,32 @@ export default function DashboardPage() {
               <span>{data.spend.totalCalls} calls</span>
               <span className="text-gray-400">·</span>
               <span>{(data.spend.totalTokens / 1000).toFixed(1)}k tok</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setShowSubscription(!showSubscription);
+                setShowWallet(false);
+                setShowFeed(false);
+                setShowPeople(false);
+                setShowContext(false);
+                setShowDump(false);
+                setShowGuidance(false);
+                setShowActions(false);
+                setShowWatch(false);
+                setShowDataSources(false);
+                setShowSocial(false);
+              }}
+              className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium border transition-all ${
+                showSubscription ? "bg-emerald-900 text-white border-emerald-900" : "bg-gray-100 text-gray-600 border-gray-200 hover:border-gray-400"
+              }`}
+            >
+              Subscription
+              {data.chat.subscriptionActive ? (
+                <span className="text-[10px] opacity-80">· active</span>
+              ) : (
+                <span className="text-[10px] text-amber-600 font-semibold">· required</span>
+              )}
             </button>
             <a
               href={`https://t.me/odoai_bot?start=open_${data.chat.telegramChatId}`}
@@ -3501,6 +3573,44 @@ export default function DashboardPage() {
                   <span className="text-sm text-green-600 font-medium">Saved and indexed</span>
                 )}
               </div>
+            </div>
+          )}
+          {showSubscription && (
+            <div className="mt-4 bg-white border border-emerald-200/80 rounded-xl p-3 sm:p-5 shadow-sm">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="font-semibold text-gray-800">Subscription</h3>
+                {data.chat.subscriptionActive ? (
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-semibold">Active</span>
+                ) : (
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 font-semibold">Required</span>
+                )}
+              </div>
+              <p className="text-sm text-gray-600 mb-4">
+                Telegram AI features in private chat stay on when this workspace is subscribed. Wire Stripe (or your billing) to flip this flag after payment.
+              </p>
+              {!data.chat.subscriptionActive && (
+                <button
+                  type="button"
+                  disabled={subscriptionSaving || !token}
+                  onClick={async () => {
+                    if (!token) return;
+                    setSubscriptionSaving(true);
+                    try {
+                      await fetch("/api/dashboard", {
+                        method: "PATCH",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ token, subscriptionActive: true }),
+                      });
+                      await fetchData();
+                    } finally {
+                      setSubscriptionSaving(false);
+                    }
+                  }}
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50 shadow-sm"
+                >
+                  {subscriptionSaving ? "Saving…" : "Mark subscribed (test)"}
+                </button>
+              )}
             </div>
           )}
           {showWallet && (
@@ -6097,7 +6207,7 @@ export default function DashboardPage() {
                     )}
                   </div>
                 )}
-                {forecastLoading && (
+                {(forecastLoading || forecastWatchingJobId) && (
                   <p className="text-[11px] text-violet-600/90 mt-2">
                     Runs on the server — you can close this tab or switch zoom; open <span className="font-semibold">Future</span> again to watch progress.
                   </p>
@@ -6177,7 +6287,7 @@ export default function DashboardPage() {
                 </>
               )}
 
-              {!forecastResult && !forecastLoading && !forecastError && (
+              {!forecastResult && !forecastLoading && !forecastError && !forecastWatchingJobId && (
                 <div className="text-center py-10">
                   <div className="text-3xl mb-3">🔮</div>
                   <p className="text-sm text-gray-500 max-w-sm mx-auto">
@@ -6186,11 +6296,13 @@ export default function DashboardPage() {
                 </div>
               )}
 
-              {forecastLoading && (
+              {(forecastLoading || forecastWatchingJobId) && (
                 <div className="py-4">
                   <div className="flex items-center gap-3 mb-3">
                     <Spinner className="h-4 w-4 text-violet-500" />
-                    <span className="text-sm font-medium text-gray-700">Generating forecast…</span>
+                    <span className="text-sm font-medium text-gray-700">
+                      {forecastLoading ? "Generating forecast…" : "Watching in-progress forecast…"}
+                    </span>
                     <span className="text-xs tabular-nums text-gray-400 ml-auto">{forecastElapsed}s</span>
                   </div>
                   <div className="rounded-lg border border-gray-200 bg-gray-900 p-3 font-mono text-[11px] leading-relaxed max-h-48 overflow-y-auto">
@@ -6259,13 +6371,55 @@ export default function DashboardPage() {
                         const days = Math.floor(hrs / 24);
                         return `${days}d ago`;
                       })();
+                      if (rowStatus === "running") {
+                        const watchingThis = forecastWatchingJobId === f._id;
+                        return (
+                          <div
+                            key={f._id}
+                            className={`w-full rounded-xl border px-3.5 py-2.5 transition-all ${
+                              watchingThis
+                                ? "border-violet-400 bg-violet-50/50 ring-1 ring-violet-200"
+                                : "border-gray-200 bg-white"
+                            }`}
+                          >
+                            <div className="flex items-center gap-2">
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-2">
+                                  <p className="text-sm font-medium text-gray-900 truncate">
+                                    {f.guidance || "No guidance (auto)"}
+                                  </p>
+                                  <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wide text-amber-700 bg-amber-100 px-2 py-0.5 rounded-md">
+                                    Generating
+                                  </span>
+                                </div>
+                                <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                                  <span className="text-[10px] text-gray-400">{ago}</span>
+                                  <span className="text-[10px] text-gray-300">·</span>
+                                  <span className="text-[10px] text-gray-400">in progress</span>
+                                  <span className="text-[10px] text-gray-300">·</span>
+                                  <span className="text-[10px] text-gray-400">{f.model?.split("/").pop()}</span>
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-2 shrink-0">
+                                <button
+                                  type="button"
+                                  onClick={() => watchForecastProgress(f._id, f.progressLogs)}
+                                  className="text-[10px] font-semibold text-violet-700 bg-white border border-violet-200 hover:bg-violet-50 px-2.5 py-1.5 rounded-lg transition-colors"
+                                >
+                                  Watch progress
+                                </button>
+                                <Spinner className="h-5 w-5 text-violet-500" />
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      }
+
                       return (
                         <button
                           key={f._id}
                           type="button"
-                          disabled={rowStatus === "running"}
                           onClick={() => {
-                            if (rowStatus === "running") return;
                             if (rowStatus === "failed") {
                               setForecastResult(null);
                               setForecastError(f.errorMessage || "Forecast failed");
@@ -6287,8 +6441,6 @@ export default function DashboardPage() {
                             setForecastHorizon("1d");
                           }}
                           className={`w-full text-left rounded-xl border px-3.5 py-2.5 transition-all ${
-                            rowStatus === "running" ? "opacity-90 cursor-default" : ""
-                          } ${
                             isActive
                               ? "border-violet-300 bg-violet-50 ring-1 ring-violet-200"
                               : "border-gray-200 bg-white hover:border-violet-200 hover:bg-violet-50/30"
@@ -6300,11 +6452,6 @@ export default function DashboardPage() {
                                 <p className="text-sm font-medium text-gray-900 truncate">
                                   {f.guidance || "No guidance (auto)"}
                                 </p>
-                                {rowStatus === "running" && (
-                                  <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wide text-amber-700 bg-amber-100 px-2 py-0.5 rounded-md">
-                                    Generating
-                                  </span>
-                                )}
                                 {rowStatus === "failed" && (
                                   <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wide text-red-700 bg-red-100 px-2 py-0.5 rounded-md">
                                     Failed
@@ -6314,38 +6461,32 @@ export default function DashboardPage() {
                               <div className="flex items-center gap-2 mt-0.5 flex-wrap">
                                 <span className="text-[10px] text-gray-400">{ago}</span>
                                 <span className="text-[10px] text-gray-300">·</span>
-                                <span className="text-[10px] text-gray-400">
-                                  {rowStatus === "running" ? "in progress" : `${f.horizons.length} horizons`}
-                                </span>
+                                <span className="text-[10px] text-gray-400">{`${f.horizons.length} horizons`}</span>
                                 <span className="text-[10px] text-gray-300">·</span>
                                 <span className="text-[10px] text-gray-400">{f.model?.split("/").pop()}</span>
                               </div>
                             </div>
                             <div className="flex items-center gap-1.5 shrink-0">
-                              {rowStatus === "running" ? (
-                                <Spinner className="h-5 w-5 text-violet-500" />
-                              ) : (
-                                <>
-                                  {f.horizons.map((h) => (
-                                    <span
-                                      key={h.horizon}
-                                      className={`inline-flex items-center justify-center w-7 h-7 rounded-lg text-[10px] font-bold ${
-                                        h.score >= 7
-                                          ? "bg-emerald-100 text-emerald-700"
-                                          : h.score >= 5
-                                            ? "bg-amber-100 text-amber-700"
-                                            : "bg-red-100 text-red-700"
-                                      }`}
-                                      title={`${h.label}: ${h.score}/10`}
-                                    >
-                                      {h.score}
-                                    </span>
-                                  ))}
-                                  <span className="text-xs font-semibold text-gray-500 ml-1" title="Average score">
-                                    {f.horizons.length ? avgScore : "—"}
+                              <>
+                                {f.horizons.map((h) => (
+                                  <span
+                                    key={h.horizon}
+                                    className={`inline-flex items-center justify-center w-7 h-7 rounded-lg text-[10px] font-bold ${
+                                      h.score >= 7
+                                        ? "bg-emerald-100 text-emerald-700"
+                                        : h.score >= 5
+                                          ? "bg-amber-100 text-amber-700"
+                                          : "bg-red-100 text-red-700"
+                                    }`}
+                                    title={`${h.label}: ${h.score}/10`}
+                                  >
+                                    {h.score}
                                   </span>
-                                </>
-                              )}
+                                ))}
+                                <span className="text-xs font-semibold text-gray-500 ml-1" title="Average score">
+                                  {f.horizons.length ? avgScore : "—"}
+                                </span>
+                              </>
                             </div>
                           </div>
                         </button>

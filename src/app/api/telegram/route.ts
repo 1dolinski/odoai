@@ -2,7 +2,7 @@ export const maxDuration = 300;
 
 import { NextRequest, NextResponse } from "next/server";
 import { connectDB } from "@/lib/mongodb";
-import { sendMessage, sendMessageWithButtons, getChatAdmins, reactToMessage, reactWithEmoji } from "@/lib/telegram";
+import { sendMessage, sendMessageWithButtons, sendMessageWithWebAppButton, getChatAdmins, reactToMessage, reactWithEmoji } from "@/lib/telegram";
 import { chat as aiChat, chatWithUsage } from "@/lib/openrouter";
 import { webSearch } from "@/lib/search";
 import { qmdSearch, qmdStatus, formatQMDResults, writePeopleSnapshot } from "@/lib/knowledge";
@@ -19,6 +19,44 @@ import { trackSpend } from "@/lib/spend";
 
 const APP_URL = process.env.APP_URL || "http://localhost:3000";
 const BOT_USERNAME = "@odoai_bot";
+/** When true, new private-chat rows get subscriptionActive: false on first insert (Mongo $setOnInsert). */
+const TELEGRAM_SUBSCRIPTION_GATE = process.env.TELEGRAM_REQUIRE_SUBSCRIPTION === "true";
+
+function isTelegramAdminUsername(username: string | undefined): boolean {
+  if (!username) return false;
+  const list = (process.env.TELEGRAM_ADMIN_USERNAMES || "cdolinski")
+    .split(",")
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+  return list.includes(username.toLowerCase());
+}
+
+async function ensureDashboardTokenForChat(chatId: string): Promise<string> {
+  let chatDoc = await Chat.findOne({ telegramChatId: chatId });
+  if (!chatDoc) chatDoc = await Chat.create({ telegramChatId: chatId });
+  if (!chatDoc.dashboardToken) {
+    chatDoc.dashboardToken = nanoid(16);
+    await chatDoc.save();
+  }
+  return chatDoc.dashboardToken;
+}
+
+async function sendSubscriptionGateMessage(chatId: number) {
+  const dashToken = await ensureDashboardTokenForChat(String(chatId));
+  const url = `${APP_URL}/dashboard/${dashToken}?subscription=1`;
+  await sendMessageWithWebAppButton(
+    chatId,
+    "🔒 Subscription required.\n\nOpen the Mini App to continue.",
+    { text: "Open subscription", url },
+    ""
+  );
+}
+
+async function isPrivateSubscriptionBlocked(chatId: string, username: string | undefined): Promise<boolean> {
+  if (isTelegramAdminUsername(username)) return false;
+  const c = await Chat.findOne({ telegramChatId: chatId });
+  return c?.subscriptionActive === false;
+}
 
 let _botId: number | null = null;
 async function getBotId(): Promise<number> {
@@ -42,6 +80,8 @@ interface TelegramUpdate {
     from: TelegramUser;
     chat: { id: number; title?: string; type: string };
     text?: string;
+    caption?: string;
+    photo?: { file_id: string; file_unique_id: string; width: number; height: number }[];
     date: number;
     new_chat_members?: TelegramUser[];
     left_chat_member?: TelegramUser;
@@ -776,34 +816,40 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true });
     }
 
-    if (!msg.text) return NextResponse.json({ ok: true });
+    if (!msg.text && !msg.caption && !msg.photo) return NextResponse.json({ ok: true });
 
     const chatId = msg.chat.id;
     const userId = String(msg.from.id);
     const username = msg.from.username;
     const firstName = msg.from.first_name;
-    const text = msg.text.trim();
+    const text = (msg.text || msg.caption || "").trim();
+    const messageContent = text || (msg.photo?.length ? "[photo]" : "");
+    if (!messageContent) return NextResponse.json({ ok: true });
+
+    const setOnInsert: Record<string, unknown> = {};
+    if (msg.chat.type === "private" && TELEGRAM_SUBSCRIPTION_GATE) {
+      setOnInsert.subscriptionActive = false;
+    }
+
+    const chatUpsert: Record<string, unknown> = {
+      $set: { chatTitle: msg.chat.title },
+      $push: {
+        messages: {
+          role: "user",
+          content: messageContent,
+          telegramUserId: userId,
+          telegramUsername: username,
+          firstName,
+        },
+      },
+      $inc: { messagesSinceSummary: 1 },
+    };
+    if (Object.keys(setOnInsert).length) chatUpsert.$setOnInsert = setOnInsert;
 
     // Always store every message and track the person
     await Promise.all([
-      Chat.findOneAndUpdate(
-        { telegramChatId: String(chatId) },
-        {
-          $set: { chatTitle: msg.chat.title },
-          $push: {
-            messages: {
-              role: "user",
-              content: text,
-              telegramUserId: userId,
-              telegramUsername: username,
-              firstName,
-            },
-          },
-          $inc: { messagesSinceSummary: 1 },
-        },
-        { upsert: true }
-      ),
-      extractPersonInfo(String(chatId), userId, username, firstName, text),
+      Chat.findOneAndUpdate({ telegramChatId: String(chatId) }, chatUpsert, { upsert: true }),
+      extractPersonInfo(String(chatId), userId, username, firstName, text || messageContent),
     ]);
 
     // Background: auto-extract insights + update context summary + QMD knowledge
@@ -814,6 +860,26 @@ export async function POST(req: NextRequest) {
     const isMentioned = text.includes(BOT_USERNAME) || TRIGGER_EMOJIS.test(text);
     const isPrivate = msg.chat.type === "private";
     const cleanText = text.replace(BOT_USERNAME, "").trim();
+
+    if (isPrivate) {
+      const blocked = await isPrivateSubscriptionBlocked(String(chatId), username);
+      if (blocked) {
+        const spaceIdx = cleanText.indexOf(" ");
+        const command = cleanText.startsWith("/")
+          ? (spaceIdx > -1 ? cleanText.substring(0, spaceIdx) : cleanText).toLowerCase().split("@")[0]
+          : "";
+        const isWhitelisted = command === "/start" || command === "/help" || command === "/dashboard";
+        if (!isWhitelisted) {
+          await sendSubscriptionGateMessage(chatId);
+          return NextResponse.json({ ok: true });
+        }
+      }
+    }
+
+    if (isPrivate && msg.photo?.length && !cleanText) {
+      await sendMessage(chatId, "🖼 Add a caption or send text so I can help.", "");
+      return NextResponse.json({ ok: true });
+    }
 
     // Handle slash commands
     if (cleanText.startsWith("/")) {
